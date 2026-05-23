@@ -46,22 +46,6 @@ http://localhost:5173
 npm run build
 ```
 
-## 파일 구조
-
-```txt
-src/
-  api/          # 백엔드 API 통신 설정과 공통 요청 로직
-    client.js  # Axios 기본 클라이언트 설정
-  app/          # 앱 전체 설정과 라우터 설정
-    router.jsx # React Router 라우터 설정
-  components/  # 여러 화면에서 재사용하는 공통 UI 컴포넌트
-  features/    # 기능 단위로 묶이는 화면, API, 상태 로직
-  pages/       # 라우터에 직접 연결되는 페이지 컴포넌트
-    HomePage.jsx
-  App.jsx      # 앱 최상위 컴포넌트
-  index.css    # Tailwind CSS 진입 파일
-  main.jsx     # React 앱 진입 파일
-```
 
 ## 주요 명령어
 
