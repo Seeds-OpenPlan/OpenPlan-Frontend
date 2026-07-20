@@ -1,10 +1,5 @@
 function HomePage() {
-  return (
-    <main>
-      <h1>OpenPlan</h1>
-      <p>Home</p>
-    </main>
-  )
+  return <h1 className="text-2xl font-bold">대시보드</h1>
 }
 
 export default HomePage
