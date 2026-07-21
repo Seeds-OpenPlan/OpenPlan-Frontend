@@ -8,6 +8,7 @@ import SettingsPage from '../pages/SettingsPage'
 import NotFoundPage from '../pages/NotFoundPage'
 import ForbiddenPage from '../pages/ForbiddenPage'
 import RootErrorBoundary from './RootErrorBoundary'
+import HydrateFallback from './HydrateFallback'
 import { queryClient } from './queryClient'
 import { apiClient } from '../api/client'
 
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
     path: '/',
     Component: AppLayout,
     ErrorBoundary: RootErrorBoundary, // ★ global runtime-error fallback (SYS-02 AC-5)
+    HydrateFallback, // ★ shown during initial session-guard resolution (no blank flash)
     loader: sessionGuardLoader, // ★ OP-AUTH-SESSION, dev stub passes through
     children: [
       { index: true, Component: HomePage },

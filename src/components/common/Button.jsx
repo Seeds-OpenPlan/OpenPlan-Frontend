@@ -24,8 +24,10 @@ const VARIANT_CLASSES = {
     'border border-danger-600 text-danger-600 bg-surface hover:bg-danger-50 active:bg-danger-50',
 }
 
-// md = 40px desktop default; lg = 48px, the mobile touch-target minimum.
+// sm = 32px compact (desktop toolbars); md = 40px default; lg = 48px, the mobile
+// touch-target minimum.
 const SIZE_CLASSES = {
+  sm: 'h-8 px-3.5 text-label',
   md: 'h-10 px-4 text-label',
   lg: 'h-12 px-5 text-body',
 }
@@ -50,7 +52,7 @@ export function Button({
       disabled={isDisabled}
       aria-busy={loading || undefined}
       className={[
-        'inline-flex items-center justify-center gap-2 rounded-control font-medium',
+        'inline-flex items-center justify-center gap-2 rounded-full font-medium',
         'transition-colors duration-fast ease-standard',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
         'disabled:cursor-not-allowed disabled:opacity-50',

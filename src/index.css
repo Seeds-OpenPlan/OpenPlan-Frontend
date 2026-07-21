@@ -197,3 +197,12 @@
 :root {
   font-family: var(--font-sans);
 }
+
+/*
+  Always reserve the vertical scrollbar's space so a page whose height crosses the
+  viewport (scrollbar appears) doesn't shift the whole layout left/right by the
+  scrollbar width when navigating (e.g. switching weeks). Stable gutter = no jump.
+*/
+html {
+  scrollbar-gutter: stable;
+}
