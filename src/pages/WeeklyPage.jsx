@@ -5,7 +5,6 @@ import { SummaryBar } from '../components/plan/SummaryBar'
 import { CalendarGrid } from '../components/plan/CalendarGrid'
 import { UndoRedo } from '../components/plan/UndoRedo'
 import { PlanFab } from '../components/plan/PlanFab'
-import { PastWeekBanner } from '../components/plan/PastWeekBanner'
 import { BlockActionMenu } from '../components/plan/BlockActionMenu'
 import { ReviewPanel } from '../components/plan/ReviewPanel'
 import { ErrorState } from '../components/common/ErrorState'
@@ -191,8 +190,6 @@ function WeeklyPage() {
           mode={mode}
           onModeChange={setMode}
         />
-
-        {readOnly && <PastWeekBanner />}
 
         <div className="relative">
           {showColumnSkeleton && (
