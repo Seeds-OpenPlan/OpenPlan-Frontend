@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 import { navItems } from './navItems'
 import { BellIcon, UserIcon } from './icons'
 
@@ -7,7 +7,13 @@ function TopNav() {
   return (
     <header className="hidden border-b border-slate-200 bg-white md:block">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-        <span className="text-xl font-bold text-blue-600">OpenPlan</span>
+        {/* 로고 클릭 시 대시보드로 이동. 메뉴는 가운데 정렬(justify-between). */}
+        <Link
+          to="/"
+          className="rounded text-xl font-bold text-blue-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+        >
+          OpenPlan
+        </Link>
 
         <nav className="flex items-center gap-8">
           {navItems.map(({ to, label, Icon, end }) => (

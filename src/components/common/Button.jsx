@@ -50,7 +50,7 @@ export function Button({
       disabled={isDisabled}
       aria-busy={loading || undefined}
       className={[
-        'inline-flex items-center justify-center gap-2 rounded-control font-medium',
+        'inline-flex items-center justify-center gap-2 rounded-full font-medium',
         'transition-colors duration-fast ease-standard',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
         'disabled:cursor-not-allowed disabled:opacity-50',
