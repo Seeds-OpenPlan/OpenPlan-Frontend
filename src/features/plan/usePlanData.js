@@ -303,6 +303,44 @@ export function useSetBlockComplete() {
   )
 }
 
+/**
+ * Returns `resize({ weekStartISO, planBlockId, blockType, startAt, endAt })` — A2
+ * edge-drag resize. Optimistic block-time change + PATCH. Shrinking a TASK block
+ * below its estimate frees remainder time, so the unplaced list is invalidated too
+ * (A4 "남은 시간은 미배치에 다시 계산").
+ */
+export function useResizeBlock() {
+  const queryClient = useQueryClient()
+  return useCallback(
+    ({ weekStartISO, planBlockId, blockType, startAt, endAt }) => {
+      const weekKey = weekPlanKey(weekStartISO)
+      const prevWeek = queryClient.getQueryData(weekKey)
+      queryClient.setQueryData(weekKey, (wk) =>
+        wk
+          ? {
+              ...wk,
+              blocks: wk.blocks.map((b) =>
+                b.planBlockId === planBlockId ? { ...b, startAt, endAt } : b,
+              ),
+            }
+          : wk,
+      )
+      patchBlock(planBlockId, { startAt, endAt })
+        .catch(() => {
+          queryClient.setQueryData(weekKey, prevWeek)
+          toast({ tone: 'error', message: systemMessages.error.writeTitle })
+        })
+        .finally(() => {
+          queryClient.invalidateQueries({ queryKey: weekKey })
+          if (blockType === 'TASK') {
+            queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
+          }
+        })
+    },
+    [queryClient],
+  )
+}
+
 const UNDO_WINDOW_MS = 6000
 
 /**

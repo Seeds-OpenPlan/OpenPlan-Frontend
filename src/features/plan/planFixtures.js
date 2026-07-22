@@ -44,6 +44,7 @@ function seedBlocks(weekStartISO) {
   const day = (offset) => addDaysISO(weekStartISO, offset)
   const mk = (offset, startMin, endMin, title, blockType, tone) => {
     let scheduleId = null
+    let taskId = null
     if (blockType === 'SCHEDULE') {
       scheduleId = nextId('sched')
       // Register the schedule so 일정 편집 (PLAN-17) can prefill its full fields.
@@ -55,6 +56,20 @@ function seedBlocks(weekStartISO) {
         memo: '',
         status: 'ACTIVE',
       })
+    } else {
+      taskId = nextId('task')
+      // Register the task with its estimate = initial duration, so A4 remainder
+      // works when a SEEDED task block is shrunk (est − placed > 0).
+      placedTaskData.set(taskId, {
+        taskId,
+        title,
+        estimatedMinutes: endMin - startMin,
+        priority: 2,
+        projectId: null,
+        projectName: null,
+        dueDate: null,
+        reason: null,
+      })
     }
     return {
       planBlockId: nextId('block'),
@@ -62,7 +77,7 @@ function seedBlocks(weekStartISO) {
       title,
       tone,
       status: 'SCHEDULED',
-      taskId: blockType === 'TASK' ? nextId('task') : null,
+      taskId,
       scheduleId,
       startAt: composeTimestamp(day(offset), startMin),
       endAt: composeTimestamp(day(offset), endMin),
@@ -113,9 +128,42 @@ const schedulesById = new Map()
 const executionRecords = []
 
 // Remember a task's full record when it leaves the backlog (placed as a block).
+// Once placed, a task lives in placedTaskData permanently — its UNPLACED presence
+// is then derived as a REMAINDER (est − placed), so a shrink-resize (A4) or a full
+// unplace (PLAN-16) both just surface as more remaining time.
 function rememberPlaced(taskId) {
   const src = unplacedTasks.find((t) => t.taskId === taskId)
-  if (src) placedTaskData.set(taskId, { ...src, reason: null })
+  if (src && !placedTaskData.has(taskId)) placedTaskData.set(taskId, { ...src, reason: null })
+}
+
+// Total minutes a task currently occupies across all weeks' blocks.
+function placedMinutesOf(taskId) {
+  let total = 0
+  for (const week of weeks.values()) {
+    for (const b of week.blocks) {
+      if (b.taskId === taskId) {
+        total += (new Date(b.endAt).getTime() - new Date(b.startAt).getTime()) / 60000
+      }
+    }
+  }
+  return total
+}
+
+// Placed tasks whose blocks cover LESS than their estimate → the leftover shows
+// back in the unplaced panel as a remainder (A4 "남은 시간은 미배치에 다시 계산").
+function placedRemainders() {
+  const out = []
+  for (const task of placedTaskData.values()) {
+    const remaining = (task.estimatedMinutes ?? 0) - placedMinutesOf(task.taskId)
+    if (remaining >= 5) {
+      out.push({
+        ...task,
+        estimatedMinutes: Math.round(remaining),
+        reason: '예정보다 짧게 배치되어 남은 시간이 있습니다',
+      })
+    }
+  }
+  return out
 }
 
 function findWeekByPlanId(weeklyPlanId) {
@@ -179,9 +227,9 @@ function computeDerived(week) {
     ...week,
     blocks,
     totalPlannedMinutes,
-    // Unplaced count = the global UNASSIGNED backlog length (ST-F1-03); validation
-    // still a placeholder until POST validations lands (ST-F1-05).
-    unplacedCount: unplacedTasks.length,
+    // Unplaced count = never-placed backlog + partially-placed remainders (A4);
+    // validation still a placeholder until POST validations lands (ST-F1-05).
+    unplacedCount: unplacedTasks.length + placedRemainders().length,
     validation: { blockCount: 0, warningCount: 2 },
   }
 }
@@ -216,7 +264,9 @@ export const mockBackend = {
         return { planBlockId, ...patch }
       }
     }
-    throw new Error(`mock: block ${planBlockId} not found`)
+    // Soft no-op for an unknown id (e.g. an optimistic temp-id acted on before it
+    // reconciled) — avoids a spurious "요청을 처리하지 못했습니다" on a benign race.
+    return { planBlockId, ...patch }
   },
 
   async putAvailabilities(patterns) {
@@ -229,9 +279,9 @@ export const mockBackend = {
   // project (PROJ-15/19 entry). Returns the `{ tasks }` envelope body shape.
   async getUnplacedTasks(projectId) {
     await delay(100)
-    const tasks = projectId
-      ? unplacedTasks.filter((t) => t.projectId === projectId)
-      : unplacedTasks
+    // Never-placed backlog + remainders of partially-placed tasks (A4).
+    const all = [...unplacedTasks, ...placedRemainders()]
+    const tasks = projectId ? all.filter((t) => t.projectId === projectId) : all
     return { tasks: tasks.map((t) => ({ ...t })) }
   },
 
@@ -316,26 +366,32 @@ export const mockBackend = {
       const block = week.blocks.find((b) => b.planBlockId === planBlockId)
       if (!block) continue
       week.blocks = week.blocks.filter((b) => b.planBlockId !== planBlockId)
+      // TASK: the task stays in placedTaskData; removing its block(s) just raises
+      // its unplaced remainder (full est when none remain) — PLAN-16 via A4 model.
+      // SCHEDULE: gone for good.
       if (block.blockType === 'TASK' && block.taskId) {
-        const restored = placedTaskData.get(block.taskId) ?? {
-          taskId: block.taskId,
-          title: block.title,
-          estimatedMinutes: 60,
-          priority: 2,
-          projectId: null,
-          projectName: null,
-          dueDate: null,
-          reason: null,
+        // Safety net: if it was never routed through placedTaskData, seed it now
+        // so the freed time reappears in the backlog.
+        if (!placedTaskData.has(block.taskId)) {
+          placedTaskData.set(block.taskId, {
+            taskId: block.taskId,
+            title: block.title,
+            estimatedMinutes: block.estimatedMinutes ??
+              Math.round((new Date(block.endAt) - new Date(block.startAt)) / 60000),
+            priority: block.priority ?? 2,
+            projectId: block.projectId ?? null,
+            projectName: block.projectName ?? null,
+            dueDate: null,
+            reason: null,
+          })
         }
-        if (!unplacedTasks.some((t) => t.taskId === block.taskId)) {
-          unplacedTasks = [...unplacedTasks, restored]
-        }
-        placedTaskData.delete(block.taskId)
         return { message: 'UNASSIGNED' }
       }
       return { message: 'DELETED' }
     }
-    throw new Error(`mock: block ${planBlockId} not found`)
+    // Idempotent: a block already gone (e.g. an optimistic temp-id that reconciled
+    // to a real id before this landed) is treated as deleted, not an error.
+    return { message: 'DELETED' }
   },
 
   // POST /weekly-plans/{id}/blocks (blockType=SCHEDULE) — PLAN-08 일정 배치. Creates

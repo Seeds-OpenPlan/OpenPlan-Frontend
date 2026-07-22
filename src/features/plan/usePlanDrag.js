@@ -27,7 +27,7 @@ const DRAG_THRESHOLD_PX = 4
  * @param {(target:{planBlockId:string,boundary:('prev'|'next'|null),dayIndex:number,startMin:number,endMin:number})=>void} opts.onCommit
  * @param {boolean} [opts.disabled]
  */
-export function usePlanDrag({ gridRef, onCommit, disabled }) {
+export function usePlanDrag({ gridRef, onCommit, onDropOutside, disabled }) {
   const [dragState, setDragState] = useState(null)
 
   // Commit through a ref so a drag that started earlier still calls the latest
@@ -35,9 +35,11 @@ export function usePlanDrag({ gridRef, onCommit, disabled }) {
   // delta-based from the block's grabbed position, so the visible range is not
   // needed here.
   const onCommitRef = useRef(onCommit)
+  const onDropOutsideRef = useRef(onDropOutside)
   useEffect(() => {
     onCommitRef.current = onCommit
-  }, [onCommit])
+    onDropOutsideRef.current = onDropOutside
+  }, [onCommit, onDropOutside])
 
   const onBlockPointerDown = useCallback(
     (e, block, dayIndex, startMin) => {
@@ -99,7 +101,13 @@ export function usePlanDrag({ gridRef, onCommit, disabled }) {
         // Commit FIRST (applies the optimistic cache move synchronously), THEN
         // clear the ghost — both land in the same React batch, so the block never
         // renders for a frame at its old cache position before the move applies.
-        if (s.active) onCommitRef.current(compute(ev.clientX, ev.clientY))
+        if (s.active) {
+          // A drop over the unplaced panel unplaces instead of moving (A3). The
+          // page hit-tests the point and returns true when it consumed the drop.
+          const point = { x: ev.clientX, y: ev.clientY }
+          const consumed = onDropOutsideRef.current?.(s.planBlockId, point)
+          if (!consumed) onCommitRef.current(compute(ev.clientX, ev.clientY))
+        }
         setDragState(null)
       }
       const handleCancel = () => {

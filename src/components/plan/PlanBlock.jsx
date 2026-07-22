@@ -38,9 +38,11 @@ export function PlanBlock({
   boundary = null,
   disabled = false,
   dragActive = false,
+  resizing = false,
   onPointerDown,
   onOpenMenu,
   onNudge,
+  onResizeStart,
 }) {
   const timeLabel = `${formatMinutesLabel(startMin)} - ${formatMinutesLabel(endMin)}`
   const typeClass = TYPE_CLASSES[block.blockType] ?? TYPE_CLASSES.TASK
@@ -142,8 +144,32 @@ export function PlanBlock({
         isDone ? 'opacity-60' : '',
         disabled ? 'cursor-default' : 'cursor-grab',
         dragging ? 'z-30 cursor-grabbing opacity-90 shadow-modal ring-2 ring-focus-ring' : 'z-10 shadow-card',
+        resizing ? 'ring-2 ring-focus-ring' : '',
       ].join(' ')}
     >
+      {/* A2 resize handles (top/bottom edge). Pointer-only; keyboard users edit
+          time via the task/schedule form. onResizeStart stops propagation so it
+          never starts a block MOVE. Group-hover reveals a subtle grip. */}
+      {onResizeStart && !disabled && !dragging && (
+        <>
+          <span
+            aria-hidden="true"
+            onPointerDown={(e) => onResizeStart('start', e)}
+            style={{ touchAction: 'none' }}
+            className="group/resize absolute inset-x-0 top-0 z-20 flex h-2 cursor-ns-resize items-start justify-center"
+          >
+            <span className="mt-px h-0.5 w-6 rounded-full bg-current opacity-0 transition-opacity group-hover/resize:opacity-40" />
+          </span>
+          <span
+            aria-hidden="true"
+            onPointerDown={(e) => onResizeStart('end', e)}
+            style={{ touchAction: 'none' }}
+            className="group/resize absolute inset-x-0 bottom-0 z-20 flex h-2 cursor-ns-resize items-end justify-center"
+          >
+            <span className="mb-px h-0.5 w-6 rounded-full bg-current opacity-0 transition-opacity group-hover/resize:opacity-40" />
+          </span>
+        </>
+      )}
       <span className="block leading-tight text-[0.65rem] opacity-80">{timeLabel}</span>
       <span className="mt-0.5 flex items-start gap-1 font-medium leading-tight">
         {isDone && <CheckCircleIcon className="mt-px shrink-0 text-success-600" size={12} />}

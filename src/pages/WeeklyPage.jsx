@@ -23,6 +23,7 @@ import {
   useMoveBlock,
   usePlaceTask,
   useRemoveBlockWithUndo,
+  useResizeBlock,
   useSaveAvailability,
   useSetBlockComplete,
   useUnplacedTasks,
@@ -84,6 +85,7 @@ function WeeklyPage() {
   const [execLog, setExecLog] = useState(null) // { block } | null
 
   const gridBodyRef = useRef(null)
+  const unplacedPanelRef = useRef(null)
 
   const planQuery = useWeekPlan(weekStartISO)
   const availQuery = useAvailability()
@@ -98,6 +100,7 @@ function WeeklyPage() {
   const applyAutoPlace = useApplyAutoPlace()
   const setBlockComplete = useSetBlockComplete()
   const removeBlock = useRemoveBlockWithUndo()
+  const resizeBlock = useResizeBlock()
   const logExecution = useLogExecution()
   const createSchedule = useCreateScheduleBlock()
   const updateSchedule = useUpdateSchedule()
@@ -299,6 +302,38 @@ function WeeklyPage() {
     setSlotMenu(null)
   }
 
+  // --- block resize (ST-F1-04 A2 + A4) --------------------------------------
+
+  // A block's edge-drag lands here as a target slot; commit new start/end times.
+  // Shrinking a TASK block frees remainder time back to the unplaced panel (A4).
+  const handleResizeCommit = (block, { dayIndex, startMin, endMin }) => {
+    if (readOnly) return
+    const dayISO = days[dayIndex]
+    resizeBlock({
+      weekStartISO,
+      planBlockId: block.planBlockId,
+      blockType: block.blockType,
+      startAt: composeTimestamp(dayISO, startMin),
+      endAt: composeTimestamp(dayISO, endMin),
+    })
+  }
+
+  // A3: dropping a TASK block over the (open) unplaced panel unplaces it instead
+  // of moving. Returns true when consumed so usePlanDrag skips the move commit.
+  const handleBlockDropOutside = (planBlockId, point) => {
+    if (!panelOpen || !plan) return false
+    const el = unplacedPanelRef.current
+    if (!el) return false
+    const r = el.getBoundingClientRect()
+    const inPanel =
+      point.x >= r.left && point.x <= r.right && point.y >= r.top && point.y <= r.bottom
+    if (!inPanel) return false
+    const block = blocks.find((b) => b.planBlockId === planBlockId)
+    if (!block || block.blockType !== 'TASK') return false // schedules delete, not unplace
+    removeBlock({ weekStartISO, weeklyPlanId: plan.weeklyPlanId, block, mode: 'unplace' })
+    return true
+  }
+
   // --- block action menu (ST-F1-04: PLAN-13/14 · 16 · 18) -------------------
 
   // Open the edit form for a schedule block, prefilled from its (denormalized) data.
@@ -496,6 +531,8 @@ function WeeklyPage() {
             placement={placementDrag.drag}
             draftBlocks={autoDraft?.placements ?? null}
             onEmptySlot={handleEmptySlot}
+            onResizeCommit={handleResizeCommit}
+            onBlockDropOutside={handleBlockDropOutside}
             // Shrink the grid by ~the draft bar's height while it's shown, so the
             // bar never adds net page height (no new scroll).
             bodyMaxHeight={autoDraft ? 'calc(62vh - 5rem)' : '62vh'}
@@ -564,6 +601,7 @@ function WeeklyPage() {
 
       <UnplacedPanel
         open={panelOpen}
+        panelRef={unplacedPanelRef}
         onClose={() => setPanelOpen(false)}
         count={plan?.unplacedCount ?? 0}
         tasks={unplacedQuery.data ?? []}
