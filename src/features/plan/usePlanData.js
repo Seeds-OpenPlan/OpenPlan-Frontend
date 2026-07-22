@@ -361,76 +361,120 @@ export function useResizeBlock() {
 const UNDO_WINDOW_MS = 6000
 
 /**
- * Returns `removeBlock({ weekStartISO, weeklyPlanId, block, mode })` — a soft
- * delete with an "실행 취소" toast (PLAN-16 배치 해제 / PLAN-18 일정 삭제). The block is
- * removed AND deleted on the server IMMEDIATELY so the cache and server never
- * disagree — a DEFERRED delete let a background refetch resurrect the block at its
- * old spot for a frame. Undo RE-CREATES the block. `mode`: 'unplace' also returns
- * the task to the backlog; 'delete' drops a schedule.
+ * Returns `removeBlock({ weekStartISO, weeklyPlanId, block, mode, claim })` — a
+ * soft delete with an "실행 취소" toast (PLAN-16 배치 해제 / PLAN-18 일정 삭제) that ALSO
+ * returns a `{ id, type:'remove', undo, redo }` history entry for the ↶/↷ stack.
+ * This hook only owns server I/O; the caller (WeeklyPage) owns stack bookkeeping
+ * (`history.record`) — same split as `useMoveBlock`/`handleUserMove` — so this
+ * module never imports `usePlanHistory` directly (ADR-0002 boundary above).
+ *
+ * The block is removed AND deleted on the server IMMEDIATELY so the cache and
+ * server never disagree — a DEFERRED delete let a background refetch resurrect
+ * the block at its old spot for a frame. `mode`: 'unplace' also returns the task
+ * to the backlog; 'delete' drops a schedule.
+ *
+ * TWO independent UI paths can invert this SAME removal: the toast's "실행 취소"
+ * (fires any time within 6s, possibly after the user did other things) and the
+ * ↶ button (strict LIFO, via usePlanHistory). Both must not fire the recreate
+ * twice. The toast calls the injected `claim(entryId)` FIRST — which is expected
+ * to be `usePlanHistory`'s `claim` action, atomically removing this entry from
+ * the stack's `past` wherever it sits; if ↶ already popped it, `claim` returns
+ * null and the toast becomes a no-op. `claim` is optional (defaults to "always
+ * allowed") so this hook stays independently usable/testable without a wired
+ * history store.
  */
 export function useRemoveBlockWithUndo() {
   const queryClient = useQueryClient()
   return useCallback(
-    ({ weekStartISO, weeklyPlanId, block, mode }) => {
+    ({ weekStartISO, weeklyPlanId, block, mode, claim }) => {
       const weekKey = weekPlanKey(weekStartISO)
-      const prevWeek = queryClient.getQueryData(weekKey)
       const isUnplace = mode === 'unplace'
       const invalidate = () => {
         queryClient.invalidateQueries({ queryKey: weekKey })
         if (isUnplace) queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
       }
 
-      // Optimistic remove, then commit the server delete right away (consistent
-      // with the cache → no resurrection on refetch).
-      queryClient.setQueryData(weekKey, (wk) =>
-        wk
-          ? {
-              ...wk,
-              blocks: wk.blocks.filter((b) => b.planBlockId !== block.planBlockId),
-              ...(isUnplace ? { unplacedCount: (wk.unplacedCount ?? 0) + 1 } : {}),
-            }
-          : wk,
-      )
-      deleteBlock(block.planBlockId)
-        .catch(() => {
-          queryClient.setQueryData(weekKey, prevWeek)
-          toast({ tone: 'error', message: systemMessages.error.writeTitle })
-        })
-        .finally(invalidate)
+      // Mutable across undo/redo cycles: recreating gets a NEW server id, so a
+      // later redo (re-delete) must target that id instead of the original
+      // (now-gone) one. `block` itself is never mutated (caller may still hold
+      // a reference to it elsewhere) — we swap this local binding instead.
+      let current = block
 
-      // Undo re-creates the block from its captured data (a new id; the follow-up
+      // The actual server delete + optimistic cache filter. Shared by the
+      // original action (below) and by a stack `redo` (re-applying the removal).
+      const runRemove = () => {
+        const prevWeek = queryClient.getQueryData(weekKey)
+        queryClient.setQueryData(weekKey, (wk) =>
+          wk
+            ? {
+                ...wk,
+                blocks: wk.blocks.filter((b) => b.planBlockId !== current.planBlockId),
+                ...(isUnplace ? { unplacedCount: (wk.unplacedCount ?? 0) + 1 } : {}),
+              }
+            : wk,
+        )
+        deleteBlock(current.planBlockId)
+          .catch(() => {
+            queryClient.setQueryData(weekKey, prevWeek)
+            toast({ tone: 'error', message: systemMessages.error.writeTitle })
+          })
+          .finally(invalidate)
+      }
+
+      // Re-creates the block from its captured data (a new id; the follow-up
       // refetch reconciles). Task blocks re-place; schedule blocks re-create.
-      const undo = () => {
+      // Shared by the toast's "실행 취소" and by a stack `undo`.
+      const runRecreate = () => {
         const recreate = isUnplace
           ? postBlock(weeklyPlanId, {
-              taskId: block.taskId,
+              taskId: current.taskId,
               blockType: 'TASK',
-              title: block.title,
-              startAt: block.startAt,
-              endAt: block.endAt,
+              title: current.title,
+              startAt: current.startAt,
+              endAt: current.endAt,
               status: 'SCHEDULED',
             })
           : postScheduleBlock(weeklyPlanId, {
               blockType: 'SCHEDULE',
-              title: block.title,
-              startAt: block.startAt,
-              endAt: block.endAt,
+              title: current.title,
+              startAt: current.startAt,
+              endAt: current.endAt,
               status: 'SCHEDULED',
-              memo: block.memo ?? '',
-              estimatedMinutes: block.estimatedMinutes ?? undefined,
-              priority: block.priority ?? undefined,
+              memo: current.memo ?? '',
+              estimatedMinutes: current.estimatedMinutes ?? undefined,
+              priority: current.priority ?? undefined,
             })
         recreate
+          .then((result) => {
+            if (result?.planBlockId) current = { ...current, planBlockId: result.planBlockId }
+          })
           .catch(() => toast({ tone: 'error', message: systemMessages.error.writeTitle }))
           .finally(invalidate)
       }
+
+      runRemove()
+
+      // A stable id lets the toast target THIS removal specifically via `claim`,
+      // independent of whatever else the user does before the 6s window closes.
+      const entryId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `remove-${current.planBlockId}-${Date.now()}`
 
       toast({
         tone: 'info',
         message: isUnplace ? '미배치로 되돌렸습니다' : '일정을 삭제했습니다',
         duration: UNDO_WINDOW_MS,
-        action: { label: '실행 취소', onClick: undo },
+        action: {
+          label: '실행 취소',
+          onClick: () => {
+            const claimed = claim ? claim(entryId) : true
+            if (claimed) runRecreate()
+          },
+        },
       })
+
+      return { id: entryId, type: 'remove', undo: runRecreate, redo: runRemove }
     },
     [queryClient],
   )

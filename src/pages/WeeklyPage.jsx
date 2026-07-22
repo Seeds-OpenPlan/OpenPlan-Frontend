@@ -152,15 +152,24 @@ function WeeklyPage() {
     const { targetWeek, startAt, endAt } = resolveTarget(target)
     applyMove({ planBlockId: target.planBlockId, startAt, endAt, sourceWeek: weekStartISO, targetWeek })
     history.record({
+      type: 'move',
       planBlockId: target.planBlockId,
       before: { startAt: block.startAt, endAt: block.endAt, week: weekStartISO },
       after: { startAt, endAt, week: targetWeek },
     })
   }
 
+  // The stack now holds two entry shapes (a 'move' generalization — see
+  // usePlanHistory's header): 'move' entries are replayed here through the same
+  // optimistic PATCH a drag uses; 'remove' entries (unplace/delete) already carry
+  // their own undo/redo closures from useRemoveBlockWithUndo, so we just call them.
   const handleUndo = () => {
     const entry = history.undo()
     if (!entry) return
+    if (entry.type === 'remove') {
+      entry.undo()
+      return
+    }
     applyMove({
       planBlockId: entry.planBlockId,
       startAt: entry.before.startAt,
@@ -173,6 +182,10 @@ function WeeklyPage() {
   const handleRedo = () => {
     const entry = history.redo()
     if (!entry) return
+    if (entry.type === 'remove') {
+      entry.redo()
+      return
+    }
     applyMove({
       planBlockId: entry.planBlockId,
       startAt: entry.after.startAt,
@@ -333,11 +346,26 @@ function WeeklyPage() {
     if (!inPanel) return false
     const block = blocks.find((b) => b.planBlockId === planBlockId)
     if (!block || block.blockType !== 'TASK') return false // schedules delete, not unplace
-    removeBlock({ weekStartISO, weeklyPlanId: plan.weeklyPlanId, block, mode: 'unplace' })
+    handleRemoveBlock(block, 'unplace')
     return true
   }
 
   // --- block action menu (ST-F1-04: PLAN-13/14 · 16 · 18) -------------------
+
+  // A user-initiated removal (unplace/delete): commit it via the shared removal
+  // path AND push an undo entry, mirroring handleUserMove's move+record pairing.
+  // `history.claim` is threaded into removeBlock so its "실행 취소" toast and this
+  // entry's ↶/↷ can never both invert the same removal (see usePlanData's doc).
+  const handleRemoveBlock = (block, mode) => {
+    const entry = removeBlock({
+      weekStartISO,
+      weeklyPlanId: plan?.weeklyPlanId,
+      block,
+      mode,
+      claim: history.claim,
+    })
+    history.record(entry)
+  }
 
   // Open the edit form for a schedule block, prefilled from its (denormalized) data.
   const openScheduleEdit = (block) => {
@@ -370,8 +398,7 @@ function WeeklyPage() {
           key: 'delete',
           label: '일정 삭제',
           tone: 'danger',
-          onSelect: () =>
-            removeBlock({ weekStartISO, weeklyPlanId: plan?.weeklyPlanId, block, mode: 'delete' }),
+          onSelect: () => handleRemoveBlock(block, 'delete'),
         },
       ]
     }
@@ -397,8 +424,7 @@ function WeeklyPage() {
     items.push({
       key: 'unplace',
       label: '배치 해제',
-      onSelect: () =>
-        removeBlock({ weekStartISO, weeklyPlanId: plan?.weeklyPlanId, block, mode: 'unplace' }),
+      onSelect: () => handleRemoveBlock(block, 'unplace'),
     })
     return items
   }
