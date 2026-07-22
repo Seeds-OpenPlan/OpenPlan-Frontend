@@ -51,24 +51,20 @@ function DayHeader({ dayISO, columnIndex, todayISO }) {
   )
 }
 
-/* Background column: weekend tint + availability band highlight. */
-function BgColumn({ columnIndex, availWindow, range }) {
-  const weekend = WEEKEND_COLUMN_INDICES.has(columnIndex)
+/*
+  Background column. AVAILABLE time is clean white; everything else — outside the
+  availability window, and weekends entirely (they have no window) — carries the
+  sunken tint, so the usable band is what reads as "open".
+*/
+function BgColumn({ availWindow, range }) {
   const band = availWindow
     ? blockRect(availWindow.startMinutes, availWindow.endMinutes, range)
     : null
   return (
-    // Non-available time is muted (weekends more so) and the available window is
-    // tinted, so the usable band reads at a glance instead of near-invisibly.
-    <div
-      className={[
-        'relative border-l border-border',
-        weekend ? 'bg-surface-sunken' : 'bg-surface-sunken/55',
-      ].join(' ')}
-    >
+    <div className="relative border-l border-border bg-surface-sunken">
       {band && (
         <div
-          className="absolute inset-x-0 bg-brand-100/75"
+          className="absolute inset-x-0 bg-surface"
           style={{ top: band.top, height: band.height }}
           aria-hidden="true"
         />
@@ -112,7 +108,7 @@ function AvailabilityHandle({ columnIndex, edge, minutes, gridRef, range, onPrev
     >
       {/* Hidden until THIS handle's strip is hovered/focused (like the block resize
           grips). The edge reads as a thin rule across the column with a small
-          centered grip — quieter than the old solid blue pill. */}
+          centered grip — quieter than a solid pill. */}
       <span
         className="absolute inset-x-1 h-px bg-brand-500 opacity-0 transition-opacity group-hover/avail:opacity-70 group-focus-within/avail:opacity-70"
         aria-hidden="true"
@@ -310,7 +306,9 @@ export function CalendarGrid({
               stay aligned (a scrollbar on the body alone would offset the header). */}
           <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: bodyMaxHeight }}>
             {/* Sticky day-header row. */}
-            <div className="sticky top-0 z-30 flex border-b border-border bg-surface">
+            {/* z-40: above the dragged block / drop preview (z-30) so a block
+                scrolled to the top slides UNDER the day header, never over it. */}
+            <div className="sticky top-0 z-40 flex border-b border-border bg-surface">
               <div className="w-12 shrink-0" />
               <div className="grid flex-1 grid-cols-7">
                 {weekDays.map((dayISO, i) => (
@@ -482,7 +480,7 @@ export function CalendarGrid({
           {placementPreview && (
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute z-40 flex flex-col overflow-hidden rounded-control border-2 border-dashed border-brand-500 bg-brand-100/70 p-1.5 text-caption text-brand-900"
+              className="pointer-events-none absolute z-30 flex flex-col overflow-hidden rounded-control border-2 border-dashed border-brand-500 bg-brand-100/70 p-1.5 text-caption text-brand-900"
               style={{
                 left: `calc(${placementPreview.dayIndex} / 7 * 100% + 2px)`,
                 width: `calc(100% / 7 - 4px)`,
