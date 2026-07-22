@@ -51,17 +51,20 @@ function DayHeader({ dayISO, columnIndex, todayISO }) {
   )
 }
 
-/* Background column: weekend tint + availability band highlight. */
-function BgColumn({ columnIndex, availWindow, range }) {
-  const weekend = WEEKEND_COLUMN_INDICES.has(columnIndex)
+/*
+  Background column. AVAILABLE time is clean white; everything else — outside the
+  availability window, and weekends entirely (they have no window) — carries the
+  sunken tint, so the usable band is what reads as "open".
+*/
+function BgColumn({ availWindow, range }) {
   const band = availWindow
     ? blockRect(availWindow.startMinutes, availWindow.endMinutes, range)
     : null
   return (
-    <div className={['relative border-l border-border', weekend ? 'bg-surface-sunken/60' : ''].join(' ')}>
+    <div className="relative border-l border-border bg-surface-sunken">
       {band && (
         <div
-          className="absolute inset-x-0 bg-brand-50/40"
+          className="absolute inset-x-0 bg-surface"
           style={{ top: band.top, height: band.height }}
           aria-hidden="true"
         />
@@ -100,10 +103,20 @@ function AvailabilityHandle({ columnIndex, edge, minutes, gridRef, range, onPrev
       type="button"
       aria-label={`${WEEKDAY_LABELS_KO[columnIndex]} 가용 ${edge === 'start' ? '시작' : '종료'} ${formatMinutesLabel(minutes)}`}
       onPointerDown={onPointerDown}
-      style={{ top: top - 6, left: `calc(${columnIndex} / 7 * 100%)`, width: `calc(100% / 7)`, touchAction: 'none' }}
-      className="absolute z-20 flex h-3 items-center justify-center"
+      style={{ top: top - 7, left: `calc(${columnIndex} / 7 * 100%)`, width: `calc(100% / 7)`, touchAction: 'none' }}
+      className="group/avail absolute z-20 flex h-3.5 cursor-ns-resize items-center justify-center"
     >
-      <span className="h-1 w-8 rounded-full bg-brand-600 ring-2 ring-surface" aria-hidden="true" />
+      {/* Hidden until THIS handle's strip is hovered/focused (like the block resize
+          grips). The edge reads as a thin rule across the column with a small
+          centered grip — quieter than a solid pill. */}
+      <span
+        className="absolute inset-x-1 h-px bg-brand-500 opacity-0 transition-opacity group-hover/avail:opacity-70 group-focus-within/avail:opacity-70"
+        aria-hidden="true"
+      />
+      <span
+        className="relative h-1.5 w-9 rounded-full border border-brand-500/70 bg-surface opacity-0 shadow-card transition-opacity group-hover/avail:opacity-100 group-focus-within/avail:opacity-100"
+        aria-hidden="true"
+      />
     </button>
   )
 }
@@ -128,10 +141,13 @@ export function CalendarGrid({
   placement = null,
   draftBlocks = null,
   onEmptySlot,
+  onResizeCommit,
+  onBlockDropOutside,
   bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
 }) {
   const gridRef = useRef(null)
   const scrollRef = useRef(null)
+  const [resizeState, setResizeState] = useState(null) // {planBlockId,startMin,endMin}
 
   // A callback ref that mirrors the grid body element into the page's bodyRef too,
   // so the page can hit-test panel→grid drops (resolveGridSlot) against exactly
@@ -165,8 +181,42 @@ export function CalendarGrid({
     gridRef,
     range,
     onCommit: onMoveCommit,
+    onDropOutside: onBlockDropOutside,
     disabled: readOnly,
   })
+
+  // A2 edge-drag resize. Dragging a block's top/bottom handle changes its start/
+  // end in 5-min steps (min 15-min tall); release commits via onResizeCommit. Runs
+  // here (not in PlanBlock) because it needs the grid geometry, like the availability
+  // handles. The pointerdown stops propagation so it never starts a block MOVE.
+  const RESIZE_MIN_DUR = 15
+  const makeResizeStart = (block, dayIndex, startMin, endMin) => (edge, e) => {
+    if (readOnly || e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    const compute = (clientY) => {
+      const rect = gridRef.current.getBoundingClientRect()
+      const m = snapMinutes(pxToMinutes(clientY - rect.top, range))
+      return edge === 'start'
+        ? { startMin: Math.max(0, Math.min(m, endMin - RESIZE_MIN_DUR)), endMin }
+        : { startMin, endMin: Math.min(MINUTES_PER_DAY, Math.max(m, startMin + RESIZE_MIN_DUR)) }
+    }
+    const move = (ev) => setResizeState({ planBlockId: block.planBlockId, ...compute(ev.clientY) })
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      const next = compute(ev.clientY)
+      // Commit the optimistic cache update FIRST, THEN clear the preview — both in
+      // the same React batch, so the block never renders one frame at its old
+      // cache size before the resize applies (mirrors useMoveBlock's ordering).
+      if (next.startMin !== startMin || next.endMin !== endMin) {
+        onResizeCommit?.(block, { dayIndex, ...next })
+      }
+      setResizeState(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
   const height = rangeHeightPx(range)
   const ticks = hourTicks(range)
@@ -191,6 +241,11 @@ export function CalendarGrid({
         dayIndex = dragState.dayIndex
         startMin = dragState.startMin
         endMin = dragState.endMin
+      }
+      // Live resize preview (A2).
+      if (resizeState?.planBlockId === block.planBlockId) {
+        startMin = resizeState.startMin
+        endMin = resizeState.endMin
       }
       return { block, dayIndex, startMin, endMin, isDragged }
     })
@@ -251,7 +306,9 @@ export function CalendarGrid({
               stay aligned (a scrollbar on the body alone would offset the header). */}
           <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: bodyMaxHeight }}>
             {/* Sticky day-header row. */}
-            <div className="sticky top-0 z-30 flex border-b border-border bg-surface">
+            {/* z-40: above the dragged block / drop preview (z-30) so a block
+                scrolled to the top slides UNDER the day header, never over it. */}
+            <div className="sticky top-0 z-40 flex border-b border-border bg-surface">
               <div className="w-12 shrink-0" />
               <div className="grid flex-1 grid-cols-7">
                 {weekDays.map((dayISO, i) => (
@@ -333,8 +390,11 @@ export function CalendarGrid({
                   range={range}
                   onPreview={(c, e2, m) => setAvailPreview({ columnIndex: c, edge: e2, minutes: m })}
                   onCommit={(c, e2, m) => {
-                    setAvailPreview(null)
+                    // Commit FIRST (the optimistic cache write), THEN drop the
+                    // preview — same React batch, so the band never snaps back to
+                    // its old edge for a frame (mirrors the block-resize ordering).
                     onAvailabilityCommit(c, e2, m)
+                    setAvailPreview(null)
                   }}
                 />
               ))
@@ -375,11 +435,14 @@ export function CalendarGrid({
                 // Any drag in progress (this or another block, or a panel→grid
                 // placement) suppresses the hover detail card, so pointer-capture
                 // swallowing mouseleave can't leave stale cards on the grid.
-                dragActive={Boolean(dragState) || Boolean(placement)}
+                dragActive={Boolean(dragState) || Boolean(placement) || Boolean(resizeState)}
+                resizing={resizeState?.planBlockId === block.planBlockId}
+                pending={String(block.planBlockId).startsWith('temp-')}
                 style={style}
                 onPointerDown={(e) => onBlockPointerDown(e, block, dayIndex, startMin)}
                 onOpenMenu={(pos) => onOpenMenu(block, pos)}
                 onNudge={makeNudge(block, dayIndex, startMin, endMin)}
+                onResizeStart={readOnly ? undefined : makeResizeStart(block, dayIndex, startMin, endMin)}
               />
             )
           })}
@@ -417,7 +480,7 @@ export function CalendarGrid({
           {placementPreview && (
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute z-40 flex flex-col overflow-hidden rounded-control border-2 border-dashed border-brand-500 bg-brand-100/70 p-1.5 text-caption text-brand-900"
+              className="pointer-events-none absolute z-30 flex flex-col overflow-hidden rounded-control border-2 border-dashed border-brand-500 bg-brand-100/70 p-1.5 text-caption text-brand-900"
               style={{
                 left: `calc(${placementPreview.dayIndex} / 7 * 100% + 2px)`,
                 width: `calc(100% / 7 - 4px)`,

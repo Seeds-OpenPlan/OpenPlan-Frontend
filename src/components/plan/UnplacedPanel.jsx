@@ -145,7 +145,7 @@ function FilterChip({ active, onClick, children }) {
 const PANEL_WIDTH = 344 // px (w ~21.5rem)
 const DEFAULT_POS = { right: 24, top: 96 } // px offset from the top-RIGHT corner
 
-export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
+export function UnplacedPanel({ open, onClose, count = 0, panelRef, ...bodyProps }) {
   const isDesktop = useIsDesktop()
   const reducedMotion = useReducedMotion()
 
@@ -208,7 +208,8 @@ export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
     if (!open) return null
     return (
       <BottomSheet open={open} onClose={onClose} labelledById={PANEL_TITLE_ID}>
-        <div className="flex max-h-[70vh] flex-col gap-4">
+        {/* Compact on mobile so it doesn't swallow the screen — the list scrolls. */}
+        <div className="flex max-h-[55vh] flex-col gap-3">
           {header}
           <PanelBody {...bodyProps} />
         </div>
@@ -241,6 +242,7 @@ export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
   }
   return createPortal(
     <aside
+      ref={panelRef}
       aria-labelledby={PANEL_TITLE_ID}
       aria-hidden={!open}
       // inert (React 19) blocks focus/interaction while closed.

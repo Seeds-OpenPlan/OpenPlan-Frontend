@@ -10,20 +10,23 @@
   - useSaveAvailability: PUT availabilities then invalidate (PLAN-32).
 */
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import {
   keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { getAvailability, getWeek, patchBlock, putAvailabilities } from './planApi'
+import { deleteBlock, getAvailability, getWeek, patchBlock, putAvailabilities } from './planApi'
 import {
   getUnplacedTasks,
+  patchTaskStatus,
   postAutoPlacements,
   postBlock,
   postBlockBatch,
+  postExecutionRecord,
 } from './taskApi'
+import { patchSchedule, postScheduleBlock } from './scheduleApi'
 import { addWeeksISO } from './planTime'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
@@ -78,6 +81,20 @@ export function useAvailability() {
  * otherwise the block would flash at its old position for one frame between the
  * ghost clearing and an async cache update landing. The PATCH then runs in the
  * background; any failure restores the pre-move snapshot (409/422 both roll back).
+ *
+ * BUG FIX (block "duplication" after a quick re-move): every mutation here
+ * follows optimistic-write → background PATCH → `finally` invalidate, and
+ * `invalidateQueries` refetches in the background (~100ms+ over the mock). If an
+ * EARLIER action's refetch is still in flight when THIS move applies its own
+ * optimistic write, that stale refetch can land afterward and overwrite the
+ * cache with a server snapshot that predates this move — visually the block
+ * snaps back to its old spot, then jumps forward again once this move's own
+ * refetch lands. In rapid "place → immediately re-move" sequences this reads as
+ * the block momentarily duplicating. `cancelQueries` (fire-and-forget; its
+ * abort effect on the in-flight retryer is synchronous — no await needed to
+ * keep this function's optimistic write in the same tick) neutralizes any such
+ * stale refetch before we write, so only OUR write and OUR later invalidate can
+ * ever land for this key.
  */
 export function useMoveBlock() {
   const queryClient = useQueryClient()
@@ -95,6 +112,13 @@ export function useMoveBlock() {
       const prevTarget = queryClient.getQueryData(weekPlanKey(targetWeek))
       const moved =
         prevSource?.blocks?.find((b) => b.planBlockId === planBlockId) ?? null
+
+      // Cancel any stale in-flight refetch for the affected week(s) BEFORE
+      // writing — see the stale-refetch race note above.
+      queryClient.cancelQueries({ queryKey: weekPlanKey(sourceWeek) })
+      if (targetWeek !== sourceWeek) {
+        queryClient.cancelQueries({ queryKey: weekPlanKey(targetWeek) })
+      }
 
       // Optimistic, synchronous.
       if (targetWeek === sourceWeek) {
@@ -124,7 +148,7 @@ export function useMoveBlock() {
           if (targetWeek !== sourceWeek) {
             queryClient.setQueryData(weekPlanKey(targetWeek), prevTarget)
           }
-          toast({ tone: 'info', message: systemMessages.error.getTitle })
+          toast({ tone: 'error', message: systemMessages.error.getTitle })
         })
         .finally(() => {
           queryClient.invalidateQueries({ queryKey: weekPlanKey(sourceWeek) })
@@ -137,17 +161,30 @@ export function useMoveBlock() {
   )
 }
 
+/**
+ * PUT availabilities (PLAN-32). OPTIMISTIC like every other write here — onMutate
+ * writes the new patterns synchronously so the band lands in the same React batch
+ * as the drag's preview-clear (waiting for the round-trip made the edge visibly
+ * snap back and then jump). The pre-edit snapshot is restored on failure.
+ */
 export function useSaveAvailability() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (patterns) => putAvailabilities(patterns),
-    onSuccess: (patterns) => {
+    onMutate: (patterns) => {
+      // Fire-and-forget: cancelQueries' abort is synchronous, so the optimistic
+      // write below still lands in this same batch (no stale refetch can clobber).
+      queryClient.cancelQueries({ queryKey: availabilityKey() })
+      const prev = queryClient.getQueryData(availabilityKey())
       queryClient.setQueryData(availabilityKey(), patterns)
+      return { prev }
+    },
+    onSuccess: () => {
       toast({ tone: 'success', message: '가용 시간을 저장했습니다' })
     },
-    onError: () => {
-      queryClient.invalidateQueries({ queryKey: availabilityKey() })
-      toast({ tone: 'info', message: systemMessages.error.writeTitle })
+    onError: (_err, _patterns, context) => {
+      if (context?.prev) queryClient.setQueryData(availabilityKey(), context.prev)
+      toast({ tone: 'error', message: systemMessages.error.writeTitle })
     },
   })
 }
@@ -170,17 +207,55 @@ export function useUnplacedTasks(projectId = null) {
  * Optimistic + synchronous (mirrors useMoveBlock): the block appears on the grid
  * and the task leaves the panel in the same React batch (<100ms, AC-1), then POST
  * runs in the background; any failure restores both caches (409/422 roll back).
+ *
+ * See useMoveBlock's header for the stale-refetch race this hook also guards
+ * against via `cancelQueries` (a re-move right after placement was the repro
+ * that surfaced it — the block would appear to duplicate/jump).
+ *
+ * BUG FIX (re-entrant placement leaves a permanently-stuck `temp-` ghost): a
+ * single physical drop must call this EXACTLY once, but nothing here enforced
+ * that — the optimistic write below is an unconditional array append with no
+ * check for a placement of the SAME task already in flight. The concrete
+ * trigger (found via an actual query-core repro, not guesswork): the caller,
+ * usePlacementDrag's `up()` handler, called this from INSIDE a
+ * `setDrag((d) => { onDropRef.current(d.task, slot); return null })` functional
+ * updater — a side effect inside a state updater, which React 19 Strict Mode
+ * (enabled in main.jsx) deliberately double-invokes in dev
+ * (react-dom-client.development.js `shouldDoubleInvokeUserFnsInHooksDEV`) to
+ * surface exactly this class of impurity. That call site is now fixed too, but
+ * this hook must not rely on every future caller getting that right — a
+ * re-entrant call for a task whose placement hasn't settled yet (POST still in
+ * flight) is guarded here unconditionally: `inFlightRef` tracks temp ids
+ * currently being placed and turns a repeat call into a no-op, so the temp
+ * entry's lifecycle stays deterministic (exactly one optimistic entry, exactly
+ * one POST) no matter how many times placement is re-triggered. A LATER,
+ * genuinely separate placement of the same task (e.g. re-placing an A4
+ * remainder after the first one fully reconciled) is unaffected — the guard
+ * only blocks a call that overlaps a STILL-PENDING one for the same task.
  */
 export function usePlaceTask() {
   const queryClient = useQueryClient()
+  const inFlightRef = useRef(new Set())
 
   return useCallback(
     ({ weeklyPlanId, weekStartISO, task, startAt, endAt }) => {
       const weekKey = weekPlanKey(weekStartISO)
-      const prevWeek = queryClient.getQueryData(weekKey)
       // A client-only temp id until the POST returns the real planBlockId; the
       // follow-up invalidate reconciles it away.
       const tempId = `temp-${task.taskId}`
+
+      // Re-entrant guard (see BUG FIX note above): a placement for this exact
+      // task is already in flight — skip instead of appending a second temp
+      // entry / firing a second POST.
+      if (inFlightRef.current.has(tempId)) return
+      inFlightRef.current.add(tempId)
+
+      const prevWeek = queryClient.getQueryData(weekKey)
+
+      // Cancel stale in-flight refetches for both keys we're about to write
+      // optimistically (see useMoveBlock's header).
+      queryClient.cancelQueries({ queryKey: weekKey })
+      queryClient.cancelQueries({ queryKey: ['unplacedTasks'] })
 
       queryClient.setQueryData(weekKey, (wk) =>
         wk
@@ -217,12 +292,45 @@ export function usePlaceTask() {
         endAt,
         status: 'SCHEDULED',
       })
+        .then((result) => {
+          // Reconcile the optimistic temp id to the server's real planBlockId as
+          // soon as the POST resolves, so the block becomes a first-class,
+          // interactable block without waiting on the refetch (temp-id race fix).
+          const realId = result?.planBlockId
+          if (!realId) return
+          // Cancel a stale in-flight refetch before writing (see this hook's
+          // header) so it can't land after this reconcile and revert it.
+          queryClient.cancelQueries({ queryKey: weekKey })
+          queryClient.setQueryData(weekKey, (wk) => {
+            if (!wk) return wk
+            // Defensive dedupe: if a background refetch already delivered the
+            // real block under `realId` (e.g. it resolved between the optimistic
+            // add and this reconcile), drop the now-redundant temp entry instead
+            // of renaming it — renaming would leave TWO blocks sharing `realId`,
+            // the literal "duplicated block" symptom.
+            const realAlreadyPresent = wk.blocks.some((b) => b.planBlockId === realId)
+            return {
+              ...wk,
+              blocks: realAlreadyPresent
+                ? wk.blocks.filter((b) => b.planBlockId !== tempId)
+                : wk.blocks.map((b) =>
+                    b.planBlockId === tempId ? { ...b, planBlockId: realId } : b,
+                  ),
+            }
+          })
+        })
         .catch(() => {
           queryClient.setQueryData(weekKey, prevWeek)
-          queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
-          toast({ tone: 'info', message: systemMessages.error.writeTitle })
+          // `finally` below invalidates ['unplacedTasks'] unconditionally right
+          // after this runs — invalidating it here too was a redundant extra
+          // round-trip on the error path only (harmless, just wasteful).
+          toast({ tone: 'error', message: systemMessages.error.writeTitle })
         })
         .finally(() => {
+          // Release the guard on EVERY path (success, failure, or a soft no-op
+          // reconcile) so a genuinely later placement of this same task is never
+          // permanently blocked.
+          inFlightRef.current.delete(tempId)
           queryClient.invalidateQueries({ queryKey: weekKey })
           queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
         })
@@ -240,7 +348,7 @@ export function useAutoPlace() {
     mutationFn: ({ weeklyPlanId, priorityType }) =>
       postAutoPlacements(weeklyPlanId, priorityType),
     onError: () => {
-      toast({ tone: 'info', message: systemMessages.error.writeTitle })
+      toast({ tone: 'error', message: systemMessages.error.writeTitle })
     },
   })
 }
@@ -259,7 +367,246 @@ export function useApplyAutoPlace() {
       queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
     },
     onError: () => {
-      toast({ tone: 'info', message: systemMessages.error.writeTitle })
+      toast({ tone: 'error', message: systemMessages.error.writeTitle })
     },
+  })
+}
+
+// --- ST-F1-04: block action menu (complete/uncomplete · unplace · delete) ----
+
+/**
+ * Returns `setComplete({ weekStartISO, taskId, complete })` — PLAN-13/14. Marks
+ * every block of the task COMPLETED/SCHEDULED optimistically, then PATCHes the
+ * task status. This commits IMMEDIATELY and independently of the plan draft (J3),
+ * so it never touches the undo stack.
+ */
+export function useSetBlockComplete() {
+  const queryClient = useQueryClient()
+  return useCallback(
+    ({ weekStartISO, taskId, complete }) => {
+      const weekKey = weekPlanKey(weekStartISO)
+      const prevWeek = queryClient.getQueryData(weekKey)
+      const blockStatus = complete ? 'COMPLETED' : 'SCHEDULED'
+      // See useMoveBlock's header for why this precedes the optimistic write.
+      queryClient.cancelQueries({ queryKey: weekKey })
+      queryClient.setQueryData(weekKey, (wk) =>
+        wk
+          ? {
+              ...wk,
+              blocks: wk.blocks.map((b) =>
+                b.taskId === taskId ? { ...b, status: blockStatus } : b,
+              ),
+            }
+          : wk,
+      )
+      patchTaskStatus(taskId, complete ? 'COMPLETED' : 'IN_PROGRESS')
+        .catch(() => {
+          queryClient.setQueryData(weekKey, prevWeek)
+          toast({ tone: 'error', message: systemMessages.error.writeTitle })
+        })
+        .finally(() => queryClient.invalidateQueries({ queryKey: weekKey }))
+    },
+    [queryClient],
+  )
+}
+
+/**
+ * Returns `resize({ weekStartISO, planBlockId, blockType, startAt, endAt })` — A2
+ * edge-drag resize. Optimistic block-time change + PATCH. Shrinking a TASK block
+ * below its estimate frees remainder time, so the unplaced list is invalidated too
+ * (A4 "남은 시간은 미배치에 다시 계산").
+ */
+export function useResizeBlock() {
+  const queryClient = useQueryClient()
+  return useCallback(
+    ({ weekStartISO, planBlockId, blockType, startAt, endAt }) => {
+      const weekKey = weekPlanKey(weekStartISO)
+      const prevWeek = queryClient.getQueryData(weekKey)
+      // See useMoveBlock's header for why this precedes the optimistic write.
+      queryClient.cancelQueries({ queryKey: weekKey })
+      queryClient.setQueryData(weekKey, (wk) =>
+        wk
+          ? {
+              ...wk,
+              blocks: wk.blocks.map((b) =>
+                b.planBlockId === planBlockId ? { ...b, startAt, endAt } : b,
+              ),
+            }
+          : wk,
+      )
+      patchBlock(planBlockId, { startAt, endAt })
+        .catch(() => {
+          queryClient.setQueryData(weekKey, prevWeek)
+          toast({ tone: 'error', message: systemMessages.error.writeTitle })
+        })
+        .finally(() => {
+          queryClient.invalidateQueries({ queryKey: weekKey })
+          if (blockType === 'TASK') {
+            queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
+          }
+        })
+    },
+    [queryClient],
+  )
+}
+
+const UNDO_WINDOW_MS = 6000
+
+/**
+ * Returns `removeBlock({ weekStartISO, weeklyPlanId, block, mode, claim })` — a
+ * soft delete with an "실행 취소" toast (PLAN-16 배치 해제 / PLAN-18 일정 삭제) that ALSO
+ * returns a `{ id, type:'remove', undo, redo }` history entry for the ↶/↷ stack.
+ * This hook only owns server I/O; the caller (WeeklyPage) owns stack bookkeeping
+ * (`history.record`) — same split as `useMoveBlock`/`handleUserMove` — so this
+ * module never imports `usePlanHistory` directly (ADR-0002 boundary above).
+ *
+ * The block is removed AND deleted on the server IMMEDIATELY so the cache and
+ * server never disagree — a DEFERRED delete let a background refetch resurrect
+ * the block at its old spot for a frame. `mode`: 'unplace' also returns the task
+ * to the backlog; 'delete' drops a schedule.
+ *
+ * TWO independent UI paths can invert this SAME removal: the toast's "실행 취소"
+ * (fires any time within 6s, possibly after the user did other things) and the
+ * ↶ button (strict LIFO, via usePlanHistory). Both must not fire the recreate
+ * twice. The toast calls the injected `claim(entryId)` FIRST — which is expected
+ * to be `usePlanHistory`'s `claim` action, atomically removing this entry from
+ * the stack's `past` wherever it sits; if ↶ already popped it, `claim` returns
+ * null and the toast becomes a no-op. `claim` is optional (defaults to "always
+ * allowed") so this hook stays independently usable/testable without a wired
+ * history store.
+ */
+export function useRemoveBlockWithUndo() {
+  const queryClient = useQueryClient()
+  return useCallback(
+    ({ weekStartISO, weeklyPlanId, block, mode, claim }) => {
+      const weekKey = weekPlanKey(weekStartISO)
+      const isUnplace = mode === 'unplace'
+      const invalidate = () => {
+        queryClient.invalidateQueries({ queryKey: weekKey })
+        if (isUnplace) queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
+      }
+
+      // Mutable across undo/redo cycles: recreating gets a NEW server id, so a
+      // later redo (re-delete) must target that id instead of the original
+      // (now-gone) one. `block` itself is never mutated (caller may still hold
+      // a reference to it elsewhere) — we swap this local binding instead.
+      let current = block
+
+      // The actual server delete + optimistic cache filter. Shared by the
+      // original action (below) and by a stack `redo` (re-applying the removal).
+      const runRemove = () => {
+        const prevWeek = queryClient.getQueryData(weekKey)
+        // See useMoveBlock's header for why this precedes the optimistic write.
+        queryClient.cancelQueries({ queryKey: weekKey })
+        queryClient.setQueryData(weekKey, (wk) =>
+          wk
+            ? {
+                ...wk,
+                blocks: wk.blocks.filter((b) => b.planBlockId !== current.planBlockId),
+                ...(isUnplace ? { unplacedCount: (wk.unplacedCount ?? 0) + 1 } : {}),
+              }
+            : wk,
+        )
+        deleteBlock(current.planBlockId)
+          .catch(() => {
+            queryClient.setQueryData(weekKey, prevWeek)
+            toast({ tone: 'error', message: systemMessages.error.writeTitle })
+          })
+          .finally(invalidate)
+      }
+
+      // Re-creates the block from its captured data (a new id; the follow-up
+      // refetch reconciles). Task blocks re-place; schedule blocks re-create.
+      // Shared by the toast's "실행 취소" and by a stack `undo`.
+      const runRecreate = () => {
+        const recreate = isUnplace
+          ? postBlock(weeklyPlanId, {
+              taskId: current.taskId,
+              blockType: 'TASK',
+              title: current.title,
+              startAt: current.startAt,
+              endAt: current.endAt,
+              status: 'SCHEDULED',
+            })
+          : postScheduleBlock(weeklyPlanId, {
+              blockType: 'SCHEDULE',
+              title: current.title,
+              startAt: current.startAt,
+              endAt: current.endAt,
+              status: 'SCHEDULED',
+              memo: current.memo ?? '',
+              estimatedMinutes: current.estimatedMinutes ?? undefined,
+              priority: current.priority ?? undefined,
+            })
+        recreate
+          .then((result) => {
+            if (result?.planBlockId) current = { ...current, planBlockId: result.planBlockId }
+          })
+          .catch(() => toast({ tone: 'error', message: systemMessages.error.writeTitle }))
+          .finally(invalidate)
+      }
+
+      runRemove()
+
+      // A stable id lets the toast target THIS removal specifically via `claim`,
+      // independent of whatever else the user does before the 6s window closes.
+      const entryId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `remove-${current.planBlockId}-${Date.now()}`
+
+      toast({
+        tone: 'info',
+        message: isUnplace ? '미배치로 되돌렸습니다' : '일정을 삭제했습니다',
+        duration: UNDO_WINDOW_MS,
+        action: {
+          label: '실행 취소',
+          onClick: () => {
+            const claimed = claim ? claim(entryId) : true
+            if (claimed) runRecreate()
+          },
+        },
+      })
+
+      return { id: entryId, type: 'remove', undo: runRecreate, redo: runRemove }
+    },
+    [queryClient],
+  )
+}
+
+// --- ST-F1-04 Phase 2: execution log · schedule create/edit -----------------
+
+/** POST /tasks/{id}/execution-records — PLAN-15 실제 시간 기록 (write-only). */
+export function useLogExecution() {
+  return useMutation({
+    mutationFn: ({ taskId, body }) => postExecutionRecord(taskId, body),
+    onSuccess: () => toast({ tone: 'success', message: '통계에 반영되었습니다' }),
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+/** POST /weekly-plans/{id}/blocks (SCHEDULE inline) — PLAN-08 일정 배치. */
+export function useCreateScheduleBlock() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ weeklyPlanId, body }) => postScheduleBlock(weeklyPlanId, body),
+    onSuccess: (_data, { weekStartISO }) => {
+      queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
+      toast({ tone: 'success', message: '일정을 추가했습니다' })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+/** PATCH /schedules/{id} — PLAN-17 일정 편집. Refetches the week to reflect it. */
+export function useUpdateSchedule() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ scheduleId, patch }) => patchSchedule(scheduleId, patch),
+    onSuccess: (_data, { weekStartISO }) => {
+      queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
+      toast({ tone: 'success', message: '일정을 수정했습니다' })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
 }

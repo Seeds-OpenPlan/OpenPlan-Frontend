@@ -21,8 +21,14 @@ import {
 } from './planTime'
 import { byPriorityThenDue, findFirstFreeSlot } from './planPlacement'
 
-// Simulated round-trip latency so the optimistic-then-commit flow is observable.
-const MOCK_LATENCY_MS = 260
+// Simulated round-trip latency so the optimistic-then-commit flow stays
+// observable (never 0 — that's the whole reason this DEV mock exists: seeing
+// the optimistic write land instantly, then the background write/refetch settle
+// a beat later). Kept deliberately short so the app doesn't feel laggy; each
+// GET below still gets its OWN (smaller) explicit delay on top of whatever it
+// does, so multi-request chains (e.g. delete → week refetch → unplaced
+// refetch) don't stack up into a visibly slow interaction.
+const MOCK_LATENCY_MS = 70
 const delay = (ms = MOCK_LATENCY_MS) => new Promise((r) => setTimeout(r, ms))
 
 let uid = 100
@@ -42,17 +48,47 @@ function seedAvailability() {
 // placeholder for future project coloring (real palette lands with projects).
 function seedBlocks(weekStartISO) {
   const day = (offset) => addDaysISO(weekStartISO, offset)
-  const mk = (offset, startMin, endMin, title, blockType, tone) => ({
-    planBlockId: nextId('block'),
-    blockType,
-    title,
-    tone,
-    status: 'SCHEDULED',
-    taskId: blockType === 'TASK' ? nextId('task') : null,
-    scheduleId: blockType === 'SCHEDULE' ? nextId('sched') : null,
-    startAt: composeTimestamp(day(offset), startMin),
-    endAt: composeTimestamp(day(offset), endMin),
-  })
+  const mk = (offset, startMin, endMin, title, blockType, tone) => {
+    let scheduleId = null
+    let taskId = null
+    if (blockType === 'SCHEDULE') {
+      scheduleId = nextId('sched')
+      // Register the schedule so 일정 편집 (PLAN-17) can prefill its full fields.
+      schedulesById.set(scheduleId, {
+        scheduleId,
+        title,
+        estimatedMinutes: endMin - startMin,
+        priority: 2,
+        memo: '',
+        status: 'ACTIVE',
+      })
+    } else {
+      taskId = nextId('task')
+      // Register the task with its estimate = initial duration, so A4 remainder
+      // works when a SEEDED task block is shrunk (est − placed > 0).
+      placedTaskData.set(taskId, {
+        taskId,
+        title,
+        estimatedMinutes: endMin - startMin,
+        priority: 2,
+        projectId: null,
+        projectName: null,
+        dueDate: null,
+        reason: null,
+      })
+    }
+    return {
+      planBlockId: nextId('block'),
+      blockType,
+      title,
+      tone,
+      status: 'SCHEDULED',
+      taskId,
+      scheduleId,
+      startAt: composeTimestamp(day(offset), startMin),
+      endAt: composeTimestamp(day(offset), endMin),
+    }
+  }
   return [
     mk(0, 9 * 60 + 5, 10 * 60 + 35, '면접 대비 예상 질문 리스트업', 'TASK', 'brand'),
     mk(1, 10 * 60 + 45, 12 * 60 + 40, '대시보드 개선', 'TASK', 'accent'),
@@ -88,6 +124,56 @@ function seedUnplacedTasks() {
 const weeks = new Map()
 let availability = seedAvailability()
 let unplacedTasks = seedUnplacedTasks()
+// Full data of tasks that have been placed as blocks, kept so "배치 해제" (PLAN-16)
+// can restore the original task to the unplaced backlog (and later A4 remainder).
+const placedTaskData = new Map()
+// SCHEDULE records (ST-F1-04 PLAN-08/17). A schedule owns the fields the plan_block
+// doesn't (memo·estimatedMinutes·priority); the block mirrors its title/time.
+const schedulesById = new Map()
+// Execution records (PLAN-15 실제 시간 기록) — write-only for this cycle.
+const executionRecords = []
+
+// Remember a task's full record when it leaves the backlog (placed as a block).
+// Once placed, a task lives in placedTaskData permanently — its UNPLACED presence
+// is then derived as a REMAINDER (est − placed), so a shrink-resize (A4) or a full
+// unplace (PLAN-16) both just surface as more remaining time.
+function rememberPlaced(taskId) {
+  const src = unplacedTasks.find((t) => t.taskId === taskId)
+  if (src && !placedTaskData.has(taskId)) placedTaskData.set(taskId, { ...src, reason: null })
+}
+
+// Total minutes a task currently occupies across all weeks' blocks.
+function placedMinutesOf(taskId) {
+  let total = 0
+  for (const week of weeks.values()) {
+    for (const b of week.blocks) {
+      if (b.taskId === taskId) {
+        total += (new Date(b.endAt).getTime() - new Date(b.startAt).getTime()) / 60000
+      }
+    }
+  }
+  return total
+}
+
+// Placed tasks whose blocks cover LESS than their estimate → the leftover shows
+// back in the unplaced panel as a remainder (A4 "남은 시간은 미배치에 다시 계산").
+function placedRemainders() {
+  const out = []
+  for (const task of placedTaskData.values()) {
+    const placed = placedMinutesOf(task.taskId)
+    const remaining = (task.estimatedMinutes ?? 0) - placed
+    if (remaining >= 5) {
+      out.push({
+        ...task,
+        estimatedMinutes: Math.round(remaining),
+        // Only a PARTIALLY-placed task is a "placed shorter than planned"
+        // remainder; a fully-unplaced one (placed 0) is just a normal backlog item.
+        reason: placed > 0 ? '예정보다 짧게 배치되어 남은 시간이 있습니다' : null,
+      })
+    }
+  }
+  return out
+}
 
 function findWeekByPlanId(weeklyPlanId) {
   for (const week of weeks.values()) {
@@ -132,24 +218,39 @@ function computeDerived(week) {
     const mins = (new Date(b.endAt).getTime() - new Date(b.startAt).getTime()) / 60000
     return sum + mins
   }, 0)
+  // Denormalize a SCHEDULE block's owning-schedule fields (memo·estimatedMinutes·
+  // priority) onto the block so 일정 편집 (PLAN-17) can prefill without a GET.
+  const blocks = week.blocks.map((b) => {
+    if (b.blockType === 'SCHEDULE' && b.scheduleId && schedulesById.has(b.scheduleId)) {
+      const s = schedulesById.get(b.scheduleId)
+      return { ...b, memo: s.memo, estimatedMinutes: s.estimatedMinutes, priority: s.priority }
+    }
+    // Attach the project link for a placed task (PLAN-12); seeded tasks have none.
+    if (b.blockType === 'TASK' && b.taskId && placedTaskData.has(b.taskId)) {
+      const t = placedTaskData.get(b.taskId)
+      return { ...b, projectId: t.projectId ?? null, projectName: t.projectName ?? null }
+    }
+    return b
+  })
   return {
     ...week,
+    blocks,
     totalPlannedMinutes,
-    // Unplaced count = the global UNASSIGNED backlog length (ST-F1-03); validation
-    // still a placeholder until POST validations lands (ST-F1-05).
-    unplacedCount: unplacedTasks.length,
+    // Unplaced count = never-placed backlog + partially-placed remainders (A4);
+    // validation still a placeholder until POST validations lands (ST-F1-05).
+    unplacedCount: unplacedTasks.length + placedRemainders().length,
     validation: { blockCount: 0, warningCount: 2 },
   }
 }
 
 export const mockBackend = {
   async getWeek(weekStartISO) {
-    await delay(120)
+    await delay(60)
     return computeDerived(ensureWeek(weekStartISO))
   },
 
   async getAvailability() {
-    await delay(80)
+    await delay(60)
     return availability
   },
 
@@ -172,7 +273,9 @@ export const mockBackend = {
         return { planBlockId, ...patch }
       }
     }
-    throw new Error(`mock: block ${planBlockId} not found`)
+    // Soft no-op for an unknown id (e.g. an optimistic temp-id acted on before it
+    // reconciled) — avoids a spurious "요청을 처리하지 못했습니다" on a benign race.
+    return { planBlockId, ...patch }
   },
 
   async putAvailabilities(patterns) {
@@ -184,10 +287,10 @@ export const mockBackend = {
   // GET /tasks?status=UNASSIGNED — the unplaced backlog, optionally filtered to a
   // project (PROJ-15/19 entry). Returns the `{ tasks }` envelope body shape.
   async getUnplacedTasks(projectId) {
-    await delay(100)
-    const tasks = projectId
-      ? unplacedTasks.filter((t) => t.projectId === projectId)
-      : unplacedTasks
+    await delay(60)
+    // Never-placed backlog + remainders of partially-placed tasks (A4).
+    const all = [...unplacedTasks, ...placedRemainders()]
+    const tasks = projectId ? all.filter((t) => t.projectId === projectId) : all
     return { tasks: tasks.map((t) => ({ ...t })) }
   },
 
@@ -204,6 +307,7 @@ export const mockBackend = {
       endAt: body.endAt,
     })
     week.blocks.push(block)
+    rememberPlaced(body.taskId)
     unplacedTasks = unplacedTasks.filter((t) => t.taskId !== body.taskId)
     return { planBlockId: block.planBlockId }
   },
@@ -212,7 +316,7 @@ export const mockBackend = {
   // backlog into free slots (우선순위·마감일 순) without mutating any store; the
   // client holds the result as a draft overlay until [적용] commits it.
   async autoPlace(weeklyPlanId) {
-    await delay(700) // a visible "배치 중…" beat
+    await delay(220) // a visible "배치 중…" beat, without feeling stuck
     const week = findWeekByPlanId(weeklyPlanId)
     if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
     const days = weekDays(week.weekStartDate)
@@ -243,10 +347,117 @@ export const mockBackend = {
     const placedIds = new Set()
     for (const p of placements ?? []) {
       week.blocks.push(blockFromPlacement(p))
+      rememberPlaced(p.taskId)
       placedIds.add(p.taskId)
     }
     unplacedTasks = unplacedTasks.filter((t) => !placedIds.has(t.taskId))
     return { placedCount: placedIds.size }
+  },
+
+  // PATCH /tasks/{taskId}/status — PLAN-13/14 완료/미완료. Mirrors onto every
+  // block of the task so the grid reflects completion (block.status).
+  async setTaskStatus(taskId, status) {
+    await delay(80)
+    for (const week of weeks.values()) {
+      for (const block of week.blocks) {
+        if (block.taskId === taskId) block.status = status
+      }
+    }
+    return { message: 'STATUS_UPDATED' }
+  },
+
+  // DELETE /plan-blocks/{planBlockId}. A SCHEDULE block is simply removed
+  // (PLAN-18 삭제); a TASK block is removed AND its task returns to the unplaced
+  // backlog (PLAN-16 배치 해제) — same endpoint, behavior keyed by block type.
+  async deleteBlock(planBlockId) {
+    await delay()
+    for (const week of weeks.values()) {
+      const block = week.blocks.find((b) => b.planBlockId === planBlockId)
+      if (!block) continue
+      week.blocks = week.blocks.filter((b) => b.planBlockId !== planBlockId)
+      // TASK: the task stays in placedTaskData; removing its block(s) just raises
+      // its unplaced remainder (full est when none remain) — PLAN-16 via A4 model.
+      // SCHEDULE: gone for good.
+      if (block.blockType === 'TASK' && block.taskId) {
+        // Safety net: if it was never routed through placedTaskData, seed it now
+        // so the freed time reappears in the backlog.
+        if (!placedTaskData.has(block.taskId)) {
+          placedTaskData.set(block.taskId, {
+            taskId: block.taskId,
+            title: block.title,
+            estimatedMinutes: block.estimatedMinutes ??
+              Math.round((new Date(block.endAt) - new Date(block.startAt)) / 60000),
+            priority: block.priority ?? 2,
+            projectId: block.projectId ?? null,
+            projectName: block.projectName ?? null,
+            dueDate: null,
+            reason: null,
+          })
+        }
+        return { message: 'UNASSIGNED' }
+      }
+      return { message: 'DELETED' }
+    }
+    // Idempotent: a block already gone (e.g. an optimistic temp-id that reconciled
+    // to a real id before this landed) is treated as deleted, not an error.
+    return { message: 'DELETED' }
+  },
+
+  // POST /weekly-plans/{id}/blocks (blockType=SCHEDULE) — PLAN-08 일정 배치. Creates
+  // a schedule record and its mirroring SCHEDULE block.
+  async createScheduleBlock(weeklyPlanId, body) {
+    await delay()
+    const week = findWeekByPlanId(weeklyPlanId)
+    if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
+    const scheduleId = nextId('sched')
+    schedulesById.set(scheduleId, {
+      scheduleId,
+      title: body.title,
+      estimatedMinutes: body.estimatedMinutes ?? null,
+      priority: body.priority ?? 2,
+      memo: body.memo ?? '',
+      status: 'ACTIVE',
+    })
+    const block = {
+      planBlockId: nextId('block'),
+      blockType: 'SCHEDULE',
+      title: body.title,
+      tone: null,
+      status: 'SCHEDULED',
+      taskId: null,
+      scheduleId,
+      startAt: body.startAt,
+      endAt: body.endAt,
+    }
+    week.blocks.push(block)
+    return { planBlockId: block.planBlockId, scheduleId }
+  },
+
+  // PATCH /schedules/{scheduleId} — PLAN-17 일정 편집. Updates the schedule record
+  // AND its block's mirrored title/time.
+  async updateSchedule(scheduleId, patch) {
+    await delay()
+    const current = schedulesById.get(scheduleId) ?? { scheduleId }
+    const next = { ...current, ...patch }
+    schedulesById.set(scheduleId, next)
+    for (const week of weeks.values()) {
+      for (const block of week.blocks) {
+        if (block.scheduleId === scheduleId) {
+          if (patch.title != null) block.title = patch.title
+          if (patch.startAt != null) block.startAt = patch.startAt
+          if (patch.endAt != null) block.endAt = patch.endAt
+        }
+      }
+    }
+    return { message: 'UPDATED' }
+  },
+
+  // POST /tasks/{taskId}/execution-records — PLAN-15 실제 시간 기록 (write-only).
+  async logExecution(taskId, body) {
+    await delay(150)
+    const executionRecordId = nextId('exec')
+    executionRecords.push({ executionRecordId, taskId, ...body })
+    return { executionRecordId }
   },
 }
 

@@ -27,17 +27,23 @@ const DRAG_THRESHOLD_PX = 4
  * @param {(target:{planBlockId:string,boundary:('prev'|'next'|null),dayIndex:number,startMin:number,endMin:number})=>void} opts.onCommit
  * @param {boolean} [opts.disabled]
  */
-export function usePlanDrag({ gridRef, onCommit, disabled }) {
+export function usePlanDrag({ gridRef, range, onCommit, onDropOutside, disabled }) {
   const [dragState, setDragState] = useState(null)
+  // The visible band, read through a ref so an in-flight drag clamps against the
+  // current range without re-binding its window listeners.
+  const rangeRef = useRef(range)
 
   // Commit through a ref so a drag that started earlier still calls the latest
   // handler without re-binding the window listeners mid-drag. Drag math is
   // delta-based from the block's grabbed position, so the visible range is not
   // needed here.
   const onCommitRef = useRef(onCommit)
+  const onDropOutsideRef = useRef(onDropOutside)
   useEffect(() => {
     onCommitRef.current = onCommit
-  }, [onCommit])
+    onDropOutsideRef.current = onDropOutside
+    rangeRef.current = range
+  }, [onCommit, onDropOutside, range])
 
   const onBlockPointerDown = useCallback(
     (e, block, dayIndex, startMin) => {
@@ -61,8 +67,14 @@ export function usePlanDrag({ gridRef, onCommit, disabled }) {
 
         const dMin = (clientY - s.clientY0) / PX_PER_MIN
         let start = snapMinutes(s.startMin0 + dMin)
-        start = Math.min(start, MINUTES_PER_DAY - s.duration)
-        start = Math.max(0, start)
+        // Clamp to the VISIBLE band, not just the whole day: in focus mode the
+        // grid starts at ~08:00, so a day-clamped start could sit above the body
+        // and paint the block over the sticky day-header row. Read through a ref
+        // so a mode toggle mid-drag uses the current range.
+        const r = rangeRef.current
+        const floor = r ? r.startMinutes : 0
+        const ceil = (r ? r.endMinutes : MINUTES_PER_DAY) - s.duration
+        start = Math.max(floor, Math.min(start, Math.max(floor, ceil)))
 
         const dCol = Math.round((clientX - s.clientX0) / colWidth)
         const rawDay = s.dayIndex0 + dCol
@@ -99,7 +111,13 @@ export function usePlanDrag({ gridRef, onCommit, disabled }) {
         // Commit FIRST (applies the optimistic cache move synchronously), THEN
         // clear the ghost — both land in the same React batch, so the block never
         // renders for a frame at its old cache position before the move applies.
-        if (s.active) onCommitRef.current(compute(ev.clientX, ev.clientY))
+        if (s.active) {
+          // A drop over the unplaced panel unplaces instead of moving (A3). The
+          // page hit-tests the point and returns true when it consumed the drop.
+          const point = { x: ev.clientX, y: ev.clientY }
+          const consumed = onDropOutsideRef.current?.(s.planBlockId, point)
+          if (!consumed) onCommitRef.current(compute(ev.clientX, ev.clientY))
+        }
         setDragState(null)
       }
       const handleCancel = () => {

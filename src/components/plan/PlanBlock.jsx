@@ -2,10 +2,17 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { formatMinutesLabel } from '../../features/plan/planTime'
 import { PX_PER_MIN } from '../../features/plan/planGeometry'
+import { CheckCircleIcon } from '../common/statusIcons'
 
 // Below this rendered height a block can't show its title legibly, so a
 // hover/focus detail card supplements it (readability aid — the block's
-// aria-label already carries the full title+time for screen readers).
+// aria-label already carries the full title+time for screen readers). This is
+// an ABSOLUTE pixel figure (padding + one line of the time label + one line of
+// the title, per the block's fixed font sizes/padding below) — it does NOT
+// scale with planGeometry's HOUR_PX/PX_PER_MIN. Raising HOUR_PX makes any given
+// DURATION taller on screen, so fewer blocks fall under this same px bar and
+// need the popover — that's the intended effect, not something to compensate
+// for by scaling this constant too.
 const SHORT_BLOCK_PX = 46
 
 /*
@@ -37,12 +44,21 @@ export function PlanBlock({
   boundary = null,
   disabled = false,
   dragActive = false,
+  resizing = false,
+  pending = false, // optimistic block whose server id hasn't reconciled yet
   onPointerDown,
   onOpenMenu,
   onNudge,
+  onResizeStart,
 }) {
+  // A pending (temp-id) block is shown but not yet interactable: acting on it
+  // before the POST resolves would target a non-existent server id (temp-id race).
+  const locked = disabled || pending
   const timeLabel = `${formatMinutesLabel(startMin)} - ${formatMinutesLabel(endMin)}`
   const typeClass = TYPE_CLASSES[block.blockType] ?? TYPE_CLASSES.TASK
+  // Completed blocks read as done via a check + strikethrough + dimming, never by
+  // color alone (PLAN-13 AC-2, NFR-017).
+  const isDone = block.status === 'COMPLETED'
 
   // Detail card for short blocks: anchored to the block's on-screen rect and
   // rendered in a portal so the grid's overflow can't clip it.
@@ -58,15 +74,16 @@ export function PlanBlock({
   }
   const closeDetail = () => setDetail(null)
 
-  // Any pointerdown anywhere (notably a drag starting on another block) dismisses
-  // the card. During a drag the browser holds pointer capture and won't fire
-  // mouseleave, so without this a card opened just before the drag would linger
-  // as a "ghost" once the drag ends. setState runs in the listener callback (not
-  // the effect body), which the react-hooks rules permit.
+  // Any pointerdown anywhere (notably a drag/resize starting on another block)
+  // dismisses the card. During a drag the browser holds pointer capture and won't
+  // fire mouseleave, so without this a card opened just before would linger as a
+  // "ghost". CAPTURE phase so a handler that calls stopPropagation (the resize
+  // grips do) can't stop us from clearing. setState in the listener callback is
+  // allowed by the react-hooks rules.
   useEffect(() => {
     const clear = () => setDetail(null)
-    window.addEventListener('pointerdown', clear)
-    return () => window.removeEventListener('pointerdown', clear)
+    window.addEventListener('pointerdown', clear, true)
+    return () => window.removeEventListener('pointerdown', clear, true)
   }, [])
 
   const openMenuFromEvent = (e) => {
@@ -75,7 +92,7 @@ export function PlanBlock({
   }
 
   const handleKeyDown = (e) => {
-    if (disabled) return
+    if (locked) return
     switch (e.key) {
       case 'ArrowUp':
         e.preventDefault()
@@ -108,11 +125,11 @@ export function PlanBlock({
     <div
       role="button"
       tabIndex={disabled ? -1 : 0}
-      aria-label={`${block.title}, ${timeLabel}${disabled ? ', 읽기 전용' : ''}`}
+      aria-label={`${block.title}, ${timeLabel}${isDone ? ', 완료' : ''}${disabled ? ', 읽기 전용' : ''}`}
       aria-disabled={disabled || undefined}
       style={{ ...style, touchAction: 'none' }}
       onPointerDown={
-        disabled
+        locked
           ? undefined
           : (e) => {
               closeDetail()
@@ -128,6 +145,7 @@ export function PlanBlock({
         // Keep a block right-click on the block: don't let it bubble to the grid
         // body's empty-slot placement menu (ST-F1-03 PLAN-07).
         e.stopPropagation()
+        if (locked) return
         openMenuFromEvent(e)
       }}
       onKeyDown={handleKeyDown}
@@ -135,12 +153,41 @@ export function PlanBlock({
         'absolute overflow-hidden rounded-control border p-1.5 text-caption',
         'select-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
         typeClass,
-        disabled ? 'cursor-default' : 'cursor-grab',
+        isDone ? 'opacity-60' : '',
+        locked ? 'cursor-default' : 'cursor-grab',
         dragging ? 'z-30 cursor-grabbing opacity-90 shadow-modal ring-2 ring-focus-ring' : 'z-10 shadow-card',
+        resizing ? 'ring-2 ring-focus-ring' : '',
+        pending ? 'opacity-70' : '',
       ].join(' ')}
     >
+      {/* A2 resize handles (top/bottom edge). Pointer-only; keyboard users edit
+          time via the task/schedule form. onResizeStart stops propagation so it
+          never starts a block MOVE. Group-hover reveals a subtle grip. */}
+      {onResizeStart && !locked && !dragging && (
+        <>
+          <span
+            aria-hidden="true"
+            onPointerDown={(e) => onResizeStart('start', e)}
+            style={{ touchAction: 'none' }}
+            className="group/resize absolute inset-x-0 top-0 z-20 flex h-2 cursor-ns-resize items-start justify-center"
+          >
+            <span className="mt-px h-0.5 w-6 rounded-full bg-current opacity-0 transition-opacity group-hover/resize:opacity-40" />
+          </span>
+          <span
+            aria-hidden="true"
+            onPointerDown={(e) => onResizeStart('end', e)}
+            style={{ touchAction: 'none' }}
+            className="group/resize absolute inset-x-0 bottom-0 z-20 flex h-2 cursor-ns-resize items-end justify-center"
+          >
+            <span className="mb-px h-0.5 w-6 rounded-full bg-current opacity-0 transition-opacity group-hover/resize:opacity-40" />
+          </span>
+        </>
+      )}
       <span className="block leading-tight text-[0.65rem] opacity-80">{timeLabel}</span>
-      <span className="mt-0.5 block font-medium leading-tight line-clamp-3">{block.title}</span>
+      <span className="mt-0.5 flex items-start gap-1 font-medium leading-tight">
+        {isDone && <CheckCircleIcon className="mt-px shrink-0 text-success-600" size={12} />}
+        <span className={`line-clamp-3 ${isDone ? 'line-through' : ''}`}>{block.title}</span>
+      </span>
 
       {dragging && boundary && (
         <span className="absolute inset-x-1 bottom-1 rounded bg-brand-600 px-1 py-0.5 text-center text-[0.6rem] font-semibold text-white">

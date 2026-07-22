@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import { PlanHeader } from '../components/plan/PlanHeader'
 import { WeekNav } from '../components/plan/WeekNav'
 import { SummaryBar } from '../components/plan/SummaryBar'
@@ -10,15 +11,23 @@ import { BlockActionMenu } from '../components/plan/BlockActionMenu'
 import { ReviewPanel } from '../components/plan/ReviewPanel'
 import { UnplacedPanel } from '../components/plan/UnplacedPanel'
 import { AutoPlaceBar } from '../components/plan/AutoPlaceBar'
+import { ScheduleForm } from '../components/plan/ScheduleForm'
+import { ExecutionLogForm } from '../components/plan/ExecutionLogForm'
 import { ErrorState } from '../components/common/ErrorState'
 import {
   useApplyAutoPlace,
   useAutoPlace,
   useAvailability,
+  useCreateScheduleBlock,
+  useLogExecution,
   useMoveBlock,
   usePlaceTask,
+  useRemoveBlockWithUndo,
+  useResizeBlock,
   useSaveAvailability,
+  useSetBlockComplete,
   useUnplacedTasks,
+  useUpdateSchedule,
   useWeekPlan,
 } from '../features/plan/usePlanData'
 import {
@@ -29,12 +38,15 @@ import {
 import { usePlacementDrag } from '../features/plan/usePlacementDrag'
 import { resolveGridSlot, visibleRange } from '../features/plan/planGeometry'
 import { findFirstFreeSlot } from '../features/plan/planPlacement'
+import { getPopoverAnchorStyle } from '../utils/popoverPosition'
 import {
   addWeeksISO,
   composeTimestamp,
   currentWeekStartISO,
+  dateOf,
   isPastWeek,
   MINUTES_PER_DAY,
+  minutesOfDay,
   WEEKDAY_KEYS,
   weekDays as weekDaysOf,
 } from '../features/plan/planTime'
@@ -69,7 +81,12 @@ function WeeklyPage() {
   const [autoDraft, setAutoDraft] = useState(null) // { placements, unplaced } | null
   const [slotMenu, setSlotMenu] = useState(null) // { point, slot } | null
 
+  // ST-F1-04 Phase 2: schedule form (create/edit) + execution log.
+  const [scheduleForm, setScheduleForm] = useState(null) // { mode, block?, slot? } | null
+  const [execLog, setExecLog] = useState(null) // { block } | null
+
   const gridBodyRef = useRef(null)
+  const unplacedPanelRef = useRef(null)
 
   const planQuery = useWeekPlan(weekStartISO)
   const availQuery = useAvailability()
@@ -82,6 +99,13 @@ function WeeklyPage() {
   const placeTask = usePlaceTask()
   const autoPlace = useAutoPlace()
   const applyAutoPlace = useApplyAutoPlace()
+  const setBlockComplete = useSetBlockComplete()
+  const removeBlock = useRemoveBlockWithUndo()
+  const resizeBlock = useResizeBlock()
+  const logExecution = useLogExecution()
+  const createSchedule = useCreateScheduleBlock()
+  const updateSchedule = useUpdateSchedule()
+  const navigate = useNavigate()
 
   const history = usePlanHistory()
   const canUndo = usePlanHistory(selectCanUndo)
@@ -92,6 +116,9 @@ function WeeklyPage() {
   const availability = useMemo(() => availQuery.data ?? [], [availQuery.data])
   const blocks = plan?.blocks ?? []
   const readOnly = isPastWeek(weekStartISO)
+  // Badge count = the unplaced LIST length (single source), not the per-week
+  // plan.unplacedCount (which is cached per week and can go stale — Thomas HIGH).
+  const unplacedCount = unplacedQuery.data?.length ?? 0
 
   const days = useMemo(() => weekDaysOf(weekStartISO), [weekStartISO])
   const range = useMemo(() => visibleRange(mode, availability), [mode, availability])
@@ -126,15 +153,24 @@ function WeeklyPage() {
     const { targetWeek, startAt, endAt } = resolveTarget(target)
     applyMove({ planBlockId: target.planBlockId, startAt, endAt, sourceWeek: weekStartISO, targetWeek })
     history.record({
+      type: 'move',
       planBlockId: target.planBlockId,
       before: { startAt: block.startAt, endAt: block.endAt, week: weekStartISO },
       after: { startAt, endAt, week: targetWeek },
     })
   }
 
+  // The stack now holds two entry shapes (a 'move' generalization — see
+  // usePlanHistory's header): 'move' entries are replayed here through the same
+  // optimistic PATCH a drag uses; 'remove' entries (unplace/delete) already carry
+  // their own undo/redo closures from useRemoveBlockWithUndo, so we just call them.
   const handleUndo = () => {
     const entry = history.undo()
     if (!entry) return
+    if (entry.type === 'remove') {
+      entry.undo()
+      return
+    }
     applyMove({
       planBlockId: entry.planBlockId,
       startAt: entry.before.startAt,
@@ -147,6 +183,10 @@ function WeeklyPage() {
   const handleRedo = () => {
     const entry = history.redo()
     if (!entry) return
+    if (entry.type === 'remove') {
+      entry.redo()
+      return
+    }
     applyMove({
       planBlockId: entry.planBlockId,
       startAt: entry.after.startAt,
@@ -279,6 +319,168 @@ function WeeklyPage() {
     setSlotMenu(null)
   }
 
+  // --- block resize (ST-F1-04 A2 + A4) --------------------------------------
+
+  // A block's edge-drag lands here as a target slot; commit new start/end times.
+  // Shrinking a TASK block frees remainder time back to the unplaced panel (A4).
+  const handleResizeCommit = (block, { dayIndex, startMin, endMin }) => {
+    if (readOnly) return
+    const dayISO = days[dayIndex]
+    resizeBlock({
+      weekStartISO,
+      planBlockId: block.planBlockId,
+      blockType: block.blockType,
+      startAt: composeTimestamp(dayISO, startMin),
+      endAt: composeTimestamp(dayISO, endMin),
+    })
+  }
+
+  // A3: dropping a TASK block over the (open) unplaced panel unplaces it instead
+  // of moving. Returns true when consumed so usePlanDrag skips the move commit.
+  const handleBlockDropOutside = (planBlockId, point) => {
+    if (!panelOpen || !plan) return false
+    const el = unplacedPanelRef.current
+    if (!el) return false
+    const r = el.getBoundingClientRect()
+    const inPanel =
+      point.x >= r.left && point.x <= r.right && point.y >= r.top && point.y <= r.bottom
+    if (!inPanel) return false
+    const block = blocks.find((b) => b.planBlockId === planBlockId)
+    if (!block || block.blockType !== 'TASK') return false // schedules delete, not unplace
+    handleRemoveBlock(block, 'unplace')
+    return true
+  }
+
+  // --- block action menu (ST-F1-04: PLAN-13/14 · 16 · 18) -------------------
+
+  // A user-initiated removal (unplace/delete): commit it via the shared removal
+  // path AND push an undo entry, mirroring handleUserMove's move+record pairing.
+  // `history.claim` is threaded into removeBlock so its "실행 취소" toast and this
+  // entry's ↶/↷ can never both invert the same removal (see usePlanData's doc).
+  const handleRemoveBlock = (block, mode) => {
+    const entry = removeBlock({
+      weekStartISO,
+      weeklyPlanId: plan?.weeklyPlanId,
+      block,
+      mode,
+      claim: history.claim,
+    })
+    history.record(entry)
+  }
+
+  // Open the edit form for a schedule block, prefilled from its (denormalized) data.
+  const openScheduleEdit = (block) => {
+    const startMin = minutesOfDay(block.startAt)
+    const endMin = minutesOfDay(block.endAt)
+    setScheduleForm({
+      mode: 'edit',
+      block,
+      initial: {
+        title: block.title,
+        dayISO: dateOf(block.startAt),
+        startMin,
+        endMin,
+        estimatedMinutes: block.estimatedMinutes ?? endMin - startMin,
+        priority: block.priority ?? 2,
+        memo: block.memo ?? '',
+      },
+    })
+  }
+
+  // Menu items per block type (AC-1). Delete/unplace are soft — a "실행 취소" toast
+  // defers the server op (no confirm dialog). 태스크 편집/프로젝트에서 보기 navigate
+  // to screens that land in ST-F1-09/08 (route seams).
+  const menuItemsFor = (block) => {
+    if (!block || readOnly) return []
+    if (block.blockType === 'SCHEDULE') {
+      return [
+        { key: 'edit', label: '일정 편집', onSelect: () => openScheduleEdit(block) },
+        {
+          key: 'delete',
+          label: '일정 삭제',
+          tone: 'danger',
+          onSelect: () => handleRemoveBlock(block, 'delete'),
+        },
+      ]
+    }
+    // TASK block
+    const done = block.status === 'COMPLETED'
+    const items = [
+      {
+        key: 'complete',
+        label: done ? '미완료로 되돌리기' : '완료로 표시',
+        onSelect: () =>
+          setBlockComplete({ weekStartISO, taskId: block.taskId, complete: !done }),
+      },
+      { key: 'log', label: '실제 시간 기록', onSelect: () => setExecLog({ block }) },
+      { key: 'edit', label: '태스크 편집', onSelect: () => navigate(`/tasks/${block.taskId}/edit`) },
+    ]
+    if (block.projectId) {
+      items.push({
+        key: 'project',
+        label: '프로젝트에서 보기',
+        onSelect: () => navigate(`/projects/${block.projectId}`),
+      })
+    }
+    items.push({
+      key: 'unplace',
+      label: '배치 해제',
+      onSelect: () => handleRemoveBlock(block, 'unplace'),
+    })
+    return items
+  }
+
+  // --- schedule create/edit + execution log (ST-F1-04 Phase 2) --------------
+
+  // Right-clicked empty slot → open the create form seeded from that slot (PLAN-08).
+  const openScheduleCreate = (slot) => {
+    setSlotMenu(null)
+    const startMin = slot.startMin
+    setScheduleForm({
+      mode: 'create',
+      initial: {
+        title: '',
+        dayISO: days[slot.dayIndex],
+        startMin,
+        endMin: Math.min(startMin + 60, MINUTES_PER_DAY),
+        estimatedMinutes: 60,
+        priority: 2,
+        memo: '',
+      },
+    })
+  }
+
+  const submitSchedule = (payload) => {
+    if (!plan) return
+    if (scheduleForm?.mode === 'create') {
+      createSchedule.mutate(
+        {
+          weeklyPlanId: plan.weeklyPlanId,
+          weekStartISO,
+          body: { blockType: 'SCHEDULE', status: 'SCHEDULED', ...payload },
+        },
+        { onSuccess: () => setScheduleForm(null) },
+      )
+    } else if (scheduleForm?.block) {
+      updateSchedule.mutate(
+        { scheduleId: scheduleForm.block.scheduleId, weekStartISO, patch: payload },
+        { onSuccess: () => setScheduleForm(null) },
+      )
+    }
+  }
+
+  const submitExecLog = ({ actualMinutes, memo }) => {
+    if (!execLog) return
+    const { block } = execLog
+    const endedAt = new Date(
+      new Date(block.startAt).getTime() + actualMinutes * 60000,
+    ).toISOString()
+    logExecution.mutate(
+      { taskId: block.taskId, body: { startedAt: block.startAt, endedAt, actualMinutes, memo } },
+      { onSuccess: () => setExecLog(null) },
+    )
+  }
+
   // --- save (PLAN-03: this story owns the undo-stack reset) -----------------
 
   const handleSave = () => {
@@ -359,6 +561,8 @@ function WeeklyPage() {
             placement={placementDrag.drag}
             draftBlocks={autoDraft?.placements ?? null}
             onEmptySlot={handleEmptySlot}
+            onResizeCommit={handleResizeCommit}
+            onBlockDropOutside={handleBlockDropOutside}
             // Shrink the grid by ~the draft bar's height while it's shown, so the
             // bar never adds net page height (no new scroll).
             bodyMaxHeight={autoDraft ? 'calc(62vh - 5rem)' : '62vh'}
@@ -380,7 +584,7 @@ function WeeklyPage() {
           {/* FAB hides while the panel is open; reappears on close. */}
           <div className="pointer-events-auto">
             {!panelOpen && (
-              <PlanFab count={plan?.unplacedCount ?? 0} onClick={() => setPanelOpen(true)} />
+              <PlanFab count={unplacedCount} onClick={() => setPanelOpen(true)} />
             )}
           </div>
         </div>
@@ -390,9 +594,32 @@ function WeeklyPage() {
         open={menu.open}
         block={menu.block}
         position={menu.position}
-        items={[]}
+        items={menuItemsFor(menu.block)}
         onClose={() => setMenu({ open: false, block: null, position: null })}
       />
+
+      {/* Schedule create/edit (PLAN-08/17) — keyed so it mounts fresh per open. */}
+      {scheduleForm && (
+        <ScheduleForm
+          key={scheduleForm.mode + (scheduleForm.block?.planBlockId ?? 'new')}
+          mode={scheduleForm.mode}
+          initial={scheduleForm.initial}
+          onClose={() => setScheduleForm(null)}
+          onSubmit={submitSchedule}
+          submitting={createSchedule.isPending || updateSchedule.isPending}
+        />
+      )}
+
+      {/* Actual-time log (PLAN-15). */}
+      {execLog && (
+        <ExecutionLogForm
+          key={execLog.block.planBlockId}
+          block={execLog.block}
+          onClose={() => setExecLog(null)}
+          onSubmit={submitExecLog}
+          submitting={logExecution.isPending}
+        />
+      )}
 
       <ReviewPanel
         open={reviewOpen}
@@ -404,8 +631,9 @@ function WeeklyPage() {
 
       <UnplacedPanel
         open={panelOpen}
+        panelRef={unplacedPanelRef}
         onClose={() => setPanelOpen(false)}
-        count={plan?.unplacedCount ?? 0}
+        count={unplacedCount}
         tasks={unplacedQuery.data ?? []}
         isLoading={unplacedQuery.isLoading}
         isError={unplacedQuery.isError}
@@ -428,13 +656,20 @@ function WeeklyPage() {
             <div
               role="menu"
               aria-label="여기에 배치할 태스크 선택"
-              style={{
-                left: Math.min(slotMenu.point.x, window.innerWidth - 260),
-                top: Math.min(slotMenu.point.y, window.innerHeight - 280),
-              }}
+              // Same cursor-flip anchoring as BlockActionMenu — a fixed clamp
+              // assumed a max popover size and clipped once the task list grew.
+              style={getPopoverAnchorStyle(slotMenu.point)}
               className="fixed z-50 max-h-64 w-60 overflow-y-auto rounded-card border border-border bg-surface py-1 shadow-popover"
             >
               <p className="px-3 py-2 text-caption font-medium text-text-muted">여기에 배치</p>
+              <div className="h-px bg-border" />
+              <button
+                type="button"
+                onClick={() => openScheduleCreate(slotMenu.slot)}
+                className="flex w-full items-center px-3 py-2 text-left text-label font-medium text-brand-700 transition-colors hover:bg-surface-sunken focus-visible:bg-surface-sunken focus-visible:outline-none"
+              >
+                + 새 일정 만들기
+              </button>
               <div className="h-px bg-border" />
               <ul>
                 {(unplacedQuery.data ?? []).map((task) => (

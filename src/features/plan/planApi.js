@@ -41,6 +41,13 @@ function normalizeBlock(b) {
     scheduleId: b.scheduleId ?? b.schedule_id ?? null,
     startAt: b.startAt ?? b.start_at,
     endAt: b.endAt ?? b.end_at,
+    // SCHEDULE-block extras (PLAN-17 편집 프리필); null on TASK blocks.
+    memo: b.memo ?? null,
+    estimatedMinutes: b.estimatedMinutes ?? b.estimated_minutes ?? null,
+    priority: b.priority ?? null,
+    // TASK-block project link (PLAN-12 프로젝트에서 보기); null when unknown.
+    projectId: b.projectId ?? b.project_id ?? null,
+    projectName: b.projectName ?? b.project_name ?? null,
   }
 }
 
@@ -105,4 +112,16 @@ export function putAvailabilities(patterns) {
     () => apiClient.put('/users/me/availabilities', { patterns }),
     () => mockBackend.putAvailabilities(patterns),
   ).then(normalizeAvailability)
+}
+
+/**
+ * Block delete → DELETE /plan-blocks/{id}. Used by both PLAN-18 (일정 삭제) and
+ * PLAN-16 (배치 해제): a SCHEDULE block is deleted; a TASK block is removed and its
+ * task returns to the unplaced backlog (the server decides by block type).
+ */
+export function deleteBlock(planBlockId) {
+  return withDevFallback(
+    () => apiClient.delete(`/plan-blocks/${planBlockId}`),
+    () => mockBackend.deleteBlock(planBlockId),
+  )
 }
