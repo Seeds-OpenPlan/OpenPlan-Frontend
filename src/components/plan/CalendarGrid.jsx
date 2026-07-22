@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { PlanBlock } from './PlanBlock'
 import { usePlanDrag } from '../../features/plan/usePlanDrag'
 import {
@@ -8,11 +8,13 @@ import {
   PX_PER_MIN,
   pxToMinutes,
   rangeHeightPx,
+  resolveGridSlot,
 } from '../../features/plan/planGeometry'
 import {
   dateOf,
   formatISODate,
   formatMinutesLabel,
+  MINUTES_PER_DAY,
   minutesOfDay,
   parseISODate,
   snapMinutes,
@@ -122,9 +124,25 @@ export function CalendarGrid({
   onMoveCommit,
   onOpenMenu,
   onAvailabilityCommit,
+  bodyRef,
+  placement = null,
+  draftBlocks = null,
+  onEmptySlot,
 }) {
   const gridRef = useRef(null)
   const scrollRef = useRef(null)
+
+  // A callback ref that mirrors the grid body element into the page's bodyRef too,
+  // so the page can hit-test panel→grid drops (resolveGridSlot) against exactly
+  // what the grid renders. gridRef stays a plain useRef (no aliasing) so internal
+  // consumers (drag hook, ResizeObserver) use it normally.
+  const setGridRef = useCallback(
+    (el) => {
+      gridRef.current = el
+      if (bodyRef) bodyRef.current = el
+    },
+    [bodyRef],
+  )
   const todayISO = formatISODate(new Date())
   const [availPreview, setAvailPreview] = useState(null) // {columnIndex,edge,minutes}
   const [gridWidth, setGridWidth] = useState(0)
@@ -174,6 +192,30 @@ export function CalendarGrid({
       return { block, dayIndex, startMin, endMin, isDragged }
     })
     .filter((p) => p.dayIndex >= 0)
+
+  // Draft blocks from an auto-place proposal (ST-F1-03 RB-PLAN-01) — laid out like
+  // real blocks but rendered dashed + "초안" and non-interactive until applied.
+  const positionedDrafts = (draftBlocks ?? [])
+    .map((d) => {
+      const dayIndex = weekDays.indexOf(dateOf(d.startAt))
+      return { d, dayIndex, startMin: minutesOfDay(d.startAt), endMin: minutesOfDay(d.endAt) }
+    })
+    .filter((p) => p.dayIndex >= 0)
+
+  // Live drop preview while dragging a task out of the panel (PLAN-06). The slot
+  // is resolved in the drag hook's pointer handlers (not here — refs must not be
+  // read during render), so this only lays out the ghost for the task's duration.
+  const placementPreview = (() => {
+    if (!placement?.slot) return null
+    const duration = placement.task.estimatedMinutes ?? 60
+    let startMin = placement.slot.startMin
+    let endMin = startMin + duration
+    if (endMin > MINUTES_PER_DAY) {
+      endMin = MINUTES_PER_DAY
+      startMin = endMin - duration
+    }
+    return { dayIndex: placement.slot.dayIndex, startMin, endMin, title: placement.task.title }
+  })()
 
   const previewFor = (columnIndex, edge, fallback) =>
     availPreview && availPreview.columnIndex === columnIndex && availPreview.edge === edge
@@ -230,8 +272,24 @@ export function CalendarGrid({
                 ))}
               </div>
 
-        {/* Grid body — drag reference element. */}
-        <div ref={gridRef} className="relative flex-1" style={{ height }}>
+        {/* Grid body — drag reference element. A right-click on empty space (not on
+            a block — PlanBlock stops propagation) opens the place-here menu (PLAN-07). */}
+        <div
+          ref={setGridRef}
+          className="relative flex-1"
+          style={{ height }}
+          onContextMenu={(e) => {
+            if (readOnly || !onEmptySlot) return
+            const slot = resolveGridSlot(
+              { x: e.clientX, y: e.clientY },
+              e.currentTarget.getBoundingClientRect(),
+              range,
+            )
+            if (!slot) return
+            e.preventDefault()
+            onEmptySlot({ x: e.clientX, y: e.clientY }, slot)
+          }}
+        >
           {/* Background columns (weekend tint + availability band). */}
           <div className="absolute inset-0 grid grid-cols-7">
             {weekDays.map((dayISO, i) => {
@@ -318,6 +376,50 @@ export function CalendarGrid({
               />
             )
           })}
+
+          {/* Auto-place draft layer: dashed + "초안", non-interactive (RB-PLAN-01). */}
+          {positionedDrafts.map(({ d, dayIndex, startMin, endMin }) => {
+            const rect = blockRect(startMin, endMin, range)
+            return (
+              <div
+                key={d.taskId}
+                aria-hidden="true"
+                className="pointer-events-none absolute z-20 overflow-hidden rounded-control border border-dashed border-brand-400 bg-brand-50/70 p-1.5 text-caption text-brand-900"
+                style={{
+                  left: `calc(${dayIndex} / 7 * 100% + 2px)`,
+                  width: `calc(100% / 7 - 4px)`,
+                  top: rect.top,
+                  height: rect.height,
+                }}
+              >
+                <span className="block text-[0.6rem] font-semibold uppercase tracking-wide text-brand-600">
+                  초안
+                </span>
+                <span className="mt-0.5 block font-medium leading-tight line-clamp-2">{d.title}</span>
+              </div>
+            )
+          })}
+
+          {/* Live drop preview while dragging a task from the panel (PLAN-06). */}
+          {placementPreview && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute z-40 flex flex-col overflow-hidden rounded-control border-2 border-dashed border-brand-500 bg-brand-100/70 p-1.5 text-caption text-brand-900"
+              style={{
+                left: `calc(${placementPreview.dayIndex} / 7 * 100% + 2px)`,
+                width: `calc(100% / 7 - 4px)`,
+                top: blockRect(placementPreview.startMin, placementPreview.endMin, range).top,
+                height: blockRect(placementPreview.startMin, placementPreview.endMin, range).height,
+              }}
+            >
+              <span className="block text-[0.6rem] opacity-80">
+                {formatMinutesLabel(placementPreview.startMin)} - {formatMinutesLabel(placementPreview.endMin)}
+              </span>
+              <span className="mt-0.5 block font-medium leading-tight line-clamp-2">
+                {placementPreview.title}
+              </span>
+            </div>
+          )}
             </div>
           </div>
           </div>

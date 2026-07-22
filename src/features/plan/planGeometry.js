@@ -5,7 +5,7 @@
   the block rects, and the drag hook can never disagree about the scale.
 */
 
-import { MINUTES_PER_DAY, WEEKDAY_KEYS } from './planTime'
+import { MINUTES_PER_DAY, snapMinutes, WEEKDAY_KEYS } from './planTime'
 
 // One hour of vertical space. Blocks and the hour ruler both derive from this.
 export const HOUR_PX = 56
@@ -73,4 +73,31 @@ export function availabilityForColumn(columnIndex, availability) {
   const key = WEEKDAY_KEYS[columnIndex]
   const found = (availability ?? []).find((a) => a.weekday === key && a.isActive)
   return found ? { startMinutes: found.startMinutes, endMinutes: found.endMinutes } : null
+}
+
+/**
+ * Resolve a pointer position (viewport coordinates) to a grid slot, or null when
+ * the point is outside the grid body. Shared by the panel→grid placement-drag
+ * preview and the empty-slot right-click (ST-F1-03 PLAN-06/07) so the drop
+ * preview and the committed placement can never disagree about the slot.
+ *
+ * @param {{x:number,y:number}} point  viewport coordinates (clientX/clientY)
+ * @param {DOMRect} rect  the grid body's bounding rect
+ * @param {{startMinutes:number,endMinutes:number}} range
+ * @returns {{dayIndex:number, startMin:number}|null}
+ */
+export function resolveGridSlot(point, rect, range) {
+  if (!rect) return null
+  if (
+    point.x < rect.left ||
+    point.x > rect.right ||
+    point.y < rect.top ||
+    point.y > rect.bottom
+  ) {
+    return null
+  }
+  const colWidth = rect.width / 7
+  const dayIndex = Math.max(0, Math.min(6, Math.floor((point.x - rect.left) / colWidth)))
+  const startMin = snapMinutes(pxToMinutes(point.y - rect.top, range))
+  return { dayIndex, startMin }
 }

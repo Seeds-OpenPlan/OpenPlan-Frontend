@@ -14,8 +14,9 @@ import { mockBackend } from './planFixtures'
 
 // Run the real call; in DEV, fall back to the mock ONLY for genuine network
 // failures (no server). Any real HTTP error (4xx/5xx) propagates unchanged so
-// error handling and rollback are exercised against real responses.
-async function withDevFallback(realCall, mockCall) {
+// error handling and rollback are exercised against real responses. Exported so
+// sibling OP modules (taskApi) share one definition of the mock-fallback rule.
+export async function withDevFallback(realCall, mockCall) {
   try {
     return await realCall()
   } catch (error) {

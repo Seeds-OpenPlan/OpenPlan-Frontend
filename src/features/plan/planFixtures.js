@@ -17,7 +17,9 @@ import {
   composeTimestamp,
   currentWeekStartISO,
   WEEKDAY_KEYS,
+  weekDays,
 } from './planTime'
+import { byPriorityThenDue, findFirstFreeSlot } from './planPlacement'
 
 // Simulated round-trip latency so the optimistic-then-commit flow is observable.
 const MOCK_LATENCY_MS = 260
@@ -60,9 +62,54 @@ function seedBlocks(weekStartISO) {
   ]
 }
 
+// Backlog of UNASSIGNED tasks the unplaced panel lists (ST-F1-03). Global (not
+// per-week) — a task is a candidate for any week until it's placed as a block.
+function seedUnplacedTasks() {
+  const mk = (title, estimatedMinutes, priority, projectId, projectName, dueOffset) => ({
+    taskId: nextId('task'),
+    projectId,
+    projectName,
+    title,
+    estimatedMinutes,
+    priority,
+    dueDate: dueOffset == null ? null : addDaysISO(currentWeekStartISO(), dueOffset),
+    reason: null,
+  })
+  return [
+    mk('채용 공고 리서치·정리', 90, 1, 'proj-1', '취업 준비', 3),
+    mk('포트폴리오 프로젝트 회고 작성', 120, 2, 'proj-1', '취업 준비', 6),
+    mk('알고리즘 문제 풀이 세트', 60, 2, 'proj-2', '코딩 테스트', null),
+    mk('영어 인터뷰 표현 암기', 45, 3, 'proj-1', '취업 준비', 9),
+    mk('이력서 최종 검토', 30, 1, 'proj-1', '취업 준비', 1),
+  ]
+}
+
 // Per-week plan store, created lazily on first access to a week.
 const weeks = new Map()
 let availability = seedAvailability()
+let unplacedTasks = seedUnplacedTasks()
+
+function findWeekByPlanId(weeklyPlanId) {
+  for (const week of weeks.values()) {
+    if (week.weeklyPlanId === weeklyPlanId) return week
+  }
+  return null
+}
+
+// Build a TASK block from a placement (task + target span).
+function blockFromPlacement({ taskId, title, startAt, endAt }) {
+  return {
+    planBlockId: nextId('block'),
+    blockType: 'TASK',
+    title,
+    tone: 'brand',
+    status: 'SCHEDULED',
+    taskId,
+    scheduleId: null,
+    startAt,
+    endAt,
+  }
+}
 
 function ensureWeek(weekStartISO) {
   if (!weeks.has(weekStartISO)) {
@@ -88,9 +135,9 @@ function computeDerived(week) {
   return {
     ...week,
     totalPlannedMinutes,
-    // Placeholder counts; real unplaced comes from GET /tasks?status=UNASSIGNED
-    // (ST-F1-03) and validation from POST validations (ST-F1-05).
-    unplacedCount: 3,
+    // Unplaced count = the global UNASSIGNED backlog length (ST-F1-03); validation
+    // still a placeholder until POST validations lands (ST-F1-05).
+    unplacedCount: unplacedTasks.length,
     validation: { blockCount: 0, warningCount: 2 },
   }
 }
@@ -132,6 +179,74 @@ export const mockBackend = {
     await delay()
     availability = patterns
     return patterns
+  },
+
+  // GET /tasks?status=UNASSIGNED — the unplaced backlog, optionally filtered to a
+  // project (PROJ-15/19 entry). Returns the `{ tasks }` envelope body shape.
+  async getUnplacedTasks(projectId) {
+    await delay(100)
+    const tasks = projectId
+      ? unplacedTasks.filter((t) => t.projectId === projectId)
+      : unplacedTasks
+    return { tasks: tasks.map((t) => ({ ...t })) }
+  },
+
+  // POST /weekly-plans/{id}/blocks (blockType=TASK) — place one task. Adds the
+  // block to its week and drops the task from the backlog.
+  async createBlock(weeklyPlanId, body) {
+    await delay()
+    const week = findWeekByPlanId(weeklyPlanId)
+    if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
+    const block = blockFromPlacement({
+      taskId: body.taskId,
+      title: body.title,
+      startAt: body.startAt,
+      endAt: body.endAt,
+    })
+    week.blocks.push(block)
+    unplacedTasks = unplacedTasks.filter((t) => t.taskId !== body.taskId)
+    return { planBlockId: block.planBlockId }
+  },
+
+  // POST /weekly-plans/{id}/auto-placements — DRAFT only. Greedily lays the
+  // backlog into free slots (우선순위·마감일 순) without mutating any store; the
+  // client holds the result as a draft overlay until [적용] commits it.
+  async autoPlace(weeklyPlanId) {
+    await delay(700) // a visible "배치 중…" beat
+    const week = findWeekByPlanId(weeklyPlanId)
+    if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
+    const days = weekDays(week.weekStartDate)
+    // occupied grows as we draft, so drafts don't overlap each other or real blocks.
+    const occupied = week.blocks.map((b) => ({ startAt: b.startAt, endAt: b.endAt }))
+    const placements = []
+    const unplaced = []
+    for (const task of [...unplacedTasks].sort(byPriorityThenDue)) {
+      const duration = task.estimatedMinutes ?? 60
+      const slot = findFirstFreeSlot({ days, availability, blocks: occupied, durationMin: duration })
+      if (!slot) {
+        unplaced.push({ ...task, reason: '이번 주 남은 가용 시간에 맞는 빈 구간이 없습니다' })
+        continue
+      }
+      const startAt = composeTimestamp(days[slot.dayIndex], slot.startMin)
+      const endAt = composeTimestamp(days[slot.dayIndex], slot.startMin + duration)
+      placements.push({ taskId: task.taskId, title: task.title, startAt, endAt })
+      occupied.push({ startAt, endAt })
+    }
+    return { placements, unplaced }
+  },
+
+  // POST /weekly-plans/{id}/block-batches — commit an applied auto-place draft.
+  async commitBatch(weeklyPlanId, placements) {
+    await delay()
+    const week = findWeekByPlanId(weeklyPlanId)
+    if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
+    const placedIds = new Set()
+    for (const p of placements ?? []) {
+      week.blocks.push(blockFromPlacement(p))
+      placedIds.add(p.taskId)
+    }
+    unplacedTasks = unplacedTasks.filter((t) => !placedIds.has(t.taskId))
+    return { placedCount: placedIds.size }
   },
 }
 

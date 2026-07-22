@@ -79,6 +79,9 @@ export function PlanBlock({
       onPointerDown={disabled ? undefined : (e) => onPointerDown?.(e, block, startMin)}
       onContextMenu={(e) => {
         e.preventDefault()
+        // Keep a block right-click on the block: don't let it bubble to the grid
+        // body's empty-slot placement menu (ST-F1-03 PLAN-07).
+        e.stopPropagation()
         openMenuFromEvent(e)
       }}
       onKeyDown={handleKeyDown}

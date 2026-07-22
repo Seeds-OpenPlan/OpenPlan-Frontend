@@ -18,12 +18,19 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { getAvailability, getWeek, patchBlock, putAvailabilities } from './planApi'
+import {
+  getUnplacedTasks,
+  postAutoPlacements,
+  postBlock,
+  postBlockBatch,
+} from './taskApi'
 import { addWeeksISO } from './planTime'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
 
 export const weekPlanKey = (weekStartISO) => ['weekPlan', weekStartISO]
 export const availabilityKey = () => ['availability']
+export const unplacedTasksKey = (projectId = null) => ['unplacedTasks', projectId]
 
 const WEEK_STALE_MS = 60 * 1000
 
@@ -140,6 +147,118 @@ export function useSaveAvailability() {
     },
     onError: () => {
       queryClient.invalidateQueries({ queryKey: availabilityKey() })
+      toast({ tone: 'info', message: systemMessages.error.writeTitle })
+    },
+  })
+}
+
+// --- ST-F1-03: unplaced panel · task placement · auto placement --------------
+
+/** GET /tasks?status=UNASSIGNED — the unplaced backlog (optional project filter). */
+export function useUnplacedTasks(projectId = null) {
+  return useQuery({
+    queryKey: unplacedTasksKey(projectId),
+    queryFn: () => getUnplacedTasks(projectId),
+    staleTime: 30 * 1000,
+  })
+}
+
+/**
+ * Returns `placeTask(vars)` for an optimistic single-task placement (PLAN-06/07).
+ * `vars`: { weeklyPlanId, weekStartISO, task, startAt, endAt }.
+ *
+ * Optimistic + synchronous (mirrors useMoveBlock): the block appears on the grid
+ * and the task leaves the panel in the same React batch (<100ms, AC-1), then POST
+ * runs in the background; any failure restores both caches (409/422 roll back).
+ */
+export function usePlaceTask() {
+  const queryClient = useQueryClient()
+
+  return useCallback(
+    ({ weeklyPlanId, weekStartISO, task, startAt, endAt }) => {
+      const weekKey = weekPlanKey(weekStartISO)
+      const prevWeek = queryClient.getQueryData(weekKey)
+      // A client-only temp id until the POST returns the real planBlockId; the
+      // follow-up invalidate reconciles it away.
+      const tempId = `temp-${task.taskId}`
+
+      queryClient.setQueryData(weekKey, (wk) =>
+        wk
+          ? {
+              ...wk,
+              blocks: [
+                ...wk.blocks,
+                {
+                  planBlockId: tempId,
+                  blockType: 'TASK',
+                  title: task.title,
+                  tone: 'brand',
+                  status: 'SCHEDULED',
+                  taskId: task.taskId,
+                  scheduleId: null,
+                  startAt,
+                  endAt,
+                },
+              ],
+              unplacedCount: Math.max(0, (wk.unplacedCount ?? 0) - 1),
+            }
+          : wk,
+      )
+      // Drop the task from every unplaced list (all filters), instantly.
+      queryClient.setQueriesData({ queryKey: ['unplacedTasks'] }, (list) =>
+        Array.isArray(list) ? list.filter((t) => t.taskId !== task.taskId) : list,
+      )
+
+      postBlock(weeklyPlanId, {
+        taskId: task.taskId,
+        blockType: 'TASK',
+        title: task.title,
+        startAt,
+        endAt,
+        status: 'SCHEDULED',
+      })
+        .catch(() => {
+          queryClient.setQueryData(weekKey, prevWeek)
+          queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
+          toast({ tone: 'info', message: systemMessages.error.writeTitle })
+        })
+        .finally(() => {
+          queryClient.invalidateQueries({ queryKey: weekKey })
+          queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
+        })
+    },
+    [queryClient],
+  )
+}
+
+/**
+ * POST /weekly-plans/{id}/auto-placements — returns a DRAFT { placements, unplaced }
+ * and mutates NOTHING (the caller holds it as a local overlay until applied).
+ */
+export function useAutoPlace() {
+  return useMutation({
+    mutationFn: ({ weeklyPlanId, priorityType }) =>
+      postAutoPlacements(weeklyPlanId, priorityType),
+    onError: () => {
+      toast({ tone: 'info', message: systemMessages.error.writeTitle })
+    },
+  })
+}
+
+/**
+ * POST /weekly-plans/{id}/block-batches — commit an applied auto-place draft.
+ * On success the week + backlog refetch; the plan stays a DRAFT (confirm =
+ * ST-F1-05), which is the C-2 "적용해도 미저장" double protection.
+ */
+export function useApplyAutoPlace() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ weeklyPlanId, placements }) => postBlockBatch(weeklyPlanId, placements),
+    onSuccess: (_data, { weekStartISO }) => {
+      queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
+      queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
+    },
+    onError: () => {
       toast({ tone: 'info', message: systemMessages.error.writeTitle })
     },
   })
