@@ -21,8 +21,14 @@ import {
 } from './planTime'
 import { byPriorityThenDue, findFirstFreeSlot } from './planPlacement'
 
-// Simulated round-trip latency so the optimistic-then-commit flow is observable.
-const MOCK_LATENCY_MS = 260
+// Simulated round-trip latency so the optimistic-then-commit flow stays
+// observable (never 0 — that's the whole reason this DEV mock exists: seeing
+// the optimistic write land instantly, then the background write/refetch settle
+// a beat later). Kept deliberately short so the app doesn't feel laggy; each
+// GET below still gets its OWN (smaller) explicit delay on top of whatever it
+// does, so multi-request chains (e.g. delete → week refetch → unplaced
+// refetch) don't stack up into a visibly slow interaction.
+const MOCK_LATENCY_MS = 70
 const delay = (ms = MOCK_LATENCY_MS) => new Promise((r) => setTimeout(r, ms))
 
 let uid = 100
@@ -239,12 +245,12 @@ function computeDerived(week) {
 
 export const mockBackend = {
   async getWeek(weekStartISO) {
-    await delay(120)
+    await delay(60)
     return computeDerived(ensureWeek(weekStartISO))
   },
 
   async getAvailability() {
-    await delay(80)
+    await delay(60)
     return availability
   },
 
@@ -281,7 +287,7 @@ export const mockBackend = {
   // GET /tasks?status=UNASSIGNED — the unplaced backlog, optionally filtered to a
   // project (PROJ-15/19 entry). Returns the `{ tasks }` envelope body shape.
   async getUnplacedTasks(projectId) {
-    await delay(100)
+    await delay(60)
     // Never-placed backlog + remainders of partially-placed tasks (A4).
     const all = [...unplacedTasks, ...placedRemainders()]
     const tasks = projectId ? all.filter((t) => t.projectId === projectId) : all
@@ -310,7 +316,7 @@ export const mockBackend = {
   // backlog into free slots (우선순위·마감일 순) without mutating any store; the
   // client holds the result as a draft overlay until [적용] commits it.
   async autoPlace(weeklyPlanId) {
-    await delay(700) // a visible "배치 중…" beat
+    await delay(220) // a visible "배치 중…" beat, without feeling stuck
     const week = findWeekByPlanId(weeklyPlanId)
     if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
     const days = weekDays(week.weekStartDate)
@@ -351,7 +357,7 @@ export const mockBackend = {
   // PATCH /tasks/{taskId}/status — PLAN-13/14 완료/미완료. Mirrors onto every
   // block of the task so the grid reflects completion (block.status).
   async setTaskStatus(taskId, status) {
-    await delay(150)
+    await delay(80)
     for (const week of weeks.values()) {
       for (const block of week.blocks) {
         if (block.taskId === taskId) block.status = status

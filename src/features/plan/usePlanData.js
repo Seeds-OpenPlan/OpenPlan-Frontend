@@ -81,6 +81,20 @@ export function useAvailability() {
  * otherwise the block would flash at its old position for one frame between the
  * ghost clearing and an async cache update landing. The PATCH then runs in the
  * background; any failure restores the pre-move snapshot (409/422 both roll back).
+ *
+ * BUG FIX (block "duplication" after a quick re-move): every mutation here
+ * follows optimistic-write → background PATCH → `finally` invalidate, and
+ * `invalidateQueries` refetches in the background (~100ms+ over the mock). If an
+ * EARLIER action's refetch is still in flight when THIS move applies its own
+ * optimistic write, that stale refetch can land afterward and overwrite the
+ * cache with a server snapshot that predates this move — visually the block
+ * snaps back to its old spot, then jumps forward again once this move's own
+ * refetch lands. In rapid "place → immediately re-move" sequences this reads as
+ * the block momentarily duplicating. `cancelQueries` (fire-and-forget; its
+ * abort effect on the in-flight retryer is synchronous — no await needed to
+ * keep this function's optimistic write in the same tick) neutralizes any such
+ * stale refetch before we write, so only OUR write and OUR later invalidate can
+ * ever land for this key.
  */
 export function useMoveBlock() {
   const queryClient = useQueryClient()
@@ -98,6 +112,13 @@ export function useMoveBlock() {
       const prevTarget = queryClient.getQueryData(weekPlanKey(targetWeek))
       const moved =
         prevSource?.blocks?.find((b) => b.planBlockId === planBlockId) ?? null
+
+      // Cancel any stale in-flight refetch for the affected week(s) BEFORE
+      // writing — see the stale-refetch race note above.
+      queryClient.cancelQueries({ queryKey: weekPlanKey(sourceWeek) })
+      if (targetWeek !== sourceWeek) {
+        queryClient.cancelQueries({ queryKey: weekPlanKey(targetWeek) })
+      }
 
       // Optimistic, synchronous.
       if (targetWeek === sourceWeek) {
@@ -173,6 +194,10 @@ export function useUnplacedTasks(projectId = null) {
  * Optimistic + synchronous (mirrors useMoveBlock): the block appears on the grid
  * and the task leaves the panel in the same React batch (<100ms, AC-1), then POST
  * runs in the background; any failure restores both caches (409/422 roll back).
+ *
+ * See useMoveBlock's header for the stale-refetch race this hook also guards
+ * against via `cancelQueries` (a re-move right after placement was the repro
+ * that surfaced it — the block would appear to duplicate/jump).
  */
 export function usePlaceTask() {
   const queryClient = useQueryClient()
@@ -184,6 +209,11 @@ export function usePlaceTask() {
       // A client-only temp id until the POST returns the real planBlockId; the
       // follow-up invalidate reconciles it away.
       const tempId = `temp-${task.taskId}`
+
+      // Cancel stale in-flight refetches for both keys we're about to write
+      // optimistically (see useMoveBlock's header).
+      queryClient.cancelQueries({ queryKey: weekKey })
+      queryClient.cancelQueries({ queryKey: ['unplacedTasks'] })
 
       queryClient.setQueryData(weekKey, (wk) =>
         wk
@@ -226,20 +256,32 @@ export function usePlaceTask() {
           // interactable block without waiting on the refetch (temp-id race fix).
           const realId = result?.planBlockId
           if (!realId) return
-          queryClient.setQueryData(weekKey, (wk) =>
-            wk
-              ? {
-                  ...wk,
-                  blocks: wk.blocks.map((b) =>
+          // Cancel a stale in-flight refetch before writing (see this hook's
+          // header) so it can't land after this reconcile and revert it.
+          queryClient.cancelQueries({ queryKey: weekKey })
+          queryClient.setQueryData(weekKey, (wk) => {
+            if (!wk) return wk
+            // Defensive dedupe: if a background refetch already delivered the
+            // real block under `realId` (e.g. it resolved between the optimistic
+            // add and this reconcile), drop the now-redundant temp entry instead
+            // of renaming it — renaming would leave TWO blocks sharing `realId`,
+            // the literal "duplicated block" symptom.
+            const realAlreadyPresent = wk.blocks.some((b) => b.planBlockId === realId)
+            return {
+              ...wk,
+              blocks: realAlreadyPresent
+                ? wk.blocks.filter((b) => b.planBlockId !== tempId)
+                : wk.blocks.map((b) =>
                     b.planBlockId === tempId ? { ...b, planBlockId: realId } : b,
                   ),
-                }
-              : wk,
-          )
+            }
+          })
         })
         .catch(() => {
           queryClient.setQueryData(weekKey, prevWeek)
-          queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
+          // `finally` below invalidates ['unplacedTasks'] unconditionally right
+          // after this runs — invalidating it here too was a redundant extra
+          // round-trip on the error path only (harmless, just wasteful).
           toast({ tone: 'error', message: systemMessages.error.writeTitle })
         })
         .finally(() => {
@@ -299,6 +341,8 @@ export function useSetBlockComplete() {
       const weekKey = weekPlanKey(weekStartISO)
       const prevWeek = queryClient.getQueryData(weekKey)
       const blockStatus = complete ? 'COMPLETED' : 'SCHEDULED'
+      // See useMoveBlock's header for why this precedes the optimistic write.
+      queryClient.cancelQueries({ queryKey: weekKey })
       queryClient.setQueryData(weekKey, (wk) =>
         wk
           ? {
@@ -332,6 +376,8 @@ export function useResizeBlock() {
     ({ weekStartISO, planBlockId, blockType, startAt, endAt }) => {
       const weekKey = weekPlanKey(weekStartISO)
       const prevWeek = queryClient.getQueryData(weekKey)
+      // See useMoveBlock's header for why this precedes the optimistic write.
+      queryClient.cancelQueries({ queryKey: weekKey })
       queryClient.setQueryData(weekKey, (wk) =>
         wk
           ? {
@@ -404,6 +450,8 @@ export function useRemoveBlockWithUndo() {
       // original action (below) and by a stack `redo` (re-applying the removal).
       const runRemove = () => {
         const prevWeek = queryClient.getQueryData(weekKey)
+        // See useMoveBlock's header for why this precedes the optimistic write.
+        queryClient.cancelQueries({ queryKey: weekKey })
         queryClient.setQueryData(weekKey, (wk) =>
           wk
             ? {

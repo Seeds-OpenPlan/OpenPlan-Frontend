@@ -6,7 +6,13 @@ import { CheckCircleIcon } from '../common/statusIcons'
 
 // Below this rendered height a block can't show its title legibly, so a
 // hover/focus detail card supplements it (readability aid — the block's
-// aria-label already carries the full title+time for screen readers).
+// aria-label already carries the full title+time for screen readers). This is
+// an ABSOLUTE pixel figure (padding + one line of the time label + one line of
+// the title, per the block's fixed font sizes/padding below) — it does NOT
+// scale with planGeometry's HOUR_PX/PX_PER_MIN. Raising HOUR_PX makes any given
+// DURATION taller on screen, so fewer blocks fall under this same px bar and
+// need the popover — that's the intended effect, not something to compensate
+// for by scaling this constant too.
 const SHORT_BLOCK_PX = 46
 
 /*
