@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircleIcon } from './statusIcons'
+import { AlertTriangleIcon, CheckCircleIcon } from './statusIcons'
 
 /*
   Single toast (components.md §5). role="status" + aria-live="polite" so it is
@@ -11,9 +11,11 @@ import { CheckCircleIcon } from './statusIcons'
 const TONE = {
   success: { icon: CheckCircleIcon, text: 'text-success-700', iconColor: 'text-success-600' },
   info: { icon: CheckCircleIcon, text: 'text-brand-700', iconColor: 'text-brand-600' },
+  // Errors must NOT read as a success check — a warning glyph + danger color.
+  error: { icon: AlertTriangleIcon, text: 'text-danger-700', iconColor: 'text-danger-600' },
 }
 
-export function Toast({ tone = 'success', message, duration = 4000, onDismiss }) {
+export function Toast({ tone = 'success', message, duration = 4000, action, onDismiss }) {
   const [paused, setPaused] = useState(false)
   const timerRef = useRef(null)
   const { icon: Icon, text, iconColor } = TONE[tone] ?? TONE.success
@@ -42,6 +44,18 @@ export function Toast({ tone = 'success', message, duration = 4000, onDismiss })
     >
       <Icon className={`shrink-0 ${iconColor}`} size={20} />
       <span className="flex-1">{message}</span>
+      {action && (
+        <button
+          type="button"
+          onClick={() => {
+            action.onClick?.()
+            onDismiss?.()
+          }}
+          className="shrink-0 rounded-control px-2 py-1 text-label font-semibold text-brand-700 transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          {action.label}
+        </button>
+      )}
       <button
         type="button"
         onClick={() => onDismiss?.()}

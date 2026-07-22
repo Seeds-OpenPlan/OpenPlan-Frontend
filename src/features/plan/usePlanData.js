@@ -17,13 +17,16 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { getAvailability, getWeek, patchBlock, putAvailabilities } from './planApi'
+import { deleteBlock, getAvailability, getWeek, patchBlock, putAvailabilities } from './planApi'
 import {
   getUnplacedTasks,
+  patchTaskStatus,
   postAutoPlacements,
   postBlock,
   postBlockBatch,
+  postExecutionRecord,
 } from './taskApi'
+import { patchSchedule, postScheduleBlock } from './scheduleApi'
 import { addWeeksISO } from './planTime'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
@@ -124,7 +127,7 @@ export function useMoveBlock() {
           if (targetWeek !== sourceWeek) {
             queryClient.setQueryData(weekPlanKey(targetWeek), prevTarget)
           }
-          toast({ tone: 'info', message: systemMessages.error.getTitle })
+          toast({ tone: 'error', message: systemMessages.error.getTitle })
         })
         .finally(() => {
           queryClient.invalidateQueries({ queryKey: weekPlanKey(sourceWeek) })
@@ -147,7 +150,7 @@ export function useSaveAvailability() {
     },
     onError: () => {
       queryClient.invalidateQueries({ queryKey: availabilityKey() })
-      toast({ tone: 'info', message: systemMessages.error.writeTitle })
+      toast({ tone: 'error', message: systemMessages.error.writeTitle })
     },
   })
 }
@@ -220,7 +223,7 @@ export function usePlaceTask() {
         .catch(() => {
           queryClient.setQueryData(weekKey, prevWeek)
           queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
-          toast({ tone: 'info', message: systemMessages.error.writeTitle })
+          toast({ tone: 'error', message: systemMessages.error.writeTitle })
         })
         .finally(() => {
           queryClient.invalidateQueries({ queryKey: weekKey })
@@ -240,7 +243,7 @@ export function useAutoPlace() {
     mutationFn: ({ weeklyPlanId, priorityType }) =>
       postAutoPlacements(weeklyPlanId, priorityType),
     onError: () => {
-      toast({ tone: 'info', message: systemMessages.error.writeTitle })
+      toast({ tone: 'error', message: systemMessages.error.writeTitle })
     },
   })
 }
@@ -259,7 +262,158 @@ export function useApplyAutoPlace() {
       queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
     },
     onError: () => {
-      toast({ tone: 'info', message: systemMessages.error.writeTitle })
+      toast({ tone: 'error', message: systemMessages.error.writeTitle })
     },
+  })
+}
+
+// --- ST-F1-04: block action menu (complete/uncomplete · unplace · delete) ----
+
+/**
+ * Returns `setComplete({ weekStartISO, taskId, complete })` — PLAN-13/14. Marks
+ * every block of the task COMPLETED/SCHEDULED optimistically, then PATCHes the
+ * task status. This commits IMMEDIATELY and independently of the plan draft (J3),
+ * so it never touches the undo stack.
+ */
+export function useSetBlockComplete() {
+  const queryClient = useQueryClient()
+  return useCallback(
+    ({ weekStartISO, taskId, complete }) => {
+      const weekKey = weekPlanKey(weekStartISO)
+      const prevWeek = queryClient.getQueryData(weekKey)
+      const blockStatus = complete ? 'COMPLETED' : 'SCHEDULED'
+      queryClient.setQueryData(weekKey, (wk) =>
+        wk
+          ? {
+              ...wk,
+              blocks: wk.blocks.map((b) =>
+                b.taskId === taskId ? { ...b, status: blockStatus } : b,
+              ),
+            }
+          : wk,
+      )
+      patchTaskStatus(taskId, complete ? 'COMPLETED' : 'IN_PROGRESS')
+        .catch(() => {
+          queryClient.setQueryData(weekKey, prevWeek)
+          toast({ tone: 'error', message: systemMessages.error.writeTitle })
+        })
+        .finally(() => queryClient.invalidateQueries({ queryKey: weekKey }))
+    },
+    [queryClient],
+  )
+}
+
+const UNDO_WINDOW_MS = 6000
+
+/**
+ * Returns `removeBlock({ weekStartISO, weeklyPlanId, block, mode })` — a soft
+ * delete with an "실행 취소" toast (PLAN-16 배치 해제 / PLAN-18 일정 삭제). The block is
+ * removed AND deleted on the server IMMEDIATELY so the cache and server never
+ * disagree — a DEFERRED delete let a background refetch resurrect the block at its
+ * old spot for a frame. Undo RE-CREATES the block. `mode`: 'unplace' also returns
+ * the task to the backlog; 'delete' drops a schedule.
+ */
+export function useRemoveBlockWithUndo() {
+  const queryClient = useQueryClient()
+  return useCallback(
+    ({ weekStartISO, weeklyPlanId, block, mode }) => {
+      const weekKey = weekPlanKey(weekStartISO)
+      const prevWeek = queryClient.getQueryData(weekKey)
+      const isUnplace = mode === 'unplace'
+      const invalidate = () => {
+        queryClient.invalidateQueries({ queryKey: weekKey })
+        if (isUnplace) queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
+      }
+
+      // Optimistic remove, then commit the server delete right away (consistent
+      // with the cache → no resurrection on refetch).
+      queryClient.setQueryData(weekKey, (wk) =>
+        wk
+          ? {
+              ...wk,
+              blocks: wk.blocks.filter((b) => b.planBlockId !== block.planBlockId),
+              ...(isUnplace ? { unplacedCount: (wk.unplacedCount ?? 0) + 1 } : {}),
+            }
+          : wk,
+      )
+      deleteBlock(block.planBlockId)
+        .catch(() => {
+          queryClient.setQueryData(weekKey, prevWeek)
+          toast({ tone: 'error', message: systemMessages.error.writeTitle })
+        })
+        .finally(invalidate)
+
+      // Undo re-creates the block from its captured data (a new id; the follow-up
+      // refetch reconciles). Task blocks re-place; schedule blocks re-create.
+      const undo = () => {
+        const recreate = isUnplace
+          ? postBlock(weeklyPlanId, {
+              taskId: block.taskId,
+              blockType: 'TASK',
+              title: block.title,
+              startAt: block.startAt,
+              endAt: block.endAt,
+              status: 'SCHEDULED',
+            })
+          : postScheduleBlock(weeklyPlanId, {
+              blockType: 'SCHEDULE',
+              title: block.title,
+              startAt: block.startAt,
+              endAt: block.endAt,
+              status: 'SCHEDULED',
+              memo: block.memo ?? '',
+              estimatedMinutes: block.estimatedMinutes ?? undefined,
+              priority: block.priority ?? undefined,
+            })
+        recreate
+          .catch(() => toast({ tone: 'error', message: systemMessages.error.writeTitle }))
+          .finally(invalidate)
+      }
+
+      toast({
+        tone: 'info',
+        message: isUnplace ? '미배치로 되돌렸습니다' : '일정을 삭제했습니다',
+        duration: UNDO_WINDOW_MS,
+        action: { label: '실행 취소', onClick: undo },
+      })
+    },
+    [queryClient],
+  )
+}
+
+// --- ST-F1-04 Phase 2: execution log · schedule create/edit -----------------
+
+/** POST /tasks/{id}/execution-records — PLAN-15 실제 시간 기록 (write-only). */
+export function useLogExecution() {
+  return useMutation({
+    mutationFn: ({ taskId, body }) => postExecutionRecord(taskId, body),
+    onSuccess: () => toast({ tone: 'success', message: '통계에 반영되었습니다' }),
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+/** POST /weekly-plans/{id}/blocks (SCHEDULE inline) — PLAN-08 일정 배치. */
+export function useCreateScheduleBlock() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ weeklyPlanId, body }) => postScheduleBlock(weeklyPlanId, body),
+    onSuccess: (_data, { weekStartISO }) => {
+      queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
+      toast({ tone: 'success', message: '일정을 추가했습니다' })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+/** PATCH /schedules/{id} — PLAN-17 일정 편집. Refetches the week to reflect it. */
+export function useUpdateSchedule() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ scheduleId, patch }) => patchSchedule(scheduleId, patch),
+    onSuccess: (_data, { weekStartISO }) => {
+      queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
+      toast({ tone: 'success', message: '일정을 수정했습니다' })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
 }

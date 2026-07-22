@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { formatMinutesLabel } from '../../features/plan/planTime'
 import { PX_PER_MIN } from '../../features/plan/planGeometry'
+import { CheckCircleIcon } from '../common/statusIcons'
 
 // Below this rendered height a block can't show its title legibly, so a
 // hover/focus detail card supplements it (readability aid — the block's
@@ -43,6 +44,9 @@ export function PlanBlock({
 }) {
   const timeLabel = `${formatMinutesLabel(startMin)} - ${formatMinutesLabel(endMin)}`
   const typeClass = TYPE_CLASSES[block.blockType] ?? TYPE_CLASSES.TASK
+  // Completed blocks read as done via a check + strikethrough + dimming, never by
+  // color alone (PLAN-13 AC-2, NFR-017).
+  const isDone = block.status === 'COMPLETED'
 
   // Detail card for short blocks: anchored to the block's on-screen rect and
   // rendered in a portal so the grid's overflow can't clip it.
@@ -108,7 +112,7 @@ export function PlanBlock({
     <div
       role="button"
       tabIndex={disabled ? -1 : 0}
-      aria-label={`${block.title}, ${timeLabel}${disabled ? ', 읽기 전용' : ''}`}
+      aria-label={`${block.title}, ${timeLabel}${isDone ? ', 완료' : ''}${disabled ? ', 읽기 전용' : ''}`}
       aria-disabled={disabled || undefined}
       style={{ ...style, touchAction: 'none' }}
       onPointerDown={
@@ -135,12 +139,16 @@ export function PlanBlock({
         'absolute overflow-hidden rounded-control border p-1.5 text-caption',
         'select-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
         typeClass,
+        isDone ? 'opacity-60' : '',
         disabled ? 'cursor-default' : 'cursor-grab',
         dragging ? 'z-30 cursor-grabbing opacity-90 shadow-modal ring-2 ring-focus-ring' : 'z-10 shadow-card',
       ].join(' ')}
     >
       <span className="block leading-tight text-[0.65rem] opacity-80">{timeLabel}</span>
-      <span className="mt-0.5 block font-medium leading-tight line-clamp-3">{block.title}</span>
+      <span className="mt-0.5 flex items-start gap-1 font-medium leading-tight">
+        {isDone && <CheckCircleIcon className="mt-px shrink-0 text-success-600" size={12} />}
+        <span className={`line-clamp-3 ${isDone ? 'line-through' : ''}`}>{block.title}</span>
+      </span>
 
       {dragging && boundary && (
         <span className="absolute inset-x-1 bottom-1 rounded bg-brand-600 px-1 py-0.5 text-center text-[0.6rem] font-semibold text-white">

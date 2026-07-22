@@ -75,3 +75,25 @@ export function postBlockBatch(weeklyPlanId, placements) {
     () => mockBackend.commitBatch(weeklyPlanId, placements),
   )
 }
+
+/**
+ * OP-TASK-STATUS → PATCH /tasks/{taskId}/status (PLAN-13/14 완료/미완료). `status`
+ * is 'COMPLETED' or 'IN_PROGRESS'. Task-block completion mirrors onto its blocks.
+ */
+export function patchTaskStatus(taskId, status) {
+  return withDevFallback(
+    () => apiClient.patch(`/tasks/${taskId}/status`, { status }),
+    () => mockBackend.setTaskStatus(taskId, status),
+  )
+}
+
+/**
+ * OP-TASK-EXEC → POST /tasks/{taskId}/execution-records (PLAN-15 실제 시간 기록).
+ * Body: { startedAt, endedAt, actualMinutes, memo }. Returns { executionRecordId }.
+ */
+export function postExecutionRecord(taskId, body) {
+  return withDevFallback(
+    () => apiClient.post(`/tasks/${taskId}/execution-records`, body),
+    () => mockBackend.logExecution(taskId, body),
+  )
+}

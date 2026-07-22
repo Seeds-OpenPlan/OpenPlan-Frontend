@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import { PlanHeader } from '../components/plan/PlanHeader'
 import { WeekNav } from '../components/plan/WeekNav'
 import { SummaryBar } from '../components/plan/SummaryBar'
@@ -10,15 +11,22 @@ import { BlockActionMenu } from '../components/plan/BlockActionMenu'
 import { ReviewPanel } from '../components/plan/ReviewPanel'
 import { UnplacedPanel } from '../components/plan/UnplacedPanel'
 import { AutoPlaceBar } from '../components/plan/AutoPlaceBar'
+import { ScheduleForm } from '../components/plan/ScheduleForm'
+import { ExecutionLogForm } from '../components/plan/ExecutionLogForm'
 import { ErrorState } from '../components/common/ErrorState'
 import {
   useApplyAutoPlace,
   useAutoPlace,
   useAvailability,
+  useCreateScheduleBlock,
+  useLogExecution,
   useMoveBlock,
   usePlaceTask,
+  useRemoveBlockWithUndo,
   useSaveAvailability,
+  useSetBlockComplete,
   useUnplacedTasks,
+  useUpdateSchedule,
   useWeekPlan,
 } from '../features/plan/usePlanData'
 import {
@@ -33,8 +41,10 @@ import {
   addWeeksISO,
   composeTimestamp,
   currentWeekStartISO,
+  dateOf,
   isPastWeek,
   MINUTES_PER_DAY,
+  minutesOfDay,
   WEEKDAY_KEYS,
   weekDays as weekDaysOf,
 } from '../features/plan/planTime'
@@ -69,6 +79,10 @@ function WeeklyPage() {
   const [autoDraft, setAutoDraft] = useState(null) // { placements, unplaced } | null
   const [slotMenu, setSlotMenu] = useState(null) // { point, slot } | null
 
+  // ST-F1-04 Phase 2: schedule form (create/edit) + execution log.
+  const [scheduleForm, setScheduleForm] = useState(null) // { mode, block?, slot? } | null
+  const [execLog, setExecLog] = useState(null) // { block } | null
+
   const gridBodyRef = useRef(null)
 
   const planQuery = useWeekPlan(weekStartISO)
@@ -82,6 +96,12 @@ function WeeklyPage() {
   const placeTask = usePlaceTask()
   const autoPlace = useAutoPlace()
   const applyAutoPlace = useApplyAutoPlace()
+  const setBlockComplete = useSetBlockComplete()
+  const removeBlock = useRemoveBlockWithUndo()
+  const logExecution = useLogExecution()
+  const createSchedule = useCreateScheduleBlock()
+  const updateSchedule = useUpdateSchedule()
+  const navigate = useNavigate()
 
   const history = usePlanHistory()
   const canUndo = usePlanHistory(selectCanUndo)
@@ -279,6 +299,123 @@ function WeeklyPage() {
     setSlotMenu(null)
   }
 
+  // --- block action menu (ST-F1-04: PLAN-13/14 · 16 · 18) -------------------
+
+  // Open the edit form for a schedule block, prefilled from its (denormalized) data.
+  const openScheduleEdit = (block) => {
+    const startMin = minutesOfDay(block.startAt)
+    const endMin = minutesOfDay(block.endAt)
+    setScheduleForm({
+      mode: 'edit',
+      block,
+      initial: {
+        title: block.title,
+        dayISO: dateOf(block.startAt),
+        startMin,
+        endMin,
+        estimatedMinutes: block.estimatedMinutes ?? endMin - startMin,
+        priority: block.priority ?? 2,
+        memo: block.memo ?? '',
+      },
+    })
+  }
+
+  // Menu items per block type (AC-1). Delete/unplace are soft — a "실행 취소" toast
+  // defers the server op (no confirm dialog). 태스크 편집/프로젝트에서 보기 navigate
+  // to screens that land in ST-F1-09/08 (route seams).
+  const menuItemsFor = (block) => {
+    if (!block || readOnly) return []
+    if (block.blockType === 'SCHEDULE') {
+      return [
+        { key: 'edit', label: '일정 편집', onSelect: () => openScheduleEdit(block) },
+        {
+          key: 'delete',
+          label: '일정 삭제',
+          tone: 'danger',
+          onSelect: () =>
+            removeBlock({ weekStartISO, weeklyPlanId: plan?.weeklyPlanId, block, mode: 'delete' }),
+        },
+      ]
+    }
+    // TASK block
+    const done = block.status === 'COMPLETED'
+    const items = [
+      {
+        key: 'complete',
+        label: done ? '미완료로 되돌리기' : '완료로 표시',
+        onSelect: () =>
+          setBlockComplete({ weekStartISO, taskId: block.taskId, complete: !done }),
+      },
+      { key: 'log', label: '실제 시간 기록', onSelect: () => setExecLog({ block }) },
+      { key: 'edit', label: '태스크 편집', onSelect: () => navigate(`/tasks/${block.taskId}/edit`) },
+    ]
+    if (block.projectId) {
+      items.push({
+        key: 'project',
+        label: '프로젝트에서 보기',
+        onSelect: () => navigate(`/projects/${block.projectId}`),
+      })
+    }
+    items.push({
+      key: 'unplace',
+      label: '배치 해제',
+      onSelect: () =>
+        removeBlock({ weekStartISO, weeklyPlanId: plan?.weeklyPlanId, block, mode: 'unplace' }),
+    })
+    return items
+  }
+
+  // --- schedule create/edit + execution log (ST-F1-04 Phase 2) --------------
+
+  // Right-clicked empty slot → open the create form seeded from that slot (PLAN-08).
+  const openScheduleCreate = (slot) => {
+    setSlotMenu(null)
+    const startMin = slot.startMin
+    setScheduleForm({
+      mode: 'create',
+      initial: {
+        title: '',
+        dayISO: days[slot.dayIndex],
+        startMin,
+        endMin: Math.min(startMin + 60, MINUTES_PER_DAY),
+        estimatedMinutes: 60,
+        priority: 2,
+        memo: '',
+      },
+    })
+  }
+
+  const submitSchedule = (payload) => {
+    if (!plan) return
+    if (scheduleForm?.mode === 'create') {
+      createSchedule.mutate(
+        {
+          weeklyPlanId: plan.weeklyPlanId,
+          weekStartISO,
+          body: { blockType: 'SCHEDULE', status: 'SCHEDULED', ...payload },
+        },
+        { onSuccess: () => setScheduleForm(null) },
+      )
+    } else if (scheduleForm?.block) {
+      updateSchedule.mutate(
+        { scheduleId: scheduleForm.block.scheduleId, weekStartISO, patch: payload },
+        { onSuccess: () => setScheduleForm(null) },
+      )
+    }
+  }
+
+  const submitExecLog = ({ actualMinutes, memo }) => {
+    if (!execLog) return
+    const { block } = execLog
+    const endedAt = new Date(
+      new Date(block.startAt).getTime() + actualMinutes * 60000,
+    ).toISOString()
+    logExecution.mutate(
+      { taskId: block.taskId, body: { startedAt: block.startAt, endedAt, actualMinutes, memo } },
+      { onSuccess: () => setExecLog(null) },
+    )
+  }
+
   // --- save (PLAN-03: this story owns the undo-stack reset) -----------------
 
   const handleSave = () => {
@@ -390,9 +527,32 @@ function WeeklyPage() {
         open={menu.open}
         block={menu.block}
         position={menu.position}
-        items={[]}
+        items={menuItemsFor(menu.block)}
         onClose={() => setMenu({ open: false, block: null, position: null })}
       />
+
+      {/* Schedule create/edit (PLAN-08/17) — keyed so it mounts fresh per open. */}
+      {scheduleForm && (
+        <ScheduleForm
+          key={scheduleForm.mode + (scheduleForm.block?.planBlockId ?? 'new')}
+          mode={scheduleForm.mode}
+          initial={scheduleForm.initial}
+          onClose={() => setScheduleForm(null)}
+          onSubmit={submitSchedule}
+          submitting={createSchedule.isPending || updateSchedule.isPending}
+        />
+      )}
+
+      {/* Actual-time log (PLAN-15). */}
+      {execLog && (
+        <ExecutionLogForm
+          key={execLog.block.planBlockId}
+          block={execLog.block}
+          onClose={() => setExecLog(null)}
+          onSubmit={submitExecLog}
+          submitting={logExecution.isPending}
+        />
+      )}
 
       <ReviewPanel
         open={reviewOpen}
@@ -435,6 +595,14 @@ function WeeklyPage() {
               className="fixed z-50 max-h-64 w-60 overflow-y-auto rounded-card border border-border bg-surface py-1 shadow-popover"
             >
               <p className="px-3 py-2 text-caption font-medium text-text-muted">여기에 배치</p>
+              <div className="h-px bg-border" />
+              <button
+                type="button"
+                onClick={() => openScheduleCreate(slotMenu.slot)}
+                className="flex w-full items-center px-3 py-2 text-left text-label font-medium text-brand-700 transition-colors hover:bg-surface-sunken focus-visible:bg-surface-sunken focus-visible:outline-none"
+              >
+                + 새 일정 만들기
+              </button>
               <div className="h-px bg-border" />
               <ul>
                 {(unplacedQuery.data ?? []).map((task) => (

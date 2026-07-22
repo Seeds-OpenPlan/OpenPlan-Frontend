@@ -208,7 +208,8 @@ export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
     if (!open) return null
     return (
       <BottomSheet open={open} onClose={onClose} labelledById={PANEL_TITLE_ID}>
-        <div className="flex max-h-[70vh] flex-col gap-4">
+        {/* Compact on mobile so it doesn't swallow the screen — the list scrolls. */}
+        <div className="flex max-h-[55vh] flex-col gap-3">
           {header}
           <PanelBody {...bodyProps} />
         </div>

@@ -25,6 +25,7 @@ export function Toaster() {
           tone={t.tone}
           message={t.message}
           duration={t.duration}
+          action={t.action}
           onDismiss={() => dismiss(t.id)}
         />
       ))}
