@@ -6,9 +6,9 @@ import { weekLabelKO } from '../../features/plan/planTime'
   real buttons (keyboard + SR reachable) with explicit labels; the visible month
   label is the primary text so the icons are decorative only.
 */
-export function WeekNav({ weekStartISO, onPrev, onNext }) {
+export function WeekNav({ weekStartISO, isCurrentWeek = false, onPrev, onNext, onToday }) {
   return (
-    <div className="flex items-center justify-center gap-2">
+    <div className="relative flex items-center justify-center gap-2">
       <button
         type="button"
         onClick={onPrev}
@@ -30,6 +30,18 @@ export function WeekNav({ weekStartISO, onPrev, onNext }) {
       >
         <ChevronRightIcon className="text-base" />
       </button>
+
+      {/* Quick jump to the current week — only shown when viewing another week
+          (redundant on the current one). Tucked into the row's right-side space. */}
+      {!isCurrentWeek && (
+        <button
+          type="button"
+          onClick={onToday}
+          className="absolute right-0 rounded-full border border-border px-2.5 py-1 text-caption font-medium text-text-muted transition-colors hover:bg-surface-sunken hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          이번 주
+        </button>
+      )}
     </div>
   )
 }

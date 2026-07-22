@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { PlanBlock } from './PlanBlock'
 import { usePlanDrag } from '../../features/plan/usePlanDrag'
 import {
@@ -8,11 +8,13 @@ import {
   PX_PER_MIN,
   pxToMinutes,
   rangeHeightPx,
+  resolveGridSlot,
 } from '../../features/plan/planGeometry'
 import {
   dateOf,
   formatISODate,
   formatMinutesLabel,
+  MINUTES_PER_DAY,
   minutesOfDay,
   parseISODate,
   snapMinutes,
@@ -20,7 +22,7 @@ import {
   WEEKEND_COLUMN_INDICES,
 } from '../../features/plan/planTime'
 
-const BODY_MAX_HEIGHT = '62vh'
+const DEFAULT_BODY_MAX_HEIGHT = '62vh'
 
 /* Column header: 요일 label + date, with today circled (design). */
 function DayHeader({ dayISO, columnIndex, todayISO }) {
@@ -122,9 +124,26 @@ export function CalendarGrid({
   onMoveCommit,
   onOpenMenu,
   onAvailabilityCommit,
+  bodyRef,
+  placement = null,
+  draftBlocks = null,
+  onEmptySlot,
+  bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
 }) {
   const gridRef = useRef(null)
   const scrollRef = useRef(null)
+
+  // A callback ref that mirrors the grid body element into the page's bodyRef too,
+  // so the page can hit-test panel→grid drops (resolveGridSlot) against exactly
+  // what the grid renders. gridRef stays a plain useRef (no aliasing) so internal
+  // consumers (drag hook, ResizeObserver) use it normally.
+  const setGridRef = useCallback(
+    (el) => {
+      gridRef.current = el
+      if (bodyRef) bodyRef.current = el
+    },
+    [bodyRef],
+  )
   const todayISO = formatISODate(new Date())
   const [availPreview, setAvailPreview] = useState(null) // {columnIndex,edge,minutes}
   const [gridWidth, setGridWidth] = useState(0)
@@ -152,11 +171,13 @@ export function CalendarGrid({
   const height = rangeHeightPx(range)
   const ticks = hourTicks(range)
 
-  // In 24h mode, start scrolled to ~8:00 so the working day is visible.
+  // In 24h mode, start scrolled to ~8:00 so the working day is visible. Switching
+  // back to focus mode resets to the top — focus mode already begins at the
+  // working hours, so a leftover 24h scroll offset would otherwise push it down.
   useEffect(() => {
-    if (mode === '24h' && scrollRef.current) {
-      scrollRef.current.scrollTop = Math.max(0, (8 * 60 - range.startMinutes) * PX_PER_MIN)
-    }
+    if (!scrollRef.current) return
+    scrollRef.current.scrollTop =
+      mode === '24h' ? Math.max(0, (8 * 60 - range.startMinutes) * PX_PER_MIN) : 0
   }, [mode, range.startMinutes])
 
   // Position each block; the one being dragged uses the live drag target.
@@ -174,6 +195,30 @@ export function CalendarGrid({
       return { block, dayIndex, startMin, endMin, isDragged }
     })
     .filter((p) => p.dayIndex >= 0)
+
+  // Draft blocks from an auto-place proposal (ST-F1-03 RB-PLAN-01) — laid out like
+  // real blocks but rendered dashed + "초안" and non-interactive until applied.
+  const positionedDrafts = (draftBlocks ?? [])
+    .map((d) => {
+      const dayIndex = weekDays.indexOf(dateOf(d.startAt))
+      return { d, dayIndex, startMin: minutesOfDay(d.startAt), endMin: minutesOfDay(d.endAt) }
+    })
+    .filter((p) => p.dayIndex >= 0)
+
+  // Live drop preview while dragging a task out of the panel (PLAN-06). The slot
+  // is resolved in the drag hook's pointer handlers (not here — refs must not be
+  // read during render), so this only lays out the ghost for the task's duration.
+  const placementPreview = (() => {
+    if (!placement?.slot) return null
+    const duration = placement.task.estimatedMinutes ?? 60
+    let startMin = placement.slot.startMin
+    let endMin = startMin + duration
+    if (endMin > MINUTES_PER_DAY) {
+      endMin = MINUTES_PER_DAY
+      startMin = endMin - duration
+    }
+    return { dayIndex: placement.slot.dayIndex, startMin, endMin, title: placement.task.title }
+  })()
 
   const previewFor = (columnIndex, edge, fallback) =>
     availPreview && availPreview.columnIndex === columnIndex && availPreview.edge === edge
@@ -204,7 +249,7 @@ export function CalendarGrid({
           {/* A SINGLE vertical scroll container holds the header and the body, so a
               vertical scrollbar narrows both by the same amount and the columns
               stay aligned (a scrollbar on the body alone would offset the header). */}
-          <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: BODY_MAX_HEIGHT }}>
+          <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: bodyMaxHeight }}>
             {/* Sticky day-header row. */}
             <div className="sticky top-0 z-30 flex border-b border-border bg-surface">
               <div className="w-12 shrink-0" />
@@ -230,8 +275,24 @@ export function CalendarGrid({
                 ))}
               </div>
 
-        {/* Grid body — drag reference element. */}
-        <div ref={gridRef} className="relative flex-1" style={{ height }}>
+        {/* Grid body — drag reference element. A right-click on empty space (not on
+            a block — PlanBlock stops propagation) opens the place-here menu (PLAN-07). */}
+        <div
+          ref={setGridRef}
+          className="relative flex-1"
+          style={{ height }}
+          onContextMenu={(e) => {
+            if (readOnly || !onEmptySlot) return
+            const slot = resolveGridSlot(
+              { x: e.clientX, y: e.clientY },
+              e.currentTarget.getBoundingClientRect(),
+              range,
+            )
+            if (!slot) return
+            e.preventDefault()
+            onEmptySlot({ x: e.clientX, y: e.clientY }, slot)
+          }}
+        >
           {/* Background columns (weekend tint + availability band). */}
           <div className="absolute inset-0 grid grid-cols-7">
             {weekDays.map((dayISO, i) => {
@@ -311,6 +372,10 @@ export function CalendarGrid({
                 dragging={isDragged}
                 boundary={isDragged ? dragState.boundary : null}
                 disabled={readOnly}
+                // Any drag in progress (this or another block, or a panel→grid
+                // placement) suppresses the hover detail card, so pointer-capture
+                // swallowing mouseleave can't leave stale cards on the grid.
+                dragActive={Boolean(dragState) || Boolean(placement)}
                 style={style}
                 onPointerDown={(e) => onBlockPointerDown(e, block, dayIndex, startMin)}
                 onOpenMenu={(pos) => onOpenMenu(block, pos)}
@@ -318,6 +383,56 @@ export function CalendarGrid({
               />
             )
           })}
+
+          {/* Auto-place draft layer (RB-PLAN-01): non-interactive and rendered
+              UNMISTAKABLY provisional — a diagonal hatch fill + bold dashed border
+              + a solid "초안" pill — so it never reads as a committed task block
+              (which is a solid brand fill). */}
+          {positionedDrafts.map(({ d, dayIndex, startMin, endMin }) => {
+            const rect = blockRect(startMin, endMin, range)
+            return (
+              <div
+                key={d.taskId}
+                aria-hidden="true"
+                className="pointer-events-none absolute z-20 overflow-hidden rounded-control border-2 border-dashed border-brand-500 p-1.5 text-caption text-brand-900"
+                style={{
+                  left: `calc(${dayIndex} / 7 * 100% + 2px)`,
+                  width: `calc(100% / 7 - 4px)`,
+                  top: rect.top,
+                  height: rect.height,
+                  backgroundColor: 'var(--color-surface)',
+                  backgroundImage:
+                    'repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-brand-600) 16%, transparent) 0, color-mix(in srgb, var(--color-brand-600) 16%, transparent) 6px, transparent 6px, transparent 13px)',
+                }}
+              >
+                <span className="inline-block rounded-chip bg-brand-600 px-1.5 py-px text-[0.6rem] font-bold text-white">
+                  초안
+                </span>
+                <span className="mt-1 block font-medium leading-tight line-clamp-2">{d.title}</span>
+              </div>
+            )
+          })}
+
+          {/* Live drop preview while dragging a task from the panel (PLAN-06). */}
+          {placementPreview && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute z-40 flex flex-col overflow-hidden rounded-control border-2 border-dashed border-brand-500 bg-brand-100/70 p-1.5 text-caption text-brand-900"
+              style={{
+                left: `calc(${placementPreview.dayIndex} / 7 * 100% + 2px)`,
+                width: `calc(100% / 7 - 4px)`,
+                top: blockRect(placementPreview.startMin, placementPreview.endMin, range).top,
+                height: blockRect(placementPreview.startMin, placementPreview.endMin, range).height,
+              }}
+            >
+              <span className="block text-[0.6rem] opacity-80">
+                {formatMinutesLabel(placementPreview.startMin)} - {formatMinutesLabel(placementPreview.endMin)}
+              </span>
+              <span className="mt-0.5 block font-medium leading-tight line-clamp-2">
+                {placementPreview.title}
+              </span>
+            </div>
+          )}
             </div>
           </div>
           </div>

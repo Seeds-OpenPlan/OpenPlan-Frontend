@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { PlanHeader } from '../components/plan/PlanHeader'
 import { WeekNav } from '../components/plan/WeekNav'
 import { SummaryBar } from '../components/plan/SummaryBar'
@@ -7,11 +8,17 @@ import { UndoRedo } from '../components/plan/UndoRedo'
 import { PlanFab } from '../components/plan/PlanFab'
 import { BlockActionMenu } from '../components/plan/BlockActionMenu'
 import { ReviewPanel } from '../components/plan/ReviewPanel'
+import { UnplacedPanel } from '../components/plan/UnplacedPanel'
+import { AutoPlaceBar } from '../components/plan/AutoPlaceBar'
 import { ErrorState } from '../components/common/ErrorState'
 import {
+  useApplyAutoPlace,
+  useAutoPlace,
   useAvailability,
   useMoveBlock,
+  usePlaceTask,
   useSaveAvailability,
+  useUnplacedTasks,
   useWeekPlan,
 } from '../features/plan/usePlanData'
 import {
@@ -19,12 +26,15 @@ import {
   selectCanUndo,
   selectCanRedo,
 } from '../features/plan/usePlanHistory'
-import { visibleRange } from '../features/plan/planGeometry'
+import { usePlacementDrag } from '../features/plan/usePlacementDrag'
+import { resolveGridSlot, visibleRange } from '../features/plan/planGeometry'
+import { findFirstFreeSlot } from '../features/plan/planPlacement'
 import {
   addWeeksISO,
   composeTimestamp,
   currentWeekStartISO,
   isPastWeek,
+  MINUTES_PER_DAY,
   WEEKDAY_KEYS,
   weekDays as weekDaysOf,
 } from '../features/plan/planTime'
@@ -53,10 +63,25 @@ function WeeklyPage() {
   const [menu, setMenu] = useState({ open: false, block: null, position: null })
   const [reviewOpen, setReviewOpen] = useState(false)
 
+  // ST-F1-03: unplaced panel + auto-place draft + empty-slot task picker.
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [projectFilter, setProjectFilter] = useState(null)
+  const [autoDraft, setAutoDraft] = useState(null) // { placements, unplaced } | null
+  const [slotMenu, setSlotMenu] = useState(null) // { point, slot } | null
+
+  const gridBodyRef = useRef(null)
+
   const planQuery = useWeekPlan(weekStartISO)
   const availQuery = useAvailability()
   const moveBlock = useMoveBlock()
   const saveAvailability = useSaveAvailability()
+  // Fetch the FULL backlog (no server projectId filter); the panel filters by
+  // project CLIENT-SIDE so every project chip stays visible even while one is
+  // selected. (PROJ-15/19 entry just preselects projectFilter — same list.)
+  const unplacedQuery = useUnplacedTasks()
+  const placeTask = usePlaceTask()
+  const autoPlace = useAutoPlace()
+  const applyAutoPlace = useApplyAutoPlace()
 
   const history = usePlanHistory()
   const canUndo = usePlanHistory(selectCanUndo)
@@ -144,6 +169,116 @@ function WeeklyPage() {
     saveAvailability.mutate(next)
   }
 
+  // --- task placement (ST-F1-03: PLAN-06 drag / PLAN-07 right-click / auto) --
+
+  // Place one task into a resolved grid slot; span = the task's estimated
+  // duration, clamped to the end of the day. Optimistic (usePlaceTask).
+  const placeTaskAt = (task, slot) => {
+    if (!plan || readOnly) return
+    const duration = task.estimatedMinutes ?? 60
+    let startMin = slot.startMin
+    let endMin = startMin + duration
+    if (endMin > MINUTES_PER_DAY) {
+      endMin = MINUTES_PER_DAY
+      startMin = endMin - duration
+    }
+    const dayISO = days[slot.dayIndex]
+    placeTask({
+      weeklyPlanId: plan.weeklyPlanId,
+      weekStartISO,
+      task,
+      startAt: composeTimestamp(dayISO, startMin),
+      endAt: composeTimestamp(dayISO, endMin),
+    })
+    // If an auto-place draft still proposes this task, drop it — applying the
+    // draft later must not re-place a task the user just placed by hand.
+    if (autoDraft) {
+      setAutoDraft((d) =>
+        d
+          ? {
+              placements: d.placements.filter((p) => p.taskId !== task.taskId),
+              unplaced: d.unplaced.filter((t) => t.taskId !== task.taskId),
+            }
+          : d,
+      )
+    }
+    setSlotMenu(null)
+  }
+
+  // Panel→grid drag: the hook hit-tests the live pointer via resolveSlot (in its
+  // pointer handlers, where reading the grid ref is allowed) and hands the drop
+  // slot to onDrop; an off-grid release (null) is ignored.
+  const placementDrag = usePlacementDrag({
+    resolveSlot: (point) => {
+      const el = gridBodyRef.current
+      return el ? resolveGridSlot(point, el.getBoundingClientRect(), range) : null
+    },
+    onDrop: (task, slot) => {
+      if (slot) placeTaskAt(task, slot)
+    },
+  })
+
+  // Keyboard "quick place": drop the task in the first free slot of the week.
+  const quickPlace = (task) => {
+    const slot = findFirstFreeSlot({
+      days,
+      availability,
+      blocks,
+      durationMin: task.estimatedMinutes ?? 60,
+    })
+    if (slot) placeTaskAt(task, slot)
+    else toast({ tone: 'info', message: '이번 주에 배치할 빈 시간이 부족합니다' })
+  }
+
+  // Right-click an empty slot → open a small picker of unplaced tasks (PLAN-07).
+  const handleEmptySlot = (point, slot) => {
+    const tasks = unplacedQuery.data ?? []
+    if (tasks.length === 0) {
+      toast({ tone: 'info', message: '배치할 미배치 태스크가 없습니다' })
+      return
+    }
+    setSlotMenu({ point, slot })
+  }
+
+  // Auto placement (RB-PLAN-01): announce progress, then hold the returned draft
+  // as an overlay until the user applies or cancels it.
+  const handleAutoPlace = () => {
+    if (!plan) return
+    toast({ tone: 'info', message: '우선순위·마감일 순으로 배치 중입니다…' })
+    autoPlace.mutate(
+      { weeklyPlanId: plan.weeklyPlanId, priorityType: 'DEADLINE_FIRST' },
+      { onSuccess: (result) => setAutoDraft(result) },
+    )
+  }
+
+  const applyDraft = () => {
+    if (!plan || !autoDraft) return
+    applyAutoPlace.mutate(
+      { weeklyPlanId: plan.weeklyPlanId, weekStartISO, placements: autoDraft.placements },
+      {
+        onSuccess: () => {
+          setAutoDraft(null)
+          toast({ tone: 'success', message: '초안을 적용했습니다. 확정하려면 저장하세요' })
+        },
+      },
+    )
+  }
+
+  const cancelDraft = () => setAutoDraft(null)
+
+  // Changing week invalidates a week-specific draft / open slot picker.
+  const goToWeek = (delta) => {
+    setWeekStartISO((w) => addWeeksISO(w, delta))
+    setAutoDraft(null)
+    setSlotMenu(null)
+  }
+
+  const goToThisWeek = () => {
+    setWeekStartISO(currentWeekStartISO())
+    setAutoDraft(null)
+    setSlotMenu(null)
+  }
+
   // --- save (PLAN-03: this story owns the undo-stack reset) -----------------
 
   const handleSave = () => {
@@ -180,8 +315,10 @@ function WeeklyPage() {
       <section className="relative flex flex-col gap-3 rounded-card border border-border bg-surface p-3 md:p-4">
         <WeekNav
           weekStartISO={weekStartISO}
-          onPrev={() => setWeekStartISO((w) => addWeeksISO(w, -1))}
-          onNext={() => setWeekStartISO((w) => addWeeksISO(w, 1))}
+          isCurrentWeek={weekStartISO === currentWeekStartISO()}
+          onPrev={() => goToWeek(-1)}
+          onNext={() => goToWeek(1)}
+          onToday={goToThisWeek}
         />
 
         <SummaryBar
@@ -190,6 +327,16 @@ function WeeklyPage() {
           mode={mode}
           onModeChange={setMode}
         />
+
+        {autoDraft && (
+          <AutoPlaceBar
+            placedCount={autoDraft.placements.length}
+            unplacedCount={autoDraft.unplaced.length}
+            applying={applyAutoPlace.isPending}
+            onApply={applyDraft}
+            onCancel={cancelDraft}
+          />
+        )}
 
         <div className="relative">
           {showColumnSkeleton && (
@@ -208,6 +355,13 @@ function WeeklyPage() {
             onMoveCommit={handleUserMove}
             onOpenMenu={(block, position) => setMenu({ open: true, block, position })}
             onAvailabilityCommit={handleAvailabilityCommit}
+            bodyRef={gridBodyRef}
+            placement={placementDrag.drag}
+            draftBlocks={autoDraft?.placements ?? null}
+            onEmptySlot={handleEmptySlot}
+            // Shrink the grid by ~the draft bar's height while it's shown, so the
+            // bar never adds net page height (no new scroll).
+            bodyMaxHeight={autoDraft ? 'calc(62vh - 5rem)' : '62vh'}
           />
         </div>
 
@@ -223,13 +377,11 @@ function WeeklyPage() {
               onRedo={handleRedo}
             />
           </div>
+          {/* FAB hides while the panel is open; reappears on close. */}
           <div className="pointer-events-auto">
-            <PlanFab
-              count={plan?.unplacedCount ?? 0}
-              onClick={() => {
-                /* Unplaced panel (PNL) opens in ST-F1-03. */
-              }}
-            />
+            {!panelOpen && (
+              <PlanFab count={plan?.unplacedCount ?? 0} onClick={() => setPanelOpen(true)} />
+            )}
           </div>
         </div>
       </section>
@@ -249,6 +401,74 @@ function WeeklyPage() {
         issues={[]}
         onClose={() => setReviewOpen(false)}
       />
+
+      <UnplacedPanel
+        open={panelOpen}
+        onClose={() => setPanelOpen(false)}
+        count={plan?.unplacedCount ?? 0}
+        tasks={unplacedQuery.data ?? []}
+        isLoading={unplacedQuery.isLoading}
+        isError={unplacedQuery.isError}
+        onRetry={() => unplacedQuery.refetch()}
+        projectId={projectFilter}
+        onProjectFilterChange={setProjectFilter}
+        onAutoPlace={handleAutoPlace}
+        autoPlacing={autoPlace.isPending}
+        disabled={readOnly}
+        onTaskPointerDown={placementDrag.begin}
+        onQuickPlace={quickPlace}
+      />
+
+      {/* Empty-slot task picker (PLAN-07). Desktop right-click only; a backdrop
+          closes it on outside click. */}
+      {slotMenu &&
+        createPortal(
+          <>
+            <div className="fixed inset-0 z-40" onPointerDown={() => setSlotMenu(null)} aria-hidden="true" />
+            <div
+              role="menu"
+              aria-label="여기에 배치할 태스크 선택"
+              style={{
+                left: Math.min(slotMenu.point.x, window.innerWidth - 260),
+                top: Math.min(slotMenu.point.y, window.innerHeight - 280),
+              }}
+              className="fixed z-50 max-h-64 w-60 overflow-y-auto rounded-card border border-border bg-surface py-1 shadow-popover"
+            >
+              <p className="px-3 py-2 text-caption font-medium text-text-muted">여기에 배치</p>
+              <div className="h-px bg-border" />
+              <ul>
+                {(unplacedQuery.data ?? []).map((task) => (
+                  <li key={task.taskId}>
+                    <button
+                      type="button"
+                      onClick={() => placeTaskAt(task, slotMenu.slot)}
+                      className="flex w-full flex-col items-start px-3 py-2 text-left transition-colors hover:bg-surface-sunken focus-visible:bg-surface-sunken focus-visible:outline-none"
+                    >
+                      <span className="text-label font-medium text-text line-clamp-1">{task.title}</span>
+                      <span className="text-caption text-text-muted">
+                        예상 {Math.round((task.estimatedMinutes ?? 60))}분
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </>,
+          document.body,
+        )}
+
+      {/* Floating ghost following the cursor while dragging a task from the panel. */}
+      {placementDrag.drag &&
+        createPortal(
+          <div
+            aria-hidden="true"
+            style={{ left: placementDrag.drag.point.x + 12, top: placementDrag.drag.point.y + 12 }}
+            className="pointer-events-none fixed z-[60] max-w-48 rounded-control border border-brand-400 bg-brand-50 px-2.5 py-1.5 text-caption font-medium text-brand-900 shadow-popover"
+          >
+            <span className="line-clamp-1">{placementDrag.drag.task.title}</span>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
