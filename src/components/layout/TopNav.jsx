@@ -15,20 +15,36 @@ function TopNav() {
           OpenPlan
         </Link>
 
-        <nav className="flex items-center gap-8">
+        {/* Horizontal pill tabs: icon-only at rest, the label expands on hover
+            (and stays open for the active tab so the current page is labeled). */}
+        <nav className="flex items-center gap-1">
           {navItems.map(({ to, label, Icon, end }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
               className={({ isActive }) =>
-                `flex flex-col items-center gap-1 text-xs font-medium transition-colors ${
-                  isActive ? 'text-blue-600' : 'text-slate-400 hover:text-slate-600'
+                `group flex items-center rounded-full px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-blue-50 text-blue-600'
+                    : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
                 }`
               }
             >
-              <Icon className="h-5 w-5" />
-              <span>{label}</span>
+              {({ isActive }) => (
+                <>
+                  <Icon className="h-5 w-5 shrink-0" />
+                  <span
+                    className={`overflow-hidden whitespace-nowrap transition-all duration-200 ease-out motion-reduce:transition-none ${
+                      isActive
+                        ? 'ml-2 max-w-[6rem] opacity-100'
+                        : 'ml-0 max-w-0 opacity-0 group-hover:ml-2 group-hover:max-w-[6rem] group-hover:opacity-100'
+                    }`}
+                  >
+                    {label}
+                  </span>
+                </>
+              )}
             </NavLink>
           ))}
         </nav>
