@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
@@ -36,6 +36,8 @@ function PanelBody({
   onTaskPointerDown,
   onQuickPlace,
 }) {
+  // Chips derive from the FULL list so selecting one project never hides the
+  // others; the displayed cards are filtered client-side.
   const projects = useMemo(() => {
     const seen = new Map()
     for (const t of tasks ?? []) {
@@ -44,11 +46,18 @@ function PanelBody({
     return [...seen.entries()].map(([id, name]) => ({ id, name }))
   }, [tasks])
 
+  const visibleTasks = useMemo(
+    () => (projectId ? (tasks ?? []).filter((t) => t.projectId === projectId) : tasks ?? []),
+    [tasks, projectId],
+  )
+
   return (
-    <div className="flex h-full flex-col gap-4">
+    // min-h-0 + flex-1 so this fills the panel and the LIST (not the panel)
+    // scrolls when the backlog is long — otherwise cards overflow the card edge.
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       {/* Project filter — 전체 + one chip per known project. */}
       {(projects.length > 0 || projectId) && (
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="프로젝트 필터">
+        <div className="flex shrink-0 flex-wrap gap-1.5" role="group" aria-label="프로젝트 필터">
           <FilterChip active={!projectId} onClick={() => onProjectFilterChange(null)}>
             전체
           </FilterChip>
@@ -72,7 +81,7 @@ function PanelBody({
         loadingLabel="배치 중"
         disabled={disabled || (tasks?.length ?? 0) === 0}
         disabledReason={disabled ? '지난 주는 편집할 수 없습니다' : undefined}
-        className="w-full"
+        className="w-full shrink-0"
       >
         자동 배치
       </Button>
@@ -90,13 +99,13 @@ function PanelBody({
               <Skeleton key={i} height="5rem" radius="var(--radius-card)" />
             ))}
           </div>
-        ) : (tasks?.length ?? 0) === 0 ? (
+        ) : visibleTasks.length === 0 ? (
           <p className="rounded-card border border-dashed border-border px-4 py-8 text-center text-label text-text-muted">
-            미배치 태스크가 없습니다
+            {projectId ? '이 프로젝트의 미배치 태스크가 없습니다' : '미배치 태스크가 없습니다'}
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
-            {tasks.map((task) => (
+            {visibleTasks.map((task) => (
               <li key={task.taskId}>
                 <UnplacedTaskCard
                   task={task}
@@ -132,10 +141,41 @@ function FilterChip({ active, onClick, children }) {
   )
 }
 
+const PANEL_WIDTH = 344 // px (w ~21.5rem)
+const DEFAULT_POS = { right: 24, top: 96 } // px offset from the top-RIGHT corner
+
 export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
   const isDesktop = useIsDesktop()
 
-  // Esc closes the (non-modal) desktop drawer too. The BottomSheet handles its
+  // Desktop panel is a movable floating card (so it never permanently covers the
+  // Sunday column). Position is stored as an offset from the top-RIGHT corner so
+  // it keeps its distance from the right edge on window resize (never sliding off
+  // screen). Remembered across opens; null = default top-right.
+  const [pos, setPos] = useState(null)
+
+  const startPanelDrag = (e) => {
+    // Don't start a move when the pointer is on an interactive control (e.g. ✕).
+    if (e.target.closest('button')) return
+    e.preventDefault()
+    const start = { x: e.clientX, y: e.clientY }
+    const base = pos ?? DEFAULT_POS
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+    const move = (ev) => {
+      setPos({
+        // Dragging right REDUCES the right-offset; clamp so it stays on screen.
+        right: clamp(base.right - (ev.clientX - start.x), 8, window.innerWidth - PANEL_WIDTH - 8),
+        top: clamp(base.top + (ev.clientY - start.y), 8, window.innerHeight - 80),
+      })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  // Esc closes the (non-modal) desktop panel too. The BottomSheet handles its
   // own Esc, so only wire this for the desktop shell.
   useEffect(() => {
     if (!open || !isDesktop) return undefined
@@ -175,12 +215,44 @@ export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
     )
   }
 
+  const p = pos ?? DEFAULT_POS
+  const panelStyle = {
+    width: PANEL_WIDTH,
+    // Inline color-mix guarantees a visible translucency regardless of how the
+    // Tailwind opacity modifier resolves the surface CSS variable.
+    backgroundColor: 'color-mix(in srgb, var(--color-surface) 78%, transparent)',
+    // Anchored by right/top offset so resizing the window keeps the panel the
+    // same distance from the right edge (it never slides off screen).
+    right: p.right,
+    top: p.top,
+  }
   return createPortal(
     <aside
       aria-labelledby={PANEL_TITLE_ID}
-      className="fixed inset-y-0 right-0 z-40 flex w-96 max-w-[90vw] flex-col gap-4 border-l border-border bg-surface p-5 shadow-modal"
+      style={panelStyle}
+      className="fixed z-40 flex max-h-[72vh] flex-col gap-3 rounded-card border border-border p-4 shadow-modal backdrop-blur-md"
     >
-      {header}
+      {/* Header doubles as the drag handle (cursor-move); the ✕ button opts out of
+          the move via the closest('button') guard in startPanelDrag. */}
+      <div
+        onPointerDown={startPanelDrag}
+        className="flex shrink-0 touch-none cursor-move items-center justify-between"
+      >
+        <div className="flex items-center gap-2">
+          <span aria-hidden="true" className="text-text-muted">⠿</span>
+          <h2 id={PANEL_TITLE_ID} className="text-title font-semibold text-text">
+            미배치 태스크 <span className="text-text-muted">{count}</span>
+          </h2>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="미배치 패널 닫기"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          <span aria-hidden="true" className="text-lg">✕</span>
+        </button>
+      </div>
       <PanelBody {...bodyProps} />
     </aside>,
     document.body,

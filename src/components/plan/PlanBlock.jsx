@@ -1,4 +1,12 @@
+import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { formatMinutesLabel } from '../../features/plan/planTime'
+import { PX_PER_MIN } from '../../features/plan/planGeometry'
+
+// Below this rendered height a block can't show its title legibly, so a
+// hover/focus detail card supplements it (readability aid — the block's
+// aria-label already carries the full title+time for screen readers).
+const SHORT_BLOCK_PX = 46
 
 /*
   A single plan block on the grid. It is the interaction surface for three inputs:
@@ -28,12 +36,27 @@ export function PlanBlock({
   dragging = false,
   boundary = null,
   disabled = false,
+  dragActive = false,
   onPointerDown,
   onOpenMenu,
   onNudge,
 }) {
   const timeLabel = `${formatMinutesLabel(startMin)} - ${formatMinutesLabel(endMin)}`
   const typeClass = TYPE_CLASSES[block.blockType] ?? TYPE_CLASSES.TASK
+
+  // Detail card for short blocks: anchored to the block's on-screen rect and
+  // rendered in a portal so the grid's overflow can't clip it.
+  const [detail, setDetail] = useState(null) // { left, top } | null
+  const isShort = (endMin - startMin) * PX_PER_MIN < SHORT_BLOCK_PX
+
+  const openDetail = (e) => {
+    // Never open while ANY drag is in progress — during a drag the browser holds
+    // pointer capture and won't fire mouseleave, which would strand the card.
+    if (!isShort || dragging || dragActive) return
+    const r = e.currentTarget.getBoundingClientRect()
+    setDetail({ left: r.left, top: r.bottom + 4 })
+  }
+  const closeDetail = () => setDetail(null)
 
   const openMenuFromEvent = (e) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -70,13 +93,25 @@ export function PlanBlock({
   }
 
   return (
+    <>
     <div
       role="button"
       tabIndex={disabled ? -1 : 0}
       aria-label={`${block.title}, ${timeLabel}${disabled ? ', 읽기 전용' : ''}`}
       aria-disabled={disabled || undefined}
       style={{ ...style, touchAction: 'none' }}
-      onPointerDown={disabled ? undefined : (e) => onPointerDown?.(e, block, startMin)}
+      onPointerDown={
+        disabled
+          ? undefined
+          : (e) => {
+              closeDetail()
+              onPointerDown?.(e, block, startMin)
+            }
+      }
+      onMouseEnter={openDetail}
+      onMouseLeave={closeDetail}
+      onFocus={openDetail}
+      onBlur={closeDetail}
       onContextMenu={(e) => {
         e.preventDefault()
         // Keep a block right-click on the block: don't let it bubble to the grid
@@ -102,6 +137,19 @@ export function PlanBlock({
         </span>
       )}
     </div>
+    {detail && !dragActive &&
+      createPortal(
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed z-[70] max-w-56 rounded-card border border-border bg-surface p-2 shadow-popover"
+          style={{ left: Math.min(detail.left, window.innerWidth - 240), top: detail.top }}
+        >
+          <p className="text-caption text-text-muted">{timeLabel}</p>
+          <p className="mt-0.5 text-label font-medium leading-snug text-text">{block.title}</p>
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }
 

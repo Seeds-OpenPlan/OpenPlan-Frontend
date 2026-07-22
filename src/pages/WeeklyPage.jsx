@@ -75,7 +75,10 @@ function WeeklyPage() {
   const availQuery = useAvailability()
   const moveBlock = useMoveBlock()
   const saveAvailability = useSaveAvailability()
-  const unplacedQuery = useUnplacedTasks(projectFilter)
+  // Fetch the FULL backlog (no server projectId filter); the panel filters by
+  // project CLIENT-SIDE so every project chip stays visible even while one is
+  // selected. (PROJ-15/19 entry just preselects projectFilter — same list.)
+  const unplacedQuery = useUnplacedTasks()
   const placeTask = usePlaceTask()
   const autoPlace = useAutoPlace()
   const applyAutoPlace = useApplyAutoPlace()
@@ -348,6 +351,9 @@ function WeeklyPage() {
             placement={placementDrag.drag}
             draftBlocks={autoDraft?.placements ?? null}
             onEmptySlot={handleEmptySlot}
+            // Shrink the grid by ~the draft bar's height while it's shown, so the
+            // bar never adds net page height (no new scroll).
+            bodyMaxHeight={autoDraft ? 'calc(62vh - 5rem)' : '62vh'}
           />
         </div>
 
@@ -363,8 +369,11 @@ function WeeklyPage() {
               onRedo={handleRedo}
             />
           </div>
+          {/* FAB hides while the panel is open; reappears on close. */}
           <div className="pointer-events-auto">
-            <PlanFab count={plan?.unplacedCount ?? 0} onClick={() => setPanelOpen(true)} />
+            {!panelOpen && (
+              <PlanFab count={plan?.unplacedCount ?? 0} onClick={() => setPanelOpen(true)} />
+            )}
           </div>
         </div>
       </section>

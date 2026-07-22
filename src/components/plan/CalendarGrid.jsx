@@ -22,7 +22,7 @@ import {
   WEEKEND_COLUMN_INDICES,
 } from '../../features/plan/planTime'
 
-const BODY_MAX_HEIGHT = '62vh'
+const DEFAULT_BODY_MAX_HEIGHT = '62vh'
 
 /* Column header: 요일 label + date, with today circled (design). */
 function DayHeader({ dayISO, columnIndex, todayISO }) {
@@ -128,6 +128,7 @@ export function CalendarGrid({
   placement = null,
   draftBlocks = null,
   onEmptySlot,
+  bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
 }) {
   const gridRef = useRef(null)
   const scrollRef = useRef(null)
@@ -170,11 +171,13 @@ export function CalendarGrid({
   const height = rangeHeightPx(range)
   const ticks = hourTicks(range)
 
-  // In 24h mode, start scrolled to ~8:00 so the working day is visible.
+  // In 24h mode, start scrolled to ~8:00 so the working day is visible. Switching
+  // back to focus mode resets to the top — focus mode already begins at the
+  // working hours, so a leftover 24h scroll offset would otherwise push it down.
   useEffect(() => {
-    if (mode === '24h' && scrollRef.current) {
-      scrollRef.current.scrollTop = Math.max(0, (8 * 60 - range.startMinutes) * PX_PER_MIN)
-    }
+    if (!scrollRef.current) return
+    scrollRef.current.scrollTop =
+      mode === '24h' ? Math.max(0, (8 * 60 - range.startMinutes) * PX_PER_MIN) : 0
   }, [mode, range.startMinutes])
 
   // Position each block; the one being dragged uses the live drag target.
@@ -246,7 +249,7 @@ export function CalendarGrid({
           {/* A SINGLE vertical scroll container holds the header and the body, so a
               vertical scrollbar narrows both by the same amount and the columns
               stay aligned (a scrollbar on the body alone would offset the header). */}
-          <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: BODY_MAX_HEIGHT }}>
+          <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: bodyMaxHeight }}>
             {/* Sticky day-header row. */}
             <div className="sticky top-0 z-30 flex border-b border-border bg-surface">
               <div className="w-12 shrink-0" />
@@ -369,6 +372,10 @@ export function CalendarGrid({
                 dragging={isDragged}
                 boundary={isDragged ? dragState.boundary : null}
                 disabled={readOnly}
+                // Any drag in progress (this or another block, or a panel→grid
+                // placement) suppresses the hover detail card, so pointer-capture
+                // swallowing mouseleave can't leave stale cards on the grid.
+                dragActive={Boolean(dragState) || Boolean(placement)}
                 style={style}
                 onPointerDown={(e) => onBlockPointerDown(e, block, dayIndex, startMin)}
                 onOpenMenu={(pos) => onOpenMenu(block, pos)}
@@ -377,25 +384,31 @@ export function CalendarGrid({
             )
           })}
 
-          {/* Auto-place draft layer: dashed + "초안", non-interactive (RB-PLAN-01). */}
+          {/* Auto-place draft layer (RB-PLAN-01): non-interactive and rendered
+              UNMISTAKABLY provisional — a diagonal hatch fill + bold dashed border
+              + a solid "초안" pill — so it never reads as a committed task block
+              (which is a solid brand fill). */}
           {positionedDrafts.map(({ d, dayIndex, startMin, endMin }) => {
             const rect = blockRect(startMin, endMin, range)
             return (
               <div
                 key={d.taskId}
                 aria-hidden="true"
-                className="pointer-events-none absolute z-20 overflow-hidden rounded-control border border-dashed border-brand-400 bg-brand-50/70 p-1.5 text-caption text-brand-900"
+                className="pointer-events-none absolute z-20 overflow-hidden rounded-control border-2 border-dashed border-brand-500 p-1.5 text-caption text-brand-900"
                 style={{
                   left: `calc(${dayIndex} / 7 * 100% + 2px)`,
                   width: `calc(100% / 7 - 4px)`,
                   top: rect.top,
                   height: rect.height,
+                  backgroundColor: 'var(--color-surface)',
+                  backgroundImage:
+                    'repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-brand-600) 16%, transparent) 0, color-mix(in srgb, var(--color-brand-600) 16%, transparent) 6px, transparent 6px, transparent 13px)',
                 }}
               >
-                <span className="block text-[0.6rem] font-semibold uppercase tracking-wide text-brand-600">
+                <span className="inline-block rounded-chip bg-brand-600 px-1.5 py-px text-[0.6rem] font-bold text-white">
                   초안
                 </span>
-                <span className="mt-0.5 block font-medium leading-tight line-clamp-2">{d.title}</span>
+                <span className="mt-1 block font-medium leading-tight line-clamp-2">{d.title}</span>
               </div>
             )
           })}
