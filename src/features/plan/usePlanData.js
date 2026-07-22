@@ -220,6 +220,23 @@ export function usePlaceTask() {
         endAt,
         status: 'SCHEDULED',
       })
+        .then((result) => {
+          // Reconcile the optimistic temp id to the server's real planBlockId as
+          // soon as the POST resolves, so the block becomes a first-class,
+          // interactable block without waiting on the refetch (temp-id race fix).
+          const realId = result?.planBlockId
+          if (!realId) return
+          queryClient.setQueryData(weekKey, (wk) =>
+            wk
+              ? {
+                  ...wk,
+                  blocks: wk.blocks.map((b) =>
+                    b.planBlockId === tempId ? { ...b, planBlockId: realId } : b,
+                  ),
+                }
+              : wk,
+          )
+        })
         .catch(() => {
           queryClient.setQueryData(weekKey, prevWeek)
           queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })

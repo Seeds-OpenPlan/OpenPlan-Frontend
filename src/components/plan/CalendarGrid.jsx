@@ -101,12 +101,12 @@ function AvailabilityHandle({ columnIndex, edge, minutes, gridRef, range, onPrev
       aria-label={`${WEEKDAY_LABELS_KO[columnIndex]} 가용 ${edge === 'start' ? '시작' : '종료'} ${formatMinutesLabel(minutes)}`}
       onPointerDown={onPointerDown}
       style={{ top: top - 6, left: `calc(${columnIndex} / 7 * 100%)`, width: `calc(100% / 7)`, touchAction: 'none' }}
-      className="absolute z-20 flex h-3 items-center justify-center"
+      className="group/avail absolute z-20 flex h-3 cursor-ns-resize items-center justify-center"
     >
-      {/* Hidden until the grid is hovered (or this handle is focused), so the
-          bands aren't cluttered with always-on grips. */}
+      {/* Hidden until THIS handle's strip is hovered/focused (like the block resize
+          grips), so the bands aren't cluttered with always-on grips. */}
       <span
-        className="h-1 w-8 rounded-full bg-brand-600 opacity-0 ring-2 ring-surface transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+        className="h-1 w-8 rounded-full bg-brand-600 opacity-0 ring-2 ring-surface transition-opacity group-hover/avail:opacity-100 group-focus-within/avail:opacity-100"
         aria-hidden="true"
       />
     </button>
@@ -190,18 +190,21 @@ export function CalendarGrid({
       const rect = gridRef.current.getBoundingClientRect()
       const m = snapMinutes(pxToMinutes(clientY - rect.top, range))
       return edge === 'start'
-        ? { startMin: Math.min(m, endMin - RESIZE_MIN_DUR), endMin }
-        : { startMin, endMin: Math.max(m, startMin + RESIZE_MIN_DUR) }
+        ? { startMin: Math.max(0, Math.min(m, endMin - RESIZE_MIN_DUR)), endMin }
+        : { startMin, endMin: Math.min(MINUTES_PER_DAY, Math.max(m, startMin + RESIZE_MIN_DUR)) }
     }
     const move = (ev) => setResizeState({ planBlockId: block.planBlockId, ...compute(ev.clientY) })
     const up = (ev) => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       const next = compute(ev.clientY)
-      setResizeState(null)
+      // Commit the optimistic cache update FIRST, THEN clear the preview — both in
+      // the same React batch, so the block never renders one frame at its old
+      // cache size before the resize applies (mirrors useMoveBlock's ordering).
       if (next.startMin !== startMin || next.endMin !== endMin) {
         onResizeCommit?.(block, { dayIndex, ...next })
       }
+      setResizeState(null)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -323,7 +326,7 @@ export function CalendarGrid({
             a block — PlanBlock stops propagation) opens the place-here menu (PLAN-07). */}
         <div
           ref={setGridRef}
-          className="group relative flex-1"
+          className="relative flex-1"
           style={{ height }}
           onContextMenu={(e) => {
             if (readOnly || !onEmptySlot) return
@@ -421,6 +424,7 @@ export function CalendarGrid({
                 // swallowing mouseleave can't leave stale cards on the grid.
                 dragActive={Boolean(dragState) || Boolean(placement) || Boolean(resizeState)}
                 resizing={resizeState?.planBlockId === block.planBlockId}
+                pending={String(block.planBlockId).startsWith('temp-')}
                 style={style}
                 onPointerDown={(e) => onBlockPointerDown(e, block, dayIndex, startMin)}
                 onOpenMenu={(pos) => onOpenMenu(block, pos)}

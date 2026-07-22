@@ -115,6 +115,9 @@ function WeeklyPage() {
   const availability = useMemo(() => availQuery.data ?? [], [availQuery.data])
   const blocks = plan?.blocks ?? []
   const readOnly = isPastWeek(weekStartISO)
+  // Badge count = the unplaced LIST length (single source), not the per-week
+  // plan.unplacedCount (which is cached per week and can go stale — Thomas HIGH).
+  const unplacedCount = unplacedQuery.data?.length ?? 0
 
   const days = useMemo(() => weekDaysOf(weekStartISO), [weekStartISO])
   const range = useMemo(() => visibleRange(mode, availability), [mode, availability])
@@ -554,7 +557,7 @@ function WeeklyPage() {
           {/* FAB hides while the panel is open; reappears on close. */}
           <div className="pointer-events-auto">
             {!panelOpen && (
-              <PlanFab count={plan?.unplacedCount ?? 0} onClick={() => setPanelOpen(true)} />
+              <PlanFab count={unplacedCount} onClick={() => setPanelOpen(true)} />
             )}
           </div>
         </div>
@@ -603,7 +606,7 @@ function WeeklyPage() {
         open={panelOpen}
         panelRef={unplacedPanelRef}
         onClose={() => setPanelOpen(false)}
-        count={plan?.unplacedCount ?? 0}
+        count={unplacedCount}
         tasks={unplacedQuery.data ?? []}
         isLoading={unplacedQuery.isLoading}
         isError={unplacedQuery.isError}

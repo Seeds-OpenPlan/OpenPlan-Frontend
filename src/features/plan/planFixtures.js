@@ -154,12 +154,15 @@ function placedMinutesOf(taskId) {
 function placedRemainders() {
   const out = []
   for (const task of placedTaskData.values()) {
-    const remaining = (task.estimatedMinutes ?? 0) - placedMinutesOf(task.taskId)
+    const placed = placedMinutesOf(task.taskId)
+    const remaining = (task.estimatedMinutes ?? 0) - placed
     if (remaining >= 5) {
       out.push({
         ...task,
         estimatedMinutes: Math.round(remaining),
-        reason: '예정보다 짧게 배치되어 남은 시간이 있습니다',
+        // Only a PARTIALLY-placed task is a "placed shorter than planned"
+        // remainder; a fully-unplaced one (placed 0) is just a normal backlog item.
+        reason: placed > 0 ? '예정보다 짧게 배치되어 남은 시간이 있습니다' : null,
       })
     }
   }

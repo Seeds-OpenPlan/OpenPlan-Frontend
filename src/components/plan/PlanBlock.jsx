@@ -39,11 +39,15 @@ export function PlanBlock({
   disabled = false,
   dragActive = false,
   resizing = false,
+  pending = false, // optimistic block whose server id hasn't reconciled yet
   onPointerDown,
   onOpenMenu,
   onNudge,
   onResizeStart,
 }) {
+  // A pending (temp-id) block is shown but not yet interactable: acting on it
+  // before the POST resolves would target a non-existent server id (temp-id race).
+  const locked = disabled || pending
   const timeLabel = `${formatMinutesLabel(startMin)} - ${formatMinutesLabel(endMin)}`
   const typeClass = TYPE_CLASSES[block.blockType] ?? TYPE_CLASSES.TASK
   // Completed blocks read as done via a check + strikethrough + dimming, never by
@@ -64,15 +68,16 @@ export function PlanBlock({
   }
   const closeDetail = () => setDetail(null)
 
-  // Any pointerdown anywhere (notably a drag starting on another block) dismisses
-  // the card. During a drag the browser holds pointer capture and won't fire
-  // mouseleave, so without this a card opened just before the drag would linger
-  // as a "ghost" once the drag ends. setState runs in the listener callback (not
-  // the effect body), which the react-hooks rules permit.
+  // Any pointerdown anywhere (notably a drag/resize starting on another block)
+  // dismisses the card. During a drag the browser holds pointer capture and won't
+  // fire mouseleave, so without this a card opened just before would linger as a
+  // "ghost". CAPTURE phase so a handler that calls stopPropagation (the resize
+  // grips do) can't stop us from clearing. setState in the listener callback is
+  // allowed by the react-hooks rules.
   useEffect(() => {
     const clear = () => setDetail(null)
-    window.addEventListener('pointerdown', clear)
-    return () => window.removeEventListener('pointerdown', clear)
+    window.addEventListener('pointerdown', clear, true)
+    return () => window.removeEventListener('pointerdown', clear, true)
   }, [])
 
   const openMenuFromEvent = (e) => {
@@ -81,7 +86,7 @@ export function PlanBlock({
   }
 
   const handleKeyDown = (e) => {
-    if (disabled) return
+    if (locked) return
     switch (e.key) {
       case 'ArrowUp':
         e.preventDefault()
@@ -118,7 +123,7 @@ export function PlanBlock({
       aria-disabled={disabled || undefined}
       style={{ ...style, touchAction: 'none' }}
       onPointerDown={
-        disabled
+        locked
           ? undefined
           : (e) => {
               closeDetail()
@@ -134,6 +139,7 @@ export function PlanBlock({
         // Keep a block right-click on the block: don't let it bubble to the grid
         // body's empty-slot placement menu (ST-F1-03 PLAN-07).
         e.stopPropagation()
+        if (locked) return
         openMenuFromEvent(e)
       }}
       onKeyDown={handleKeyDown}
@@ -142,15 +148,16 @@ export function PlanBlock({
         'select-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
         typeClass,
         isDone ? 'opacity-60' : '',
-        disabled ? 'cursor-default' : 'cursor-grab',
+        locked ? 'cursor-default' : 'cursor-grab',
         dragging ? 'z-30 cursor-grabbing opacity-90 shadow-modal ring-2 ring-focus-ring' : 'z-10 shadow-card',
         resizing ? 'ring-2 ring-focus-ring' : '',
+        pending ? 'opacity-70' : '',
       ].join(' ')}
     >
       {/* A2 resize handles (top/bottom edge). Pointer-only; keyboard users edit
           time via the task/schedule form. onResizeStart stops propagation so it
           never starts a block MOVE. Group-hover reveals a subtle grip. */}
-      {onResizeStart && !disabled && !dragging && (
+      {onResizeStart && !locked && !dragging && (
         <>
           <span
             aria-hidden="true"
