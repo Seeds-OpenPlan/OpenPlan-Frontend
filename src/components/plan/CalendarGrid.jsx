@@ -143,6 +143,11 @@ export function CalendarGrid({
   onEmptySlot,
   onResizeCommit,
   onBlockDropOutside,
+  // ST-F1-05: { [planBlockId]: { severity, label, count } } — the validation
+  // marking for each violated block, and { planBlockId, token } naming the block
+  // the review panel most recently asked to focus (PLAN-23).
+  violationsByBlockId = null,
+  focusRequest = null,
   bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
 }) {
   const gridRef = useRef(null)
@@ -438,6 +443,10 @@ export function CalendarGrid({
                 dragActive={Boolean(dragState) || Boolean(placement) || Boolean(resizeState)}
                 resizing={resizeState?.planBlockId === block.planBlockId}
                 pending={String(block.planBlockId).startsWith('temp-')}
+                violation={violationsByBlockId?.[block.planBlockId] ?? null}
+                focusToken={
+                  focusRequest?.planBlockId === block.planBlockId ? focusRequest.token : null
+                }
                 style={style}
                 onPointerDown={(e) => onBlockPointerDown(e, block, dayIndex, startMin)}
                 onOpenMenu={(pos) => onOpenMenu(block, pos)}

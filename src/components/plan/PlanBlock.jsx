@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { formatMinutesLabel } from '../../features/plan/planTime'
 import { PX_PER_MIN } from '../../features/plan/planGeometry'
-import { CheckCircleIcon } from '../common/statusIcons'
+import { AlertTriangleIcon, CheckCircleIcon } from '../common/statusIcons'
+import { useReducedMotion } from '../../hooks/useReducedMotion'
 
 // Below this rendered height a block can't show its title legibly, so a
 // hover/focus detail card supplements it (readability aid — the block's
@@ -35,6 +36,37 @@ const TYPE_CLASSES = {
   SCHEDULE: 'bg-surface border-border text-text',
 }
 
+/*
+  Validation marking (ST-F1-05, layer 1 of the 3-layer display). A violated block
+  gets THREE independent signals so none of them is load-bearing on its own:
+  a diagonal stripe, a recolored border, and a labelled chip. The chip's text is
+  what actually communicates ("차단"/"경고" + count) — the stripe pattern
+  distinguishes the two severities for anyone who can't separate red from amber,
+  and the aria-label repeats it for screen readers (NFR-017: never color alone).
+
+  The stripe is painted as the element's own backgroundImage rather than an
+  absolutely-positioned overlay, because a positioned overlay paints ABOVE the
+  block's static text and would wash out the title.
+*/
+const VIOLATION_BORDER_CLASSES = {
+  blocking: 'border-danger-500',
+  warning: 'border-warning-500',
+}
+
+const VIOLATION_CHIP_CLASSES = {
+  blocking: 'bg-danger-600 text-white',
+  warning: 'bg-warning-600 text-white',
+}
+
+// Blocking = tight, high-contrast hatch; warning = wider, softer hatch. The two
+// patterns are distinguishable in greyscale.
+const VIOLATION_STRIPES = {
+  blocking:
+    'repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-danger-600) 20%, transparent) 0, color-mix(in srgb, var(--color-danger-600) 20%, transparent) 4px, transparent 4px, transparent 9px)',
+  warning:
+    'repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-warning-600) 18%, transparent) 0, color-mix(in srgb, var(--color-warning-600) 18%, transparent) 3px, transparent 3px, transparent 14px)',
+}
+
 export function PlanBlock({
   block,
   style,
@@ -46,6 +78,13 @@ export function PlanBlock({
   dragActive = false,
   resizing = false,
   pending = false, // optimistic block whose server id hasn't reconciled yet
+  // { severity: 'blocking'|'warning', label, count } — the worst violation on
+  // this block plus how many it has in total; null when the block is clean.
+  violation = null,
+  // Changes to a new number each time the review panel targets THIS block
+  // (PLAN-23). The value itself is meaningless — only the change matters, which
+  // is what lets the same block be re-focused repeatedly.
+  focusToken = null,
   onPointerDown,
   onOpenMenu,
   onNudge,
@@ -59,6 +98,34 @@ export function PlanBlock({
   // Completed blocks read as done via a check + strikethrough + dimming, never by
   // color alone (PLAN-13 AC-2, NFR-017).
   const isDone = block.status === 'COMPLETED'
+  const violationLabel = violation
+    ? `${violation.label} ${violation.count > 1 ? `${violation.count}건` : ''}`.trim()
+    : null
+
+  const rootRef = useRef(null)
+  const reducedMotion = useReducedMotion()
+
+  /*
+    PLAN-23: bring this block into view and give it keyboard focus when the review
+    panel selects one of its issues. Both happen HERE (not in the panel) because
+    only the block knows its own DOM node — the panel just names a target.
+
+    `scrollIntoView` walks every scrollable ancestor, which is what we want: the
+    grid body scrolls vertically, its wrapper scrolls horizontally on narrow
+    screens, and the page may need to scroll too. `preventScroll` on focus stops
+    the browser from doing a second, competing scroll of its own.
+  */
+  useEffect(() => {
+    if (focusToken == null) return
+    const el = rootRef.current
+    if (!el) return
+    el.scrollIntoView({
+      block: 'center',
+      inline: 'nearest',
+      behavior: reducedMotion ? 'auto' : 'smooth',
+    })
+    el.focus({ preventScroll: true })
+  }, [focusToken, reducedMotion])
 
   // Detail card for short blocks: anchored to the block's on-screen rect and
   // rendered in a portal so the grid's overflow can't clip it.
@@ -123,11 +190,19 @@ export function PlanBlock({
   return (
     <>
     <div
+      ref={rootRef}
       role="button"
       tabIndex={disabled ? -1 : 0}
-      aria-label={`${block.title}, ${timeLabel}${isDone ? ', 완료' : ''}${disabled ? ', 읽기 전용' : ''}`}
+      aria-label={`${block.title}, ${timeLabel}${isDone ? ', 완료' : ''}${
+        violationLabel ? `, ${violationLabel}` : ''
+      }${disabled ? ', 읽기 전용' : ''}`}
       aria-disabled={disabled || undefined}
-      style={{ ...style, touchAction: 'none' }}
+      style={{
+        ...style,
+        // Stripe painted into the block's own background — see VIOLATION_STRIPES.
+        ...(violation ? { backgroundImage: VIOLATION_STRIPES[violation.severity] } : null),
+        touchAction: 'none',
+      }}
       onPointerDown={
         locked
           ? undefined
@@ -153,6 +228,7 @@ export function PlanBlock({
         'absolute overflow-hidden rounded-control border p-1.5 text-caption',
         'select-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
         typeClass,
+        violation ? VIOLATION_BORDER_CLASSES[violation.severity] : '',
         isDone ? 'opacity-60' : '',
         locked ? 'cursor-default' : 'cursor-grab',
         dragging ? 'z-30 cursor-grabbing opacity-90 shadow-modal ring-2 ring-focus-ring' : 'z-10 shadow-card',
@@ -183,11 +259,54 @@ export function PlanBlock({
           </span>
         </>
       )}
-      <span className="block leading-tight text-[0.65rem] opacity-80">{timeLabel}</span>
+      {/* Time + violation chip share one row so the chip costs no extra height on
+          short blocks; the time truncates first because the chip carries the more
+          urgent information. */}
+      <span className="flex items-center gap-1 leading-tight text-[0.65rem]">
+        <span className="truncate opacity-80">{timeLabel}</span>
+        {violation && (
+          <span
+            className={[
+              'ml-auto inline-flex shrink-0 items-center gap-0.5 rounded-chip px-1 py-px',
+              'text-[0.6rem] font-bold',
+              VIOLATION_CHIP_CLASSES[violation.severity],
+            ].join(' ')}
+          >
+            <AlertTriangleIcon size={9} />
+            {violationLabel}
+          </span>
+        )}
+      </span>
       <span className="mt-0.5 flex items-start gap-1 font-medium leading-tight">
         {isDone && <CheckCircleIcon className="mt-px shrink-0 text-success-600" size={12} />}
         <span className={`line-clamp-3 ${isDone ? 'line-through' : ''}`}>{block.title}</span>
       </span>
+
+      {/* PLAN-23 highlight, keyed so re-selecting the SAME block restarts it.
+          Programmatic .focus() does not reliably match :focus-visible, so this
+          ring — not the focus outline — is what actually points the eye at the
+          block. Under reduced motion the ring stays STATIC instead of pulsing:
+          dropping it entirely would leave those users with no visible signal at
+          all, and the global reduced-motion rule would have collapsed the
+          animation to its invisible end state anyway.
+
+          The animated variant starts at `opacity-0` because a CSS animation
+          reverts to the element's BASE style when it finishes — without this the
+          ring would fade in, pulse twice, and then sit there permanently at full
+          opacity. Either way the page clears `focusRequest` shortly after
+          (FOCUS_HIGHLIGHT_MS), which is what takes the static ring down too. */}
+      {focusToken != null && (
+        <span
+          key={focusToken}
+          aria-hidden="true"
+          className={[
+            'pointer-events-none absolute inset-0 z-20 rounded-control ring-2 ring-focus-ring',
+            reducedMotion
+              ? ''
+              : 'opacity-0 animate-[block-focus-pulse_var(--duration-slow)_var(--ease-standard)_2]',
+          ].join(' ')}
+        />
+      )}
 
       {dragging && boundary && (
         <span className="absolute inset-x-1 bottom-1 rounded bg-brand-600 px-1 py-0.5 text-center text-[0.6rem] font-semibold text-white">

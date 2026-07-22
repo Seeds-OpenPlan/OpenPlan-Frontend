@@ -11,6 +11,7 @@
 
 import { apiClient } from '../../api/client'
 import { mockBackend } from './planFixtures'
+import { UNSPECIFIED_CONFLICT_CODE, violationSeverity } from './violationMessages'
 
 // Run the real call; in DEV, fall back to the mock ONLY for genuine network
 // failures (no server). Any real HTTP error (4xx/5xx) propagates unchanged so
@@ -123,5 +124,148 @@ export function deleteBlock(planBlockId) {
   return withDevFallback(
     () => apiClient.delete(`/plan-blocks/${planBlockId}`),
     () => mockBackend.deleteBlock(planBlockId),
+  )
+}
+
+// --- ST-F1-05: validation dry-run · week confirm --------------------------------
+
+// Envelope keys that are structure, not copy variables. Everything NOT in here
+// becomes a `params` entry, so a rule that starts sending a new variable needs no
+// adapter change — only the catalog message that reads it.
+const ISSUE_STRUCTURE_KEYS = new Set([
+  'id',
+  'issueId',
+  'code',
+  'rule',
+  'ruleCode',
+  'severity',
+  'targetBlockIds',
+  'target_block_ids',
+  'blockIds',
+  'block_ids',
+  'planBlockId',
+  'params',
+])
+
+/**
+ * Normalize one validation issue. The response shape is only pinned down to
+ * "issues: []" by the spec, so this adapter is deliberately tolerant: it accepts
+ * either an explicit `params` object or the copy variables spread at the top
+ * level, and either a single target id or a list. Everything the copy catalog
+ * needs ends up under `params`; everything the UI needs to point at a block ends
+ * up in `targetBlockIds`.
+ *
+ * `severity` is resolved through the catalog — for a KNOWN code the client's
+ * table wins so the save gate is deterministic; an unknown code keeps the
+ * server's severity (see violationMessages.js).
+ */
+function normalizeIssue(raw, index) {
+  const code = raw.code ?? raw.rule ?? raw.ruleCode ?? 'UNKNOWN'
+  const rawTargets =
+    raw.targetBlockIds ??
+    raw.target_block_ids ??
+    raw.blockIds ??
+    raw.block_ids ??
+    (raw.planBlockId ? [raw.planBlockId] : [])
+  // Array.isArray guard, not a bare .filter: a server sending a single id as a
+  // STRING (or an object) would otherwise throw here, and a throw in this
+  // adapter turns a perfectly good validation response into a "검증 실패", which
+  // is the one state where the gate has the least information to work with.
+  const targetBlockIds = Array.isArray(rawTargets)
+    ? rawTargets.filter(Boolean)
+    : [rawTargets].filter((id) => typeof id === 'string' && id.length > 0)
+  const params =
+    raw.params ??
+    Object.fromEntries(Object.entries(raw).filter(([key]) => !ISSUE_STRUCTURE_KEYS.has(key)))
+  return {
+    // A stable key for the list. The server may not send an id, so a code+index
+    // composite is the fallback — issues are re-created wholesale per dry-run,
+    // never patched in place, so index stability within one response is enough.
+    id: raw.id ?? raw.issueId ?? `${code}-${index}`,
+    code,
+    severity: violationSeverity(code, raw.severity),
+    targetBlockIds,
+    params,
+  }
+}
+
+/**
+ * Normalize a `{ issues }` payload into what the UI consumes. Exported because
+ * the SAME shape arrives by two routes: the dry-run response, and a save 409's
+ * `details.issues` (AC-4) — both must produce identical panel rows and counts.
+ *
+ * The counts are DERIVED here rather than read from the payload: the spec does
+ * not promise them, and deriving keeps them consistent with the client-side
+ * severity table that the save gate uses.
+ */
+export function normalizeValidationPayload(payload) {
+  const issues = (payload?.issues ?? []).map(normalizeIssue)
+  return {
+    issues,
+    blockingCount: issues.filter((i) => i.severity === 'blocking').length,
+    warningCount: issues.filter((i) => i.severity !== 'blocking').length,
+  }
+}
+
+/**
+ * OP-PLAN-VALIDATE → POST /weekly-plans/{weeklyPlanId}/validation-issues (dry-run;
+ * writes nothing). Body carries the LOCAL block set so the check reflects the
+ * user's unsaved draft, not the last persisted plan.
+ *
+ * ENDPOINT NOTE: the FE-1 작업지시 writes this as `.../validations`; the BE 명세서
+ * (07번) says `.../validation-issues` and that spec is authoritative.
+ *
+ * STATUS BRANCHES ARE RESULTS, NOT FAILURES. The spec lists 200 검증 통과 · 206
+ * 일부 블록만 통과 · 409 일정 충돌 발견 as three outcomes of the SAME successful check.
+ * axios resolves 2xx only, so 200/206 arrive here normally but 409 arrives as a
+ * rejection — and rejecting it would be a silent, dangerous mistranslation: the
+ * caller treats a rejection as "검증 못 함", keeps its last known counts (often
+ * zero) and leaves the save button enabled. A 409 means the OPPOSITE of clean, so
+ * it is converted back into a result here:
+ *   409 + details.issues → those issues, exactly like a 200 body
+ *   409 without issues   → one UNSPECIFIED_CONFLICT_CODE issue, which is blocking,
+ *                          so the gate closes even though nothing can be pointed at
+ * Every other status still rejects and is handled as a genuine failure upstream.
+ */
+export function validatePlan(weeklyPlanId, blocks) {
+  const body = {
+    blocks: (blocks ?? []).map((b) => ({
+      planBlockId: b.planBlockId,
+      blockType: b.blockType,
+      title: b.title,
+      taskId: b.taskId ?? null,
+      scheduleId: b.scheduleId ?? null,
+      startAt: b.startAt,
+      endAt: b.endAt,
+      status: b.status,
+    })),
+  }
+  return withDevFallback(
+    () => apiClient.post(`/weekly-plans/${weeklyPlanId}/validation-issues`, body),
+    () => mockBackend.validatePlan(weeklyPlanId, body.blocks),
+  ).then(normalizeValidationPayload, (error) => {
+    if (error?.status !== 409) throw error
+    const issues = error?.details?.issues
+    return normalizeValidationPayload({
+      issues: Array.isArray(issues) ? issues : [{ code: UNSPECIFIED_CONFLICT_CODE }],
+    })
+  })
+}
+
+/**
+ * OP-PLAN-SAVEWEEK → PUT /weekly-plans/{weeklyPlanId} with status:"CONFIRMED"
+ * (PLAN-03 저장/확정). Returns { weeklyPlanId }.
+ *
+ * ENDPOINT NOTE: the FE-1 작업지시 writes this as POST `.../confirmation`; the BE
+ * 명세서 (07번) says PUT `/weekly-plans/{id}` and that spec is authoritative. The
+ * 작업지시's AC-4 "확정 409 E-PLAN-004(레이스)" maps onto this endpoint's documented
+ * 409 (최신 주간 계획 버전과 충돌) — the caller re-syncs the review panel from the
+ * error's `details.issues`, or re-runs the dry-run when the body carries none.
+ */
+export function saveWeek(weeklyPlanId, { weekStartDate, weekEndDate, totalPlannedMinutes }) {
+  const body = { weekStartDate, weekEndDate, totalPlannedMinutes, status: 'CONFIRMED' }
+  return withDevFallback(
+    () => apiClient.put(`/weekly-plans/${weeklyPlanId}`, body),
+    () => mockBackend.saveWeek(weeklyPlanId, body),
   )
 }

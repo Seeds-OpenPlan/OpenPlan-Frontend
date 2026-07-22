@@ -169,6 +169,27 @@
   }
 }
 
+/*
+  PLAN-23 "항목 → 블록" highlight. The panel moves focus to the block; this pulse
+  is the SECOND, non-focus signal that says "this one" — run exactly twice so it
+  reads as an announcement, not an ongoing state.
+
+  This animation has NO fill-mode, so when it finishes the element falls back to
+  its base style: PlanBlock therefore gives the animated ring a base of
+  `opacity-0` (otherwise a finished pulse leaves a permanently visible ring), and
+  WeeklyPage additionally clears the focus request a moment later. Under
+  prefers-reduced-motion PlanBlock renders the ring static instead of animating.
+*/
+@keyframes block-focus-pulse {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 /* Toast entrance: rises and fades in. */
 @keyframes toast-rise {
   from {

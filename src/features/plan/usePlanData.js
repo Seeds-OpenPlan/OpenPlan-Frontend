@@ -10,14 +10,23 @@
   - useSaveAvailability: PUT availabilities then invalidate (PLAN-32).
 */
 
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { deleteBlock, getAvailability, getWeek, patchBlock, putAvailabilities } from './planApi'
+import {
+  deleteBlock,
+  getAvailability,
+  getWeek,
+  normalizeValidationPayload,
+  patchBlock,
+  putAvailabilities,
+  saveWeek,
+  validatePlan,
+} from './planApi'
 import {
   getUnplacedTasks,
   patchTaskStatus,
@@ -608,5 +617,202 @@ export function useUpdateSchedule() {
       toast({ tone: 'success', message: '일정을 수정했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+// --- ST-F1-05: validation dry-run loop · week confirm ------------------------
+
+// Local edits settle in bursts (a drag emits many optimistic writes); 300ms is
+// the story's own figure (AC-1) and leaves ~700ms of the 1s budget (NFR-025) for
+// the round trip and the re-render.
+export const VALIDATION_DEBOUNCE_MS = 300
+
+const EMPTY_VALIDATION = { issues: [], blockingCount: 0, warningCount: 0 }
+
+// A result that was never computed for the block set on screen. `signature: null`
+// can never equal a real signature, which is what makes `stale` true.
+const NO_RESULT = { planId: null, signature: null, ...EMPTY_VALIDATION, delayed: false }
+
+// What the dry-run actually depends on. A refetch hands back a NEW array with
+// identical contents on every invalidate, so comparing content — not identity —
+// is what stops the loop from firing a request per background refetch.
+function blockSignature(weeklyPlanId, blocks) {
+  const parts = (blocks ?? [])
+    .map((b) => `${b.planBlockId}@${b.startAt}~${b.endAt}#${b.blockType}#${b.status}`)
+    .sort()
+  return `${weeklyPlanId}|${parts.join(',')}`
+}
+
+/**
+ * The validation dry-run loop (AC-1): local block change → 300ms debounce → POST
+ * validation-issues → badges, block marks and the review panel all update from
+ * ONE result object.
+ *
+ * Deliberately NOT a useQuery: this is a POST whose body is the local draft, it
+ * must never be cached or auto-retried, and — most importantly — the previous
+ * result has to SURVIVE a failure. TanStack would surface an error state; the AC
+ * requires the last good result to stay on screen with a "검증 지연" marker
+ * instead, because a plan silently showing zero violations is worse than a plan
+ * showing slightly stale ones.
+ *
+ * Out-of-order responses are the real hazard here (this codebase has already
+ * been bitten by a late response overwriting a newer one — see useMoveBlock's
+ * header). Every run takes a sequence number and only the CURRENT one is allowed
+ * to write state, so a slow early dry-run that lands after a fast later one is
+ * discarded rather than resurrecting stale violations.
+ *
+ * DISPLAY AND GATE ARE TWO DIFFERENT QUESTIONS, and this hook answers both
+ * separately. "Keep showing the last result on failure" (AC-1) is a DISPLAY rule;
+ * reusing it as the SAVE rule would mean a plan is judged safe by a check that
+ * never ran on it. So the result carries the `signature` of the block set it was
+ * computed FROM, and `stale` compares that against the block set on screen right
+ * now. Anything the counts cannot vouch for — first load, the debounce window,
+ * an in-flight request, a failed one — makes `stale` true while the badges and
+ * the panel keep showing the last thing we did know.
+ *
+ * @param {{weeklyPlanId?: string, blocks: Array, enabled?: boolean}} args
+ *   `blocks` must be referentially stable across renders that didn't change it
+ *   (the caller memoizes it), otherwise the debounce is rescheduled forever.
+ */
+export function usePlanValidation({ weeklyPlanId, blocks, enabled = true }) {
+  // planId is stored WITH the result so a week change invalidates it by
+  // comparison during render — no reset effect, no setState-in-effect.
+  const [state, setState] = useState(NO_RESULT)
+  const [inFlight, setInFlight] = useState(false)
+  const seqRef = useRef(0)
+  const lastSignatureRef = useRef(null)
+
+  // The block set as it stands RIGHT NOW. Recomputed only when the memoized
+  // `blocks` identity changes, and compared against the signature the current
+  // result was computed from.
+  const currentSignature = useMemo(
+    () => blockSignature(weeklyPlanId, blocks),
+    [weeklyPlanId, blocks],
+  )
+
+  const runValidation = useCallback(
+    (blocksToCheck, signature) => {
+      if (!weeklyPlanId) return
+      seqRef.current += 1
+      const seq = seqRef.current
+      setInFlight(true)
+      validatePlan(weeklyPlanId, blocksToCheck)
+        .then((next) => {
+          if (seq !== seqRef.current) return // a newer run already answered
+          // Stamp the result with WHAT it was computed from — that stamp is the
+          // whole basis of `stale`, and therefore of the save gate.
+          setState({ planId: weeklyPlanId, signature, ...next, delayed: false })
+        })
+        .catch(() => {
+          if (seq !== seqRef.current) return
+          // Keep the last good result VISIBLE; its signature stays whatever it
+          // was, so it can no longer vouch for the current blocks and the gate
+          // closes on its own.
+          setState((prev) => ({ ...prev, delayed: true }))
+          // Forget the signature we just failed on, so the next time the blocks
+          // arrive (any edit, or the background refetch another mutation
+          // triggers) counts as "changed" and the loop retries by itself. Without
+          // this, one failed dry-run would freeze the badges until the user
+          // happened to edit something.
+          lastSignatureRef.current = null
+        })
+        .finally(() => {
+          // Only the newest run owns this flag; an older one finishing later must
+          // not declare the newer one done.
+          if (seq === seqRef.current) setInFlight(false)
+        })
+    },
+    [weeklyPlanId],
+  )
+
+  useEffect(() => {
+    if (!enabled || !weeklyPlanId) return undefined
+    const timer = setTimeout(() => {
+      if (currentSignature === lastSignatureRef.current) return
+      lastSignatureRef.current = currentSignature
+      runValidation(blocks, currentSignature)
+    }, VALIDATION_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [enabled, weeklyPlanId, blocks, currentSignature, runValidation])
+
+  /** Force a run regardless of the signature (used after a save conflict). */
+  const revalidate = useCallback(
+    (currentBlocks) => {
+      lastSignatureRef.current = null
+      runValidation(currentBlocks, blockSignature(weeklyPlanId, currentBlocks))
+    },
+    [runValidation, weeklyPlanId],
+  )
+
+  /**
+   * Adopt issues the SERVER handed us outside the dry-run — the 409 save
+   * conflict's `details.issues` (AC-4). Bumping the sequence first means an
+   * in-flight dry-run started before the save can't overwrite them.
+   *
+   * The adopted result is stamped `signature: null` ON PURPOSE. These issues
+   * describe the SERVER's newer version of the week, not the block set on this
+   * screen, so they may show what is wrong but must not be allowed to certify
+   * anything as savable — `stale` stays true until a real dry-run runs.
+   */
+  const applyServerIssues = useCallback(
+    (issues) => {
+      seqRef.current += 1
+      lastSignatureRef.current = null
+      setInFlight(false)
+      setState({
+        planId: weeklyPlanId,
+        signature: null,
+        ...normalizeValidationPayload({ issues }),
+        delayed: false,
+      })
+    },
+    [weeklyPlanId],
+  )
+
+  // A result from a different week is simply not ours (week nav is instant, the
+  // dry-run is not).
+  const isCurrent = state.planId === weeklyPlanId && weeklyPlanId != null
+  return {
+    issues: isCurrent ? state.issues : EMPTY_VALIDATION.issues,
+    blockingCount: isCurrent ? state.blockingCount : 0,
+    warningCount: isCurrent ? state.warningCount : 0,
+    // "검증 지연": the last dry-run didn't answer, so what's shown may be behind.
+    delayed: isCurrent ? state.delayed : false,
+    hasResult: isCurrent,
+    /*
+      The gate input. True whenever the counts above cannot be trusted to
+      describe the blocks currently on screen:
+        !isCurrent                 — nothing validated for this week yet
+        delayed                    — the last attempt failed; the result predates it
+        inFlight                   — an answer is on its way; this one is superseded
+        signature mismatch         — edited since (covers the debounce window, the
+                                     optimistic-update gap, and server-supplied issues)
+      Display never reads this — only the save gate does.
+    */
+    stale:
+      !isCurrent || state.delayed || inFlight || state.signature !== currentSignature,
+    revalidate,
+    applyServerIssues,
+  }
+}
+
+/**
+ * PUT /weekly-plans/{id} with status CONFIRMED — PLAN-03 저장. Success invalidates
+ * the week (the server may renumber/adjust on confirm) and announces it.
+ *
+ * No onError here ON PURPOSE: the save's failure branches are not generic. A 409
+ * has to re-sync the review panel and restore the disabled save button (AC-4),
+ * which needs the validation handle the CALLER owns, so the caller passes its own
+ * onError to `mutate`.
+ */
+export function useSaveWeek() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ weeklyPlanId, weekStartDate, weekEndDate, totalPlannedMinutes }) =>
+      saveWeek(weeklyPlanId, { weekStartDate, weekEndDate, totalPlannedMinutes }),
+    onSuccess: (_data, { weekStartISO }) => {
+      queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
+      toast({ tone: 'success', message: '주간 계획을 저장했습니다' })
+    },
   })
 }
