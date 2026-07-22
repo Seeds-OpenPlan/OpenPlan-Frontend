@@ -29,6 +29,10 @@ const DRAG_THRESHOLD_PX = 4
 export function usePlacementDrag({ resolveSlot, onDrop }) {
   // { task, point:{x,y}, slot, active } | null. `active` gates a drag vs. a click.
   const [drag, setDrag] = useState(null)
+  // Mirrors `drag` for a synchronous read in `up()` below (see BUG FIX note) —
+  // this is plain mutable data, not React state, so reading/writing it has no
+  // purity requirement the way a setState updater argument does.
+  const dragRef = useRef(null)
 
   // Read latest callbacks through refs so a drag started earlier still uses the
   // current geometry/handler without re-binding the window listeners mid-drag.
@@ -44,32 +48,49 @@ export function usePlacementDrag({ resolveSlot, onDrop }) {
     if (e.button != null && e.button !== 0) return
     e.preventDefault()
     const start = { x: e.clientX, y: e.clientY }
-    setDrag({ task, point: start, slot: null, active: false })
+    const initial = { task, point: start, slot: null, active: false }
+    dragRef.current = initial
+    setDrag(initial)
 
     const move = (ev) => {
       const point = { x: ev.clientX, y: ev.clientY }
       const moved = Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y)
       const slot = resolveRef.current ? resolveRef.current(point) : null
-      setDrag((d) =>
-        d ? { ...d, point, slot, active: d.active || moved >= DRAG_THRESHOLD_PX } : d,
-      )
+      setDrag((d) => {
+        if (!d) return d
+        const next = { ...d, point, slot, active: d.active || moved >= DRAG_THRESHOLD_PX }
+        dragRef.current = next
+        return next
+      })
     }
     const cleanup = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       window.removeEventListener('pointercancel', cancel)
     }
+    // BUG FIX (placement fired twice per drop -> a permanently-stuck `temp-`
+    // ghost block, see usePlanData.js's usePlaceTask): this used to read
+    // `d.active`/`d.task` and call `onDropRef.current(...)` — a side effect —
+    // FROM INSIDE the `setDrag(d => {...})` functional updater. State updater
+    // functions must be pure; React 19 Strict Mode (main.jsx) deliberately
+    // double-invokes them in dev to catch exactly this, so a single physical
+    // drop fired the mutation-triggering onDrop (hence usePlaceTask's optimistic
+    // add + POST) TWICE. Fixed by reading the drag state synchronously from
+    // `dragRef` (plain data, no purity constraint) and calling the side effect
+    // as an ordinary statement, THEN clearing state with a plain (non-function)
+    // value — the same shape usePlanDrag's handleUp already uses safely.
     const up = (ev) => {
       cleanup()
+      const d = dragRef.current
       const slot = resolveRef.current ? resolveRef.current({ x: ev.clientX, y: ev.clientY }) : null
-      setDrag((d) => {
-        // Only a moved drag is a drop; a pure click leaves the task in the panel.
-        if (d && d.active) onDropRef.current(d.task, slot)
-        return null
-      })
+      // Only a moved drag is a drop; a pure click leaves the task in the panel.
+      if (d && d.active) onDropRef.current(d.task, slot)
+      dragRef.current = null
+      setDrag(null)
     }
     const cancel = () => {
       cleanup()
+      dragRef.current = null
       setDrag(null)
     }
 

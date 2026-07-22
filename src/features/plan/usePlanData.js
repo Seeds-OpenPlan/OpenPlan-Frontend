@@ -10,7 +10,7 @@
   - useSaveAvailability: PUT availabilities then invalidate (PLAN-32).
 */
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import {
   keepPreviousData,
   useMutation,
@@ -211,17 +211,46 @@ export function useUnplacedTasks(projectId = null) {
  * See useMoveBlock's header for the stale-refetch race this hook also guards
  * against via `cancelQueries` (a re-move right after placement was the repro
  * that surfaced it — the block would appear to duplicate/jump).
+ *
+ * BUG FIX (re-entrant placement leaves a permanently-stuck `temp-` ghost): a
+ * single physical drop must call this EXACTLY once, but nothing here enforced
+ * that — the optimistic write below is an unconditional array append with no
+ * check for a placement of the SAME task already in flight. The concrete
+ * trigger (found via an actual query-core repro, not guesswork): the caller,
+ * usePlacementDrag's `up()` handler, called this from INSIDE a
+ * `setDrag((d) => { onDropRef.current(d.task, slot); return null })` functional
+ * updater — a side effect inside a state updater, which React 19 Strict Mode
+ * (enabled in main.jsx) deliberately double-invokes in dev
+ * (react-dom-client.development.js `shouldDoubleInvokeUserFnsInHooksDEV`) to
+ * surface exactly this class of impurity. That call site is now fixed too, but
+ * this hook must not rely on every future caller getting that right — a
+ * re-entrant call for a task whose placement hasn't settled yet (POST still in
+ * flight) is guarded here unconditionally: `inFlightRef` tracks temp ids
+ * currently being placed and turns a repeat call into a no-op, so the temp
+ * entry's lifecycle stays deterministic (exactly one optimistic entry, exactly
+ * one POST) no matter how many times placement is re-triggered. A LATER,
+ * genuinely separate placement of the same task (e.g. re-placing an A4
+ * remainder after the first one fully reconciled) is unaffected — the guard
+ * only blocks a call that overlaps a STILL-PENDING one for the same task.
  */
 export function usePlaceTask() {
   const queryClient = useQueryClient()
+  const inFlightRef = useRef(new Set())
 
   return useCallback(
     ({ weeklyPlanId, weekStartISO, task, startAt, endAt }) => {
       const weekKey = weekPlanKey(weekStartISO)
-      const prevWeek = queryClient.getQueryData(weekKey)
       // A client-only temp id until the POST returns the real planBlockId; the
       // follow-up invalidate reconciles it away.
       const tempId = `temp-${task.taskId}`
+
+      // Re-entrant guard (see BUG FIX note above): a placement for this exact
+      // task is already in flight — skip instead of appending a second temp
+      // entry / firing a second POST.
+      if (inFlightRef.current.has(tempId)) return
+      inFlightRef.current.add(tempId)
+
+      const prevWeek = queryClient.getQueryData(weekKey)
 
       // Cancel stale in-flight refetches for both keys we're about to write
       // optimistically (see useMoveBlock's header).
@@ -298,6 +327,10 @@ export function usePlaceTask() {
           toast({ tone: 'error', message: systemMessages.error.writeTitle })
         })
         .finally(() => {
+          // Release the guard on EVERY path (success, failure, or a soft no-op
+          // reconcile) so a genuinely later placement of this same task is never
+          // permanently blocked.
+          inFlightRef.current.delete(tempId)
           queryClient.invalidateQueries({ queryKey: weekKey })
           queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
         })
