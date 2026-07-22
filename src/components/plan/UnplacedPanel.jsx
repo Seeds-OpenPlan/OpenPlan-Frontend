@@ -6,6 +6,7 @@ import { ErrorState } from '../common/ErrorState'
 import { Skeleton } from '../common/Skeleton'
 import { UnplacedTaskCard } from './UnplacedTaskCard'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useReducedMotion } from '../../hooks/useReducedMotion'
 
 /*
   Unplaced-task panel (ST-F1-03 PLAN-05). Same content in two shells (§R):
@@ -146,6 +147,7 @@ const DEFAULT_POS = { right: 24, top: 96 } // px offset from the top-RIGHT corne
 
 export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
   const isDesktop = useIsDesktop()
+  const reducedMotion = useReducedMotion()
 
   // Desktop panel is a movable floating card (so it never permanently covers the
   // Sunday column). Position is stored as an offset from the top-RIGHT corner so
@@ -186,8 +188,6 @@ export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [open, isDesktop, onClose])
 
-  if (!open) return null
-
   const header = (
     <div className="flex items-center justify-between">
       <h2 id={PANEL_TITLE_ID} className="text-title font-semibold text-text">
@@ -205,6 +205,7 @@ export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
   )
 
   if (!isDesktop) {
+    if (!open) return null
     return (
       <BottomSheet open={open} onClose={onClose} labelledById={PANEL_TITLE_ID}>
         <div className="flex max-h-[70vh] flex-col gap-4">
@@ -215,6 +216,11 @@ export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
     )
   }
 
+  // Desktop panel is ALWAYS mounted so open/close can animate. It stays at its
+  // resting position (right/top offset) and animates IN PLACE — a fade + subtle
+  // scale from the top-right corner — rather than sliding across the screen (which
+  // read as a wrong position + a close flicker). When closed it's transparent,
+  // non-interactive, and inert (unfocusable).
   const p = pos ?? DEFAULT_POS
   const panelStyle = {
     width: PANEL_WIDTH,
@@ -225,10 +231,20 @@ export function UnplacedPanel({ open, onClose, count = 0, ...bodyProps }) {
     // same distance from the right edge (it never slides off screen).
     right: p.right,
     top: p.top,
+    transformOrigin: 'top right',
+    transform: open ? 'scale(1)' : 'scale(0.97)',
+    opacity: open ? 1 : 0,
+    pointerEvents: open ? undefined : 'none',
+    // Transition ONLY opacity/transform — never right/top — so dragging the panel
+    // stays instant (a transition on position would lag the drag).
+    transition: reducedMotion ? 'none' : 'opacity 180ms ease-out, transform 180ms ease-out',
   }
   return createPortal(
     <aside
       aria-labelledby={PANEL_TITLE_ID}
+      aria-hidden={!open}
+      // inert (React 19) blocks focus/interaction while closed.
+      {...(open ? {} : { inert: '' })}
       style={panelStyle}
       className="fixed z-40 flex max-h-[72vh] flex-col gap-3 rounded-card border border-border p-4 shadow-modal backdrop-blur-md"
     >

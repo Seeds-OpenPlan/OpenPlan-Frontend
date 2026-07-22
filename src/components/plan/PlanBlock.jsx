@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { formatMinutesLabel } from '../../features/plan/planTime'
 import { PX_PER_MIN } from '../../features/plan/planGeometry'
@@ -57,6 +57,17 @@ export function PlanBlock({
     setDetail({ left: r.left, top: r.bottom + 4 })
   }
   const closeDetail = () => setDetail(null)
+
+  // Any pointerdown anywhere (notably a drag starting on another block) dismisses
+  // the card. During a drag the browser holds pointer capture and won't fire
+  // mouseleave, so without this a card opened just before the drag would linger
+  // as a "ghost" once the drag ends. setState runs in the listener callback (not
+  // the effect body), which the react-hooks rules permit.
+  useEffect(() => {
+    const clear = () => setDetail(null)
+    window.addEventListener('pointerdown', clear)
+    return () => window.removeEventListener('pointerdown', clear)
+  }, [])
 
   const openMenuFromEvent = (e) => {
     const rect = e.currentTarget.getBoundingClientRect()

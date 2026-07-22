@@ -273,6 +273,12 @@ function WeeklyPage() {
     setSlotMenu(null)
   }
 
+  const goToThisWeek = () => {
+    setWeekStartISO(currentWeekStartISO())
+    setAutoDraft(null)
+    setSlotMenu(null)
+  }
+
   // --- save (PLAN-03: this story owns the undo-stack reset) -----------------
 
   const handleSave = () => {
@@ -309,8 +315,10 @@ function WeeklyPage() {
       <section className="relative flex flex-col gap-3 rounded-card border border-border bg-surface p-3 md:p-4">
         <WeekNav
           weekStartISO={weekStartISO}
+          isCurrentWeek={weekStartISO === currentWeekStartISO()}
           onPrev={() => goToWeek(-1)}
           onNext={() => goToWeek(1)}
+          onToday={goToThisWeek}
         />
 
         <SummaryBar
