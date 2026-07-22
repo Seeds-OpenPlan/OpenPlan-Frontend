@@ -8,14 +8,14 @@
 import { MINUTES_PER_DAY, snapMinutes, WEEKDAY_KEYS } from './planTime'
 
 // One hour of vertical space. Blocks and the hour ruler both derive from this.
-// 112 (was 56): short blocks were rendering too low to show their title without
-// leaning on the hover/focus detail card (PlanBlock's SHORT_BLOCK_PX threshold)
-// — doubling the scale is the primary fix, not a bigger popover. Every other
-// geometry helper here (rangeHeightPx, blockRect, pxToMinutes) and every
-// consumer (CalendarGrid's scroll-offset math, usePlanDrag's px→min drag delta)
-// derives from PX_PER_MIN, so they all scale automatically; nothing else in
-// this file needed a matching numeric change.
-export const HOUR_PX = 112
+// Tuned by eye against the 62vh grid body: 56 left short blocks unreadable, 112
+// only fit ~4 hours on screen, 75 shows ~6 hours while still giving a short block
+// enough height to render its title without leaning on the hover detail card
+// (PlanBlock's SHORT_BLOCK_PX threshold). Every other geometry helper here
+// (rangeHeightPx, blockRect, pxToMinutes) and every consumer (CalendarGrid's
+// scroll-offset math, usePlanDrag's px→min drag delta) derives from PX_PER_MIN,
+// so they all scale automatically; nothing else needs a matching change.
+export const HOUR_PX = 75
 export const PX_PER_MIN = HOUR_PX / 60
 
 /**

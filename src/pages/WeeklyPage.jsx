@@ -38,6 +38,7 @@ import {
 import { usePlacementDrag } from '../features/plan/usePlacementDrag'
 import { resolveGridSlot, visibleRange } from '../features/plan/planGeometry'
 import { findFirstFreeSlot } from '../features/plan/planPlacement'
+import { getPopoverAnchorStyle } from '../utils/popoverPosition'
 import {
   addWeeksISO,
   composeTimestamp,
@@ -655,10 +656,9 @@ function WeeklyPage() {
             <div
               role="menu"
               aria-label="여기에 배치할 태스크 선택"
-              style={{
-                left: Math.min(slotMenu.point.x, window.innerWidth - 260),
-                top: Math.min(slotMenu.point.y, window.innerHeight - 280),
-              }}
+              // Same cursor-flip anchoring as BlockActionMenu — a fixed clamp
+              // assumed a max popover size and clipped once the task list grew.
+              style={getPopoverAnchorStyle(slotMenu.point)}
               className="fixed z-50 max-h-64 w-60 overflow-y-auto rounded-card border border-border bg-surface py-1 shadow-popover"
             >
               <p className="px-3 py-2 text-caption font-medium text-text-muted">여기에 배치</p>

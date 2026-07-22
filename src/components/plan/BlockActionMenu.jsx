@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { BottomSheet } from '../common/BottomSheet'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { getPopoverAnchorStyle } from '../../utils/popoverPosition'
 
 /*
   Block action menu (PLAN-09 — "메뉴 진입"). This story delivers the SHELL: the
@@ -62,9 +63,11 @@ export function BlockActionMenu({ open, block, position, items = [], onClose }) 
   if (!open) return null
 
   if (isDesktop) {
-    // Position the popover at the cursor, clamped inside the viewport width.
-    const left = Math.min(position?.x ?? 0, window.innerWidth - 240)
-    const top = Math.min(position?.y ?? 0, window.innerHeight - 160)
+    // Anchor the popover at the cursor, flipping to grow toward the cursor
+    // (via bottom/right) instead of away from it when the cursor is in the
+    // lower/right half of the viewport. This keeps the menu fully on-screen
+    // regardless of how many items it renders — see popoverPosition.js.
+    const anchorStyle = getPopoverAnchorStyle(position)
     return (
       <>
         {/* Full-screen backdrop closes on outside click without dimming. */}
@@ -72,8 +75,8 @@ export function BlockActionMenu({ open, block, position, items = [], onClose }) 
         <div
           role="menu"
           aria-label={`${block?.title ?? ''} 동작`}
-          style={{ left, top }}
-          className="fixed z-50 rounded-card border border-border bg-surface shadow-popover"
+          style={anchorStyle}
+          className="fixed z-50 max-h-[70vh] overflow-y-auto rounded-card border border-border bg-surface shadow-popover"
         >
           <MenuList block={block} items={items} onClose={onClose} />
         </div>

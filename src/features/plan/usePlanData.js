@@ -161,16 +161,29 @@ export function useMoveBlock() {
   )
 }
 
+/**
+ * PUT availabilities (PLAN-32). OPTIMISTIC like every other write here — onMutate
+ * writes the new patterns synchronously so the band lands in the same React batch
+ * as the drag's preview-clear (waiting for the round-trip made the edge visibly
+ * snap back and then jump). The pre-edit snapshot is restored on failure.
+ */
 export function useSaveAvailability() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (patterns) => putAvailabilities(patterns),
-    onSuccess: (patterns) => {
+    onMutate: (patterns) => {
+      // Fire-and-forget: cancelQueries' abort is synchronous, so the optimistic
+      // write below still lands in this same batch (no stale refetch can clobber).
+      queryClient.cancelQueries({ queryKey: availabilityKey() })
+      const prev = queryClient.getQueryData(availabilityKey())
       queryClient.setQueryData(availabilityKey(), patterns)
+      return { prev }
+    },
+    onSuccess: () => {
       toast({ tone: 'success', message: '가용 시간을 저장했습니다' })
     },
-    onError: () => {
-      queryClient.invalidateQueries({ queryKey: availabilityKey() })
+    onError: (_err, _patterns, context) => {
+      if (context?.prev) queryClient.setQueryData(availabilityKey(), context.prev)
       toast({ tone: 'error', message: systemMessages.error.writeTitle })
     },
   })

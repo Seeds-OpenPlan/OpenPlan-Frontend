@@ -58,10 +58,17 @@ function BgColumn({ columnIndex, availWindow, range }) {
     ? blockRect(availWindow.startMinutes, availWindow.endMinutes, range)
     : null
   return (
-    <div className={['relative border-l border-border', weekend ? 'bg-surface-sunken/60' : ''].join(' ')}>
+    // Non-available time is muted (weekends more so) and the available window is
+    // tinted, so the usable band reads at a glance instead of near-invisibly.
+    <div
+      className={[
+        'relative border-l border-border',
+        weekend ? 'bg-surface-sunken' : 'bg-surface-sunken/55',
+      ].join(' ')}
+    >
       {band && (
         <div
-          className="absolute inset-x-0 bg-brand-50/40"
+          className="absolute inset-x-0 bg-brand-100/75"
           style={{ top: band.top, height: band.height }}
           aria-hidden="true"
         />
@@ -100,13 +107,18 @@ function AvailabilityHandle({ columnIndex, edge, minutes, gridRef, range, onPrev
       type="button"
       aria-label={`${WEEKDAY_LABELS_KO[columnIndex]} 가용 ${edge === 'start' ? '시작' : '종료'} ${formatMinutesLabel(minutes)}`}
       onPointerDown={onPointerDown}
-      style={{ top: top - 6, left: `calc(${columnIndex} / 7 * 100%)`, width: `calc(100% / 7)`, touchAction: 'none' }}
-      className="group/avail absolute z-20 flex h-3 cursor-ns-resize items-center justify-center"
+      style={{ top: top - 7, left: `calc(${columnIndex} / 7 * 100%)`, width: `calc(100% / 7)`, touchAction: 'none' }}
+      className="group/avail absolute z-20 flex h-3.5 cursor-ns-resize items-center justify-center"
     >
       {/* Hidden until THIS handle's strip is hovered/focused (like the block resize
-          grips), so the bands aren't cluttered with always-on grips. */}
+          grips). The edge reads as a thin rule across the column with a small
+          centered grip — quieter than the old solid blue pill. */}
       <span
-        className="h-1 w-8 rounded-full bg-brand-600 opacity-0 ring-2 ring-surface transition-opacity group-hover/avail:opacity-100 group-focus-within/avail:opacity-100"
+        className="absolute inset-x-1 h-px bg-brand-500 opacity-0 transition-opacity group-hover/avail:opacity-70 group-focus-within/avail:opacity-70"
+        aria-hidden="true"
+      />
+      <span
+        className="relative h-1.5 w-9 rounded-full border border-brand-500/70 bg-surface opacity-0 shadow-card transition-opacity group-hover/avail:opacity-100 group-focus-within/avail:opacity-100"
         aria-hidden="true"
       />
     </button>
@@ -380,8 +392,11 @@ export function CalendarGrid({
                   range={range}
                   onPreview={(c, e2, m) => setAvailPreview({ columnIndex: c, edge: e2, minutes: m })}
                   onCommit={(c, e2, m) => {
-                    setAvailPreview(null)
+                    // Commit FIRST (the optimistic cache write), THEN drop the
+                    // preview — same React batch, so the band never snaps back to
+                    // its old edge for a frame (mirrors the block-resize ordering).
                     onAvailabilityCommit(c, e2, m)
+                    setAvailPreview(null)
                   }}
                 />
               ))
