@@ -67,6 +67,19 @@ export function CheckCircleIcon({ className, size = 24 }) {
   )
 }
 
+// EmptyState (ST-F1-08 ui-spec §PROJ.1/2.1/9, shared with ui-spec-dash §DASH.6)
+// — an open box: "nothing here yet", distinct from 404's compass (nothing
+// FOUND) and 403's lock (not ALLOWED).
+export function EmptyBoxIcon({ className, size = 24 }) {
+  return (
+    <svg {...base} width={size} height={size} viewBox="0 0 24 24" className={className}>
+      <path d="M3 8 12 4l9 4-9 4-9-4Z" />
+      <path d="M3 8v8l9 4 9-4V8" />
+      <path d="M12 12v8" />
+    </svg>
+  )
+}
+
 // Button inline-loading spinner. Marked aria-hidden; the label text ("처리 중")
 // carries the state, and the button sets aria-busy (color/motion is secondary).
 export function SpinnerIcon({ className, size = 16 }) {

@@ -9,6 +9,11 @@ const TONE_CLASSES = {
   warning: 'bg-warning-100 text-warning-700',
   success: 'bg-success-100 text-success-700',
   neutral: 'bg-neutral-100 text-neutral-700',
+  // ST-F1-08 (ui-spec §PROJ.0.2): "배치됨 {n}" reads as a blue/brand badge in
+  // the reference PNG, which the prior 4-tone set had no slot for. Composed
+  // from the EXISTING brand scale (no new token) — same shape as every other
+  // tone pairing here (100 fill / 700 text, 600 dot).
+  brand: 'bg-brand-100 text-brand-700',
 }
 
 const DOT_CLASSES = {
@@ -16,6 +21,7 @@ const DOT_CLASSES = {
   warning: 'bg-warning-600',
   success: 'bg-success-600',
   neutral: 'bg-neutral-500',
+  brand: 'bg-brand-600',
 }
 
 export function Badge({ tone = 'neutral', label, className = '' }) {
