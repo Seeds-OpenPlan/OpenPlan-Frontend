@@ -21,6 +21,25 @@ import { compareBySeverity, severityLabels, violationCopy } from '../../features
   in the copy catalog rather than being assembled here.
 
   Desktop = centered Dialog, mobile = BottomSheet (§0.3), matching OVL-CONFLICT.
+
+  With many warnings the issue list can outgrow the shell. `sticky` alone can't
+  fix that: its offset is relative to the SCROLLPORT, but the element still
+  can't leave its own containing block, so pinning it inside a padded scroll
+  area still leaves that padding's worth of gap for rows to slide past above
+  it — tried once, visibly wrong. What this needs is a REAL nested layout: a
+  non-scrolling header (title/close/차단·경고 badges) above a list that owns its
+  own `overflow-y-auto` region, so the header's background genuinely reaches
+  the shell's top edge and only the list underneath it ever scrolls.
+
+  That means PanelBody must own 100% of the shell's content box instead of
+  sitting inside Dialog/BottomSheet's own padded/scrolling wrapper — both take
+  `scrollBody={false}` below for exactly this (see Dialog.jsx's comment on the
+  prop). `min-h-0` reappears at every flex level from there down to the list:
+  a flex item's default minimum size is its CONTENT size, and PLAN's list is
+  the one thing here tall enough for that default to matter — without it, an
+  ancestor several levels up (not the list itself) would refuse to shrink and
+  the whole panel would blow past the height cap again, just via a different
+  mechanism than the original bug.
 */
 function IssueRow({ issue, onSelect }) {
   const copy = violationCopy(issue)
@@ -67,57 +86,74 @@ function PanelBody({
   const ordered = [...issues].sort(compareBySeverity)
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-2">
-        <h2 id={titleId} className="text-title font-bold text-text">
-          검토
-        </h2>
-        <button
-          ref={closeRef}
-          type="button"
-          onClick={onClose}
-          aria-label="닫기"
-          className="rounded-control px-2 py-1 text-label text-text-muted hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          닫기
-        </button>
+    // Fills the shell's whole content box (`scrollBody={false}` on both Dialog
+    // and BottomSheet hands us exactly that, via flex-1). `min-h-0`: without
+    // it this box's default minimum height is its content's — i.e. the
+    // header's height PLUS the full, unclipped list — which would push the
+    // shell past its cap instead of letting the list region below shrink.
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Non-scrolling header: its own background + padding, so nothing can
+          ever be seen sliding past ABOVE it — there is no shared padded
+          ancestor left for a gap to hide in (that was the `sticky` bug). */}
+      <div className="flex flex-col gap-4 bg-surface px-6 pb-4 pt-6">
+        <div className="flex items-center justify-between gap-2">
+          <h2 id={titleId} className="text-title font-bold text-text">
+            검토
+          </h2>
+          <button
+            ref={closeRef}
+            type="button"
+            onClick={onClose}
+            aria-label="닫기"
+            className="rounded-control px-2 py-1 text-label text-text-muted hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          >
+            닫기
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={blockingCount > 0 ? 'danger' : 'neutral'} label={`차단 ${blockingCount}건`} />
+          <Badge tone={warningCount > 0 ? 'warning' : 'neutral'} label={`경고 ${warningCount}건`} />
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={blockingCount > 0 ? 'danger' : 'neutral'} label={`차단 ${blockingCount}건`} />
-        <Badge tone={warningCount > 0 ? 'warning' : 'neutral'} label={`경고 ${warningCount}건`} />
-      </div>
-
-      {/* The last dry-run didn't answer. The list below is the previous result,
-          kept on purpose — saying so is more honest than blanking it (AC-1). */}
-      {delayed && (
-        <p className="rounded-card border border-border bg-surface-sunken px-3 py-2 text-caption text-text-muted">
-          검증 지연 · 마지막으로 확인한 결과를 보여 주고 있습니다
-        </p>
-      )}
-
-      {ordered.length === 0 ? (
-        <p className="rounded-card border border-border bg-surface-sunken px-3 py-6 text-center text-label text-text-muted">
-          {/* Counts without a list means the first dry-run of this week hasn't
-              answered yet: the counts come from the week payload, the details
-              only from the dry-run. Saying "항목이 없습니다" there would contradict
-              the badge right above it. */}
-          {blockingCount + warningCount > 0
-            ? '검토 항목을 불러오는 중입니다'
-            : '지금은 검토할 항목이 없습니다'}
-        </p>
-      ) : (
-        <>
-          <p className="text-caption text-text-muted">
-            항목을 선택하면 해당 블록으로 이동합니다
+      {/* The ONLY scrolling region. `flex-1` claims whatever height the fixed
+          header above didn't use; `min-h-0` is what actually lets it be
+          smaller than its content (the list) instead of forcing this box to
+          grow past the header + full list, which is the failure mode
+          `overflow-y-auto` alone does not prevent. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-6">
+        {/* The last dry-run didn't answer. The list below is the previous result,
+            kept on purpose — saying so is more honest than blanking it (AC-1). */}
+        {delayed && (
+          <p className="rounded-card border border-border bg-surface-sunken px-3 py-2 text-caption text-text-muted">
+            검증 지연 · 마지막으로 확인한 결과를 보여 주고 있습니다
           </p>
-          <ul className="flex flex-col gap-2">
-            {ordered.map((issue) => (
-              <IssueRow key={issue.id} issue={issue} onSelect={onSelectIssue} />
-            ))}
-          </ul>
-        </>
-      )}
+        )}
+
+        {ordered.length === 0 ? (
+          <p className="rounded-card border border-border bg-surface-sunken px-3 py-6 text-center text-label text-text-muted">
+            {/* Counts without a list means the first dry-run of this week hasn't
+                answered yet: the counts come from the week payload, the details
+                only from the dry-run. Saying "항목이 없습니다" there would contradict
+                the badge right above it. */}
+            {blockingCount + warningCount > 0
+              ? '검토 항목을 불러오는 중입니다'
+              : '지금은 검토할 항목이 없습니다'}
+          </p>
+        ) : (
+          <>
+            <p className="text-caption text-text-muted">
+              항목을 선택하면 해당 블록으로 이동합니다
+            </p>
+            <ul className="flex flex-col gap-2">
+              {ordered.map((issue) => (
+                <IssueRow key={issue.id} issue={issue} onSelect={onSelectIssue} />
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -152,13 +188,26 @@ export function ReviewPanel({
 
   if (isDesktop) {
     return (
-      <Dialog open={open} onClose={onClose} labelledById={titleId} initialFocusRef={closeRef} size="lg">
+      <Dialog
+        open={open}
+        onClose={onClose}
+        labelledById={titleId}
+        initialFocusRef={closeRef}
+        size="lg"
+        scrollBody={false}
+      >
         {body}
       </Dialog>
     )
   }
   return (
-    <BottomSheet open={open} onClose={onClose} labelledById={titleId} initialFocusRef={closeRef}>
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      labelledById={titleId}
+      initialFocusRef={closeRef}
+      scrollBody={false}
+    >
       {body}
     </BottomSheet>
   )
