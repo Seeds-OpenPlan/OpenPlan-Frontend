@@ -622,10 +622,13 @@ export function useUpdateSchedule() {
 
 // --- ST-F1-05: validation dry-run loop · week confirm ------------------------
 
-// Local edits settle in bursts (a drag emits many optimistic writes); 300ms is
-// the story's own figure (AC-1) and leaves ~700ms of the 1s budget (NFR-025) for
-// the round trip and the re-render.
-export const VALIDATION_DEBOUNCE_MS = 300
+// Local edits settle in bursts (a drag emits many optimistic writes). The
+// story's own figure (AC-1) is 300ms; the product owner asked for a snappier
+// feel after a live walkthrough and this trades some of the budget for it —
+// 150ms still leaves ~850ms of the 1s ceiling (NFR-025) for the round trip and
+// the re-render, at the cost of issuing dry-run requests roughly twice as
+// often against the real server during a sustained drag.
+export const VALIDATION_DEBOUNCE_MS = 150
 
 const EMPTY_VALIDATION = { issues: [], blockingCount: 0, warningCount: 0 }
 

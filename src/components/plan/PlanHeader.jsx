@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 
@@ -15,11 +16,28 @@ import { Badge } from '../common/Badge'
   - The save gate (PLAN-28): whether the button is usable, and — always as
     adjacent text, never a hover-only tooltip — WHY it isn't.
 
-  Disabled-reason priority is offline → 차단 → 미검증. Offline wins because it is a
-  capability the user cannot recover by editing the plan: telling someone to
-  resolve 차단 3건 while no request can leave the device would send them down a
-  path that still ends in a disabled button. 차단 outranks 미검증 because it is the
-  concrete, actionable one — "검증 중" resolves by itself, a violation does not.
+  The review entry point is ALWAYS visible (product decision after a live
+  walkthrough: hiding it whenever there were zero issues meant the empty-review
+  state in ReviewPanel.jsx was unreachable from here). What changes with the
+  count is its content, not its presence: zero issues shows the "검토" label,
+  one or more issues swaps the label for the badges — the badges already say
+  "there is something to review," repeating the word there would be noise.
+
+  Disabled-reason priority for the SAVE button's VISIBLE text is offline only.
+  Offline is the one case that is a capability the user cannot recover by
+  editing the plan, so it alone earns a permanent caption next to a disabled
+  button. 차단 and "still validating" are deliberately NOT repeated there:
+  - 차단's reason is already the badge sitting right next to Save, so restating
+    it in text under the button would be pure duplication for sighted users.
+    It is NOT dropped for screen-reader users, though — they cannot perceive
+    the badge's color or position, so the same sentence survives as sr-only
+    text wired to the button via aria-describedby.
+  - "검증 중" / "검증 지연" both describe the same thing (the counts on screen
+    cannot be trusted yet) and both now live in the badge slot as a small gray
+    caption to its left — never both at once (see the render below). Moving
+    them out from under Save is what makes the button immune to whichever
+    validation state is running: nothing there appears or disappears mid-drag,
+    so there is no layout shift on every debounce tick.
 
   `validationStale` is the "we don't currently know" input: the counts shown may
   be the last known ones, but they were not computed for the plan as it stands
@@ -43,18 +61,12 @@ export function PlanHeader({
   const hasIssues = blockingCount > 0 || warningCount > 0
   const blockedBySaveGate = blockingCount > 0
   const saveDisabled = !canWrite || blockedBySaveGate || validationStale
-  const saveDisabledReason = !canWrite
-    ? offlineReason
-    : blockedBySaveGate
-      ? `차단 ${blockingCount}건 해결 필요`
-      : validationStale
-        ? // Distinguish "still checking" from "couldn't check": the first clears
-          // itself in under a second, the second may not, and a user staring at a
-          // disabled button deserves to know which one they are waiting on.
-          validationDelayed
-          ? '검증 결과를 확인하지 못했습니다'
-          : '검증 중입니다'
-        : undefined
+  // Offline is the only reason still rendered as visible text under Save — see
+  // the intro comment for why 차단 and "still validating" no longer are.
+  const saveDisabledReason = !canWrite ? offlineReason : undefined
+  // Ties the sr-only 차단 restatement (rendered below, only when needed) to the
+  // Save button, so a screen-reader user gets the reason without seeing it.
+  const blockedReasonId = useId()
 
   return (
     // The title stays in normal flow so its vertical position is identical
@@ -79,25 +91,43 @@ export function PlanHeader({
           </span>
         ) : (
           <>
-            {/* aria-live sits on the wrapper, not the button, so the counts are
-                announced when they change without re-announcing the whole
-                control. `aria-atomic` keeps 차단 and 경고 in one utterance. */}
+            {/* aria-live sits on the wrapper, not the button, so the status
+                caption and the counts are announced together when either
+                changes, without re-announcing the whole control. `aria-atomic`
+                keeps them in one utterance. */}
             <div aria-live="polite" aria-atomic="true" className="flex items-center gap-2">
-              {validationDelayed && (
+              {/* Mutually exclusive by construction: `stale` is already true
+                  whenever `delayed` is (see usePlanValidation's `stale`
+                  formula), so checking delayed first and stale second can
+                  never show both captions at once in this one slot. */}
+              {validationDelayed ? (
                 <span className="whitespace-nowrap text-caption text-text-muted">검증 지연</span>
+              ) : (
+                validationStale && (
+                  <span className="whitespace-nowrap text-caption text-text-muted">검증 중</span>
+                )
               )}
-              {hasIssues && (
-                <button
-                  type="button"
-                  onClick={onOpenReview}
-                  aria-label={`검토 열기, 차단 ${blockingCount}건 경고 ${warningCount}건`}
-                  className="flex items-center gap-1.5 rounded-full px-2 py-1 transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
+              {/* Always rendered (not gated on hasIssues) so the empty-review
+                  state is reachable. Content, not presence, tracks the count. */}
+              <button
+                type="button"
+                onClick={onOpenReview}
+                aria-label={
+                  hasIssues
+                    ? `검토 열기, 차단 ${blockingCount}건 경고 ${warningCount}건`
+                    : '검토 열기'
+                }
+                className="flex items-center gap-1.5 rounded-full px-2 py-1 transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              >
+                {hasIssues ? (
+                  <>
+                    {blockingCount > 0 && <Badge tone="danger" label={`차단 ${blockingCount}`} />}
+                    {warningCount > 0 && <Badge tone="warning" label={`경고 ${warningCount}`} />}
+                  </>
+                ) : (
                   <span className="text-label font-semibold text-text-muted">검토</span>
-                  {blockingCount > 0 && <Badge tone="danger" label={`차단 ${blockingCount}`} />}
-                  {warningCount > 0 && <Badge tone="warning" label={`경고 ${warningCount}`} />}
-                </button>
-              )}
+                )}
+              </button>
             </div>
 
             <Button
@@ -107,9 +137,18 @@ export function PlanHeader({
               loading={saving}
               disabled={saveDisabled}
               disabledReason={saveDisabled ? saveDisabledReason : undefined}
+              aria-describedby={blockedBySaveGate ? blockedReasonId : undefined}
             >
               저장
             </Button>
+            {/* Screen-reader-only restatement of the 차단 badge's meaning: a
+                sighted user reads it off the badge's color and label, but
+                neither reaches a screen reader on its own. */}
+            {blockedBySaveGate && (
+              <span id={blockedReasonId} className="sr-only">
+                {`차단 ${blockingCount}건 해결 필요`}
+              </span>
+            )}
           </>
         )}
       </div>
