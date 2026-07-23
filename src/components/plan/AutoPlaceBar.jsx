@@ -36,7 +36,14 @@ export function AutoPlaceBar({ placedCount, unplacedCount, applying = false, onA
     <div
       role="region"
       aria-label="자동 배치 초안"
-      className="flex flex-col gap-2 rounded-card border border-dashed border-brand-300 bg-brand-50/60 p-3"
+      // fix J-4 (owner decision): a slightly tinted background + a backdrop
+      // blur, to read as a floating panel the way the unplaced panel does.
+      // `backdrop-blur-md` is that panel's own value. Opacity is `/50` (owner
+      // set it to ~50%, lighter than the panel's /78) — `--color-brand-50` is
+      // a plain literal (`#eff6ff`, index.css), so the Tailwind `/50` modifier
+      // alone resolves fine here. Kept well under 100% so the blur actually
+      // reads as blur (the back content shows through), not a flat fill.
+      className="flex flex-col gap-2 rounded-card border border-dashed border-brand-300 bg-brand-50/50 p-3 backdrop-blur-md"
     >
       <div>
         <p className="text-label font-semibold text-brand-900">
