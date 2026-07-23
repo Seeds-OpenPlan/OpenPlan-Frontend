@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { PlanHeader } from '../components/plan/PlanHeader'
 import { WeekNav } from '../components/plan/WeekNav'
 import { SummaryBar } from '../components/plan/SummaryBar'
@@ -14,9 +14,11 @@ import { AutoPlaceBar } from '../components/plan/AutoPlaceBar'
 import { ScheduleForm } from '../components/plan/ScheduleForm'
 import { ExecutionLogForm } from '../components/plan/ExecutionLogForm'
 import { SaveConfirmDialog } from '../components/plan/SaveConfirmDialog'
+import { ReplanOptionsModal } from '../components/plan/ReplanOptionsModal'
 import { ErrorState } from '../components/common/ErrorState'
 import {
   useApplyAutoPlace,
+  useApplyReplanOption,
   useAutoPlace,
   useAvailability,
   useCreateScheduleBlock,
@@ -26,6 +28,7 @@ import {
   usePlaceTask,
   usePlanValidation,
   useRemoveBlockWithUndo,
+  useReplanOptions,
   useResizeBlock,
   useSaveAvailability,
   useSaveWeek,
@@ -36,6 +39,7 @@ import {
   useWeekPlan,
 } from '../features/plan/usePlanData'
 import { severityLabels } from '../features/plan/violationMessages'
+import { BASELINE_STRATEGY_TYPE } from '../features/plan/replanStrategies'
 import {
   usePlanHistory,
   selectCanUndo,
@@ -81,6 +85,11 @@ function availableMinutesOf(availability) {
   drag geometry in usePlanDrag/CalendarGrid.
 */
 function WeeklyPage() {
+  // Read early: ST-F1-07's `?openReplan=1` seam (below) needs this to seed
+  // `replanOpen`'s OWN initial state directly, rather than an Effect that
+  // mirrors the URL into it after the fact.
+  const [searchParams, setSearchParams] = useSearchParams()
+
   const [weekStartISO, setWeekStartISO] = useState(() => currentWeekStartISO())
   const [mode, setMode] = useState('focus')
   const [menu, setMenu] = useState({ open: false, block: null, position: null })
@@ -99,6 +108,19 @@ function WeeklyPage() {
   // ST-F1-05: the block PLAN-23 asked to focus, and the warnings-only save confirm.
   const [focusRequest, setFocusRequest] = useState(null) // { planBlockId, token } | null
   const [confirmSaveOpen, setConfirmSaveOpen] = useState(false)
+
+  // ST-F1-07: the replan-alternatives modal. `applyConflict` is set only by a
+  // 409 on apply (AC-3 "다시 생성 유도") — it forces a regenerate before another
+  // apply attempt is allowed (see handleApplyReplan / closeReplan below).
+  //
+  // Trigger #2 of 2 (AC-4): the dashboard's risk card (ST-F1-10) doesn't exist
+  // yet, so `?openReplan=1` is the seam it will use once it does — read ONCE,
+  // directly, as this state's own lazy initializer (not an Effect mirroring the
+  // URL into it: React docs' own "you might not need an Effect" case for this
+  // exact shape). The param is stripped from the URL separately below, so a
+  // refresh of this same page never reopens it.
+  const [replanOpen, setReplanOpen] = useState(() => searchParams.get('openReplan') === '1')
+  const [applyConflict, setApplyConflict] = useState(false)
 
   const gridBodyRef = useRef(null)
   const unplacedPanelRef = useRef(null)
@@ -128,6 +150,27 @@ function WeeklyPage() {
   const createSchedule = useCreateScheduleBlock()
   const updateSchedule = useUpdateSchedule()
   const saveWeekPlan = useSaveWeek()
+  // planQuery.data (not the `plan` alias below, which isn't declared yet at this
+  // point in the component) — same underlying value either way.
+  //
+  // Destructured (not read as `replanOptions.generate` etc. at each call site)
+  // because react-hooks/exhaustive-deps cannot verify the STABILITY of a member
+  // expression used as a dependency — it would demand the whole `replanOptions`
+  // object, which is a fresh literal every render and would re-fire the open
+  // effect below on every render. Destructuring hands the effect a plain local
+  // binding the rule CAN verify (these are individually memoized in
+  // useReplanOptions — generate/retry/reset are useCallback'd on `weeklyPlanId`
+  // alone, a stable primitive here), so the dependency array stays honest with
+  // no eslint-disable.
+  const {
+    byType: replanStrategies,
+    generate: generateReplanOptions,
+    retry: retryReplanOption,
+    reset: resetReplanOptions,
+    isGenerating: replanGenerating,
+    slowNotice: replanSlowNotice,
+  } = useReplanOptions(planQuery.data?.weeklyPlanId)
+  const applyReplanOption = useApplyReplanOption()
   const navigate = useNavigate()
 
   const history = usePlanHistory()
@@ -726,6 +769,95 @@ function WeeklyPage() {
     toast({ tone: 'error', message: systemMessages.error.writeTitle })
   }
 
+  // --- replan alternatives (ST-F1-07: PLAN-29) ------------------------------
+
+  // Strip `?openReplan=1` once it has done its job (opening the modal already
+  // happened in replanOpen's lazy initializer above) — an Effect is the right
+  // tool for exactly this part: it is talking to an external system (the
+  // browser URL), not mirroring a prop into this component's own state.
+  useEffect(() => {
+    if (searchParams.get('openReplan') !== '1') return
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('openReplan')
+        return next
+      },
+      { replace: true },
+    )
+    // Runs once per mount: the param is gone from `searchParams` after the
+    // first pass, so the guard above skips every render after that on its own
+    // — no ref needed.
+  }, [searchParams, setSearchParams])
+
+  // Every open (re)requests all three generated alternatives against whatever
+  // the CURRENT draft is — see useReplanOptions's header for why reusing a
+  // stale batch would be wrong, not just wasteful.
+  useEffect(() => {
+    if (replanOpen) generateReplanOptions()
+    // Only `replanOpen`'s OWN transition (or the plan actually changing under
+    // it) should re-trigger generation — `generateReplanOptions` is stable per
+    // weeklyPlanId (see useReplanOptions's useCallback deps), so listing it
+    // here doesn't cause a re-run on every render.
+  }, [replanOpen, generateReplanOptions])
+
+  const closeReplan = () => {
+    setReplanOpen(false)
+    setApplyConflict(false)
+    resetReplanOptions()
+  }
+
+  const handleApplyReplan = (option) => {
+    if (!plan) return
+    if (option.strategyType === BASELINE_STRATEGY_TYPE) {
+      // 기존 계획 유지안: the server is already in this state — nothing to send.
+      closeReplan()
+      return
+    }
+    applyReplanOption.mutate(
+      { replanOptionId: option.replanOptionId, weekStartISO },
+      {
+        onSuccess: () => {
+          closeReplan()
+          // Best-effort immediate re-check against the (still-stale-for-a-beat)
+          // local `blocks`; the invalidate above's background refetch lands a
+          // moment later and the debounce loop re-fires on its own once `blocks`
+          // actually changes identity — same two-step reasoning handleSaveError
+          // uses for its own post-conflict revalidate.
+          validation.revalidate(blocks)
+          toast({ tone: 'success', message: '재계획 대안을 적용했습니다. 확정하려면 저장하세요' })
+        },
+        // DIVERGENCE NOTE (flagged for the PR body): the 작업지시's AC-3 reads this
+        // 409 as "계획 변경됨" (the plan moved on since these options were
+        // generated) and asks for "다시 생성 유도" — followed here. The 07 CSV's
+        // own documented 409 for THIS endpoint is narrower: "이미 선택된 재계획
+        // 대안" (this option was already applied). Those are different failures —
+        // if the 07 reading is the real server behavior, regenerating a fresh
+        // batch does nothing to fix an "already applied" rejection of the SAME
+        // option id, since a fresh batch gets fresh ids anyway (so it's harmless,
+        // just a wasted round-trip in that specific case). Kept as the AC-3
+        // wording pending a decision from the lead on which 409 meaning the real
+        // server implements.
+        onError: (error) => {
+          if (error?.status === 409) {
+            setApplyConflict(true)
+            toast({
+              tone: 'error',
+              message: '이 대안이 더 이상 유효하지 않습니다. 대안을 다시 생성해 주세요',
+            })
+            return
+          }
+          toast({ tone: 'error', message: systemMessages.error.writeTitle })
+        },
+      },
+    )
+  }
+
+  const handleGenerateAllReplan = () => {
+    setApplyConflict(false)
+    generateReplanOptions()
+  }
+
   // --- render ---------------------------------------------------------------
 
   if (planQuery.isError) {
@@ -894,7 +1026,31 @@ function WeeklyPage() {
         delayed={validation.delayed}
         onSelectIssue={handleSelectIssue}
         onClose={() => setReviewOpen(false)}
+        // Closes the review panel first (both shells are focus-trapped modals;
+        // see handleSelectIssue's comment on why one always closes before the
+        // other opens) then opens the replan modal on the very next tick.
+        onOpenReplan={() => {
+          setReviewOpen(false)
+          setReplanOpen(true)
+        }}
       />
+
+      {/* 재계획 대안 (ST-F1-07 PLAN-29) — mounted CONDITIONALLY (fresh per open,
+          same pattern as ScheduleForm/ExecutionLogForm above) so useReplanOptions
+          starts a clean generation batch every time this opens. */}
+      {replanOpen && (
+        <ReplanOptionsModal
+          strategies={replanStrategies}
+          onGenerateAll={handleGenerateAllReplan}
+          onRetryStrategy={retryReplanOption}
+          onApply={handleApplyReplan}
+          onClose={closeReplan}
+          applying={applyReplanOption.isPending}
+          applyConflict={applyConflict}
+          isGenerating={replanGenerating}
+          slowNotice={replanSlowNotice}
+        />
+      )}
 
       {/* Warnings-only save confirmation (PLAN-28). 차단 never gets here — the
           save button is disabled while any remains. */}

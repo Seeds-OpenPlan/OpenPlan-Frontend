@@ -2,6 +2,7 @@ import { useId, useRef } from 'react'
 import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Badge } from '../common/Badge'
+import { Button } from '../common/Button'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
 import { compareBySeverity, severityLabels, violationCopy } from '../../features/plan/violationMessages'
 
@@ -79,6 +80,7 @@ function PanelBody({
   delayed,
   onSelectIssue,
   onClose,
+  onOpenReplan,
 }) {
   // 차단 first: they are the ones actually holding the save button down, so they
   // must be what the user reads first. Sorting a copy keeps the caller's array
@@ -154,6 +156,18 @@ function PanelBody({
           </>
         )}
       </div>
+
+      {/* ST-F1-07 trigger #1 of 2 (AC-4 — the other is a dashboard risk card,
+          ST-F1-10, not built yet). Non-scrolling, like the header above, so it
+          stays reachable without hunting through a long issue list. Shown
+          regardless of counts — a delayed schedule or a new task can call for
+          replanning even on an otherwise-clean week, same reasoning PlanHeader
+          gives for always showing its own 검토 entry point. */}
+      <div className="border-t border-border bg-surface px-6 py-4">
+        <Button variant="secondary" size="md" onClick={onOpenReplan} className="w-full">
+          재계획 대안 보기
+        </Button>
+      </div>
     </div>
   )
 }
@@ -166,6 +180,7 @@ export function ReviewPanel({
   delayed = false,
   onSelectIssue,
   onClose,
+  onOpenReplan,
 }) {
   const isDesktop = useIsDesktop()
   const titleId = useId()
@@ -183,6 +198,7 @@ export function ReviewPanel({
       delayed={delayed}
       onSelectIssue={onSelectIssue}
       onClose={onClose}
+      onOpenReplan={onOpenReplan}
     />
   )
 
