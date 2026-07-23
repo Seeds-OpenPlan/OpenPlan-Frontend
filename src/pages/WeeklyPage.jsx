@@ -769,10 +769,27 @@ function WeeklyPage() {
           />
         </div>
 
-        {/* Floating controls pinned to the card's bottom corners, overlaying the
-            grid (design): undo/redo bottom-left, unplaced FAB bottom-right. They
-            stay put while the grid scrolls internally. */}
-        <div className="pointer-events-none absolute inset-x-4 bottom-4 z-30 flex items-center justify-between md:inset-x-6 md:bottom-6">
+        {/* Floating controls: undo/redo bottom-left, unplaced FAB bottom-right.
+
+            Mobile (fixed): pinned to the VIEWPORT bottom, like BottomTabBar,
+            so they stay put on screen while the page/grid scrolls — an
+            absolute, card-relative offset can't guarantee that: the card's
+            own bottom edge moves with scroll and, on many phone-height
+            viewports, ends up right behind the tab bar at rest (scrollTop 0)
+            regardless of how much trailing padding `<main>` reserves below
+            it — that padding only becomes reachable once scrolled into.
+            bottom-18 (72px) clears BottomTabBar's ~57px height with a 15px
+            gap, measured from the viewport now instead of the card. No
+            ancestor between here and <body> sets transform/filter/contain/
+            perspective, so `fixed` really is viewport-relative here, not
+            card-relative (checked AppLayout, App, main.jsx).
+
+            Desktop (md:absolute): reverts to the pre-existing card-pinned,
+            grid-overlaying behavior (design) — there's no tab bar to clear,
+            and the card is already centered (max-w-6xl mx-auto), so pinning
+            to the viewport instead would visually detach the buttons from
+            the grid they act on. */}
+        <div className="pointer-events-none fixed inset-x-4 bottom-18 z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6">
           <div className="pointer-events-auto">
             <UndoRedo
               canUndo={canUndo && !readOnly}
