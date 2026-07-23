@@ -12,6 +12,13 @@ import { useFocusTrap } from '../../hooks/useFocusTrap'
   handle is a real 48px button so keyboard and touch users can both close.
 
   Content over 90vh scrolls inside the sheet; the page behind is scroll-locked.
+
+  `scrollBody` (default true) mirrors Dialog's own opt-out (see Dialog.jsx's
+  comment for the full reasoning): a caller that owns its own fixed-header +
+  scrolling-list layout passes `scrollBody={false}` to get an unpadded flex box
+  sized to the sheet's available height instead of Dialog's default
+  padded/scrolling one — so mobile gets the same layout as desktop, not a second
+  nested scroller.
 */
 
 export function BottomSheet({
@@ -20,6 +27,7 @@ export function BottomSheet({
   labelledById,
   initialFocusRef,
   returnFocusRef,
+  scrollBody = true,
   children,
 }) {
   const containerRef = useRef(null)
@@ -81,7 +89,16 @@ export function BottomSheet({
             <span className="my-4 h-1.5 w-10 rounded-full bg-border-strong" aria-hidden="true" />
           )}
         </div>
-        <div className="flex-1 overflow-y-auto p-6 pt-2">{children}</div>
+        {scrollBody ? (
+          <div className="flex-1 overflow-y-auto p-6 pt-2">{children}</div>
+        ) : (
+          // Same box as Dialog's opt-out branch — `flex-1` fills the space
+          // left by the drag handle above it, `min-h-0` lets it shrink below
+          // its child's natural content size instead of pushing the sheet
+          // past `max-h-[90vh]`. See Dialog.jsx for why `min-h-0` is kept
+          // explicit even though `overflow-hidden` implies the same floor.
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
+        )}
       </div>
     </div>,
     document.body,

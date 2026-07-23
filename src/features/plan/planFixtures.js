@@ -16,7 +16,11 @@ import {
   addDaysISO,
   composeTimestamp,
   currentWeekStartISO,
+  dateOf,
+  formatMinutesLabel,
+  minutesOfDay,
   WEEKDAY_KEYS,
+  WEEKDAY_LABELS_KO,
   weekDays,
 } from './planTime'
 import { byPriorityThenDue, findFirstFreeSlot } from './planPlacement'
@@ -120,9 +124,37 @@ function seedUnplacedTasks() {
   ]
 }
 
+/*
+  Fixed schedules (recurring, immovable). The real surface for these is ST-F1-06;
+  they exist here NOW because the V2 (고정 일정 충돌) rule is unverifiable without
+  them — the seeded 월 09:05 task block deliberately overlaps 아침 스터디 so the
+  blocking violation, the disabled save button and the review panel are all
+  visible on first load rather than only after the user constructs a conflict.
+  They are not returned as plan blocks, so the grid is unchanged.
+*/
+function seedFixedSchedules() {
+  return [
+    {
+      fixedScheduleId: nextId('fixed'),
+      title: '아침 스터디',
+      weekday: 'MON',
+      startMinutes: 9 * 60,
+      endMinutes: 10 * 60,
+    },
+    {
+      fixedScheduleId: nextId('fixed'),
+      title: '주간 팀 회의',
+      weekday: 'THU',
+      startMinutes: 11 * 60,
+      endMinutes: 12 * 60,
+    },
+  ]
+}
+
 // Per-week plan store, created lazily on first access to a week.
 const weeks = new Map()
 let availability = seedAvailability()
+const fixedSchedules = seedFixedSchedules()
 let unplacedTasks = seedUnplacedTasks()
 // Full data of tasks that have been placed as blocks, kept so "배치 해제" (PLAN-16)
 // can restore the original task to the unplaced backlog (and later A4 remainder).
@@ -213,6 +245,163 @@ function ensureWeek(weekStartISO) {
   return weeks.get(weekStartISO)
 }
 
+/*
+  --- Validation rules (ST-F1-05) -------------------------------------------
+
+  These are REAL computations over the mock's own data, not canned issues: every
+  violation the panel shows can be created and cleared by moving blocks in the
+  browser, which is the only way the 3-layer display and the save gate can be
+  checked by eye before BE-1's rules exist.
+
+  Coverage: V1·V2·V4·V5 always computable from the seeded data; V3 needs a task
+  with a dueDate (backlog tasks have one — placing one after its due date fires
+  it); V6 needs two blocks closer than the buffer; V7 needs WBS project ranges,
+  which this mock has no data for at all, so it is intentionally never emitted
+  (inventing a fake WBS range would make the rule untestable, not testable).
+
+  The emitted shape mirrors what a server would plausibly send — code, target
+  ids, and the copy variables at the top level — and planApi.normalizeIssue
+  folds the extra keys into `params`. No violation TEXT lives here: that is
+  violationMessages.js's job alone (J1).
+*/
+
+// Minimum gap between consecutive blocks before "버퍼 부족" (V6) applies.
+// ASSUMPTION: no rule document fixes this number; 10분 is the smallest gap that
+// still reads as a deliberate break. Change here when the rule spec lands.
+const BUFFER_MIN_MINUTES = 10
+
+// The mock's OWN severity classification, deliberately not imported from
+// violationMessages: that catalog is the CLIENT's table, and a mock standing in
+// for the server must be able to disagree with it (that's exactly the case the
+// client's "catalog wins for known codes" rule has to survive).
+const MOCK_BLOCKING_CODES = new Set(['V1', 'V2'])
+
+const overlaps = (a, b) =>
+  new Date(a.startAt) < new Date(b.endAt) && new Date(b.startAt) < new Date(a.endAt)
+
+const durationOf = (b) => (new Date(b.endAt).getTime() - new Date(b.startAt).getTime()) / 60000
+
+const timeRangeOf = (b) =>
+  `${formatMinutesLabel(minutesOfDay(b.startAt))} - ${formatMinutesLabel(minutesOfDay(b.endAt))}`
+
+function activeWindowFor(weekdayKey) {
+  return availability.find((a) => a.weekday === weekdayKey && a.isActive) ?? null
+}
+
+function computeValidationIssues(weekStartISO, blocks) {
+  const days = weekDays(weekStartISO)
+  const issues = []
+  let seq = 0
+  const push = (code, targetBlockIds, params) => {
+    seq += 1
+    issues.push({ id: `${code}-${seq}`, code, targetBlockIds, ...params })
+  }
+
+  // Only blocks that actually land in this week participate; everything below
+  // groups by grid column, so an out-of-week block would have no day to compare.
+  const inWeek = blocks
+    .map((b) => ({ ...b, dayIndex: days.indexOf(dateOf(b.startAt)) }))
+    .filter((b) => b.dayIndex >= 0)
+    .sort((a, b) => new Date(a.startAt) - new Date(b.startAt))
+
+  // V1 일정 겹침 (차단) — every unordered pair that shares time on the same day.
+  for (let i = 0; i < inWeek.length; i += 1) {
+    for (let j = i + 1; j < inWeek.length; j += 1) {
+      const a = inWeek[i]
+      const b = inWeek[j]
+      if (a.dayIndex !== b.dayIndex || !overlaps(a, b)) continue
+      push('V1', [a.planBlockId, b.planBlockId], {
+        blockTitle: a.title,
+        otherTitle: b.title,
+        timeRange: `${WEEKDAY_LABELS_KO[a.dayIndex]} ${timeRangeOf(a)}`,
+      })
+    }
+  }
+
+  // V2 고정 일정 충돌 (차단) — a plan block sitting on an immovable fixed schedule.
+  for (const block of inWeek) {
+    const weekdayKey = WEEKDAY_KEYS[block.dayIndex]
+    const startMin = minutesOfDay(block.startAt)
+    const endMin = minutesOfDay(block.endAt)
+    for (const fixed of fixedSchedules) {
+      if (fixed.weekday !== weekdayKey) continue
+      if (startMin >= fixed.endMinutes || endMin <= fixed.startMinutes) continue
+      push('V2', [block.planBlockId], {
+        blockTitle: block.title,
+        otherTitle: fixed.title,
+        timeRange:
+          `${WEEKDAY_LABELS_KO[block.dayIndex]} ` +
+          `${formatMinutesLabel(fixed.startMinutes)} - ${formatMinutesLabel(fixed.endMinutes)}`,
+      })
+    }
+  }
+
+  // V5 가용 시간 밖 배치 (경고) — outside the day's window, or on a day with none.
+  for (const block of inWeek) {
+    const win = activeWindowFor(WEEKDAY_KEYS[block.dayIndex])
+    const startMin = minutesOfDay(block.startAt)
+    const endMin = minutesOfDay(block.endAt)
+    if (win && startMin >= win.startMinutes && endMin <= win.endMinutes) continue
+    push('V5', [block.planBlockId], {
+      blockTitle: block.title,
+      dayLabel: `${WEEKDAY_LABELS_KO[block.dayIndex]}요일`,
+      timeRange: timeRangeOf(block),
+    })
+  }
+
+  // V4 가용 시간 초과 (경고) — one issue per day whose planned total exceeds its
+  // window. Targets every block of that day so selecting the item still points
+  // somewhere concrete (the panel focuses the first target).
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const dayBlocks = inWeek.filter((b) => b.dayIndex === dayIndex)
+    if (dayBlocks.length === 0) continue
+    const win = activeWindowFor(WEEKDAY_KEYS[dayIndex])
+    const capacity = win ? win.endMinutes - win.startMinutes : 0
+    const planned = dayBlocks.reduce((sum, b) => sum + durationOf(b), 0)
+    if (planned <= capacity) continue
+    push(
+      'V4',
+      dayBlocks.map((b) => b.planBlockId),
+      {
+        dayLabel: `${WEEKDAY_LABELS_KO[dayIndex]}요일`,
+        overMinutes: Math.round(planned - capacity),
+      },
+    )
+  }
+
+  // V3 마감일 이후 배치 (경고) — the task's own dueDate vs the day it sits on.
+  for (const block of inWeek) {
+    const task = block.taskId ? placedTaskData.get(block.taskId) : null
+    const placedDate = dateOf(block.startAt)
+    if (!task?.dueDate || placedDate <= task.dueDate) continue
+    push('V3', [block.planBlockId], {
+      blockTitle: block.title,
+      dueDate: task.dueDate,
+      placedDate,
+    })
+  }
+
+  // V6 버퍼 부족 (경고) — consecutive same-day blocks with a gap under the buffer.
+  // A gap of 0 or less is skipped: back-to-back is a deliberate arrangement, and
+  // a genuine overlap is already reported as V1.
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const dayBlocks = inWeek.filter((b) => b.dayIndex === dayIndex)
+    for (let i = 1; i < dayBlocks.length; i += 1) {
+      const prev = dayBlocks[i - 1]
+      const next = dayBlocks[i]
+      const gap = minutesOfDay(next.startAt) - minutesOfDay(prev.endAt)
+      if (gap <= 0 || gap >= BUFFER_MIN_MINUTES) continue
+      push('V6', [prev.planBlockId, next.planBlockId], {
+        blockTitle: prev.title,
+        otherTitle: next.title,
+        gapMinutes: gap,
+      })
+    }
+  }
+
+  return issues
+}
+
 function computeDerived(week) {
   const totalPlannedMinutes = week.blocks.reduce((sum, b) => {
     const mins = (new Date(b.endAt).getTime() - new Date(b.startAt).getTime()) / 60000
@@ -232,14 +421,21 @@ function computeDerived(week) {
     }
     return b
   })
+  // The week payload's `validation` summary is the counts the header shows BEFORE
+  // the first dry-run answers, so it runs the same rules the dry-run does — a
+  // placeholder here would make the badge briefly lie on every week change.
+  const issues = computeValidationIssues(week.weekStartDate, blocks)
+  const blockingCodes = issues.filter((i) => MOCK_BLOCKING_CODES.has(i.code))
   return {
     ...week,
     blocks,
     totalPlannedMinutes,
-    // Unplaced count = never-placed backlog + partially-placed remainders (A4);
-    // validation still a placeholder until POST validations lands (ST-F1-05).
+    // Unplaced count = never-placed backlog + partially-placed remainders (A4).
     unplacedCount: unplacedTasks.length + placedRemainders().length,
-    validation: { blockCount: 0, warningCount: 2 },
+    validation: {
+      blockCount: blockingCodes.length,
+      warningCount: issues.length - blockingCodes.length,
+    },
   }
 }
 
@@ -450,6 +646,34 @@ export const mockBackend = {
       }
     }
     return { message: 'UPDATED' }
+  },
+
+  // POST /weekly-plans/{id}/validation-issues — the dry-run (ST-F1-05 AC-1). Runs
+  // the rules against the CLIENT's block set (the unsaved draft), never the stored
+  // one, and writes nothing. Kept fast on purpose: the whole loop — local change →
+  // 300ms debounce → this call → badge update — has a 1s budget (NFR-025).
+  async validatePlan(weeklyPlanId, blocks) {
+    await delay(50)
+    const week = findWeekByPlanId(weeklyPlanId)
+    if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
+    const issues = computeValidationIssues(week.weekStartDate, blocks ?? []).map((issue) => ({
+      ...issue,
+      severity: MOCK_BLOCKING_CODES.has(issue.code) ? 'blocking' : 'warning',
+    }))
+    return { issues }
+  },
+
+  // PUT /weekly-plans/{weeklyPlanId} — PLAN-03 저장(확정). Flips the week to
+  // CONFIRMED and bumps `version`, which is what a real optimistic-lock 409 would
+  // key off; the mock never rejects, so the 409 path is exercised against a real
+  // server (or by pointing at one) rather than simulated here.
+  async saveWeek(weeklyPlanId, body) {
+    await delay()
+    const week = findWeekByPlanId(weeklyPlanId)
+    if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
+    week.status = body?.status ?? 'CONFIRMED'
+    week.version += 1
+    return { weeklyPlanId }
   },
 
   // POST /tasks/{taskId}/execution-records — PLAN-15 실제 시간 기록 (write-only).

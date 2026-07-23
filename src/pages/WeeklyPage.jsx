@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { PlanHeader } from '../components/plan/PlanHeader'
@@ -13,6 +13,7 @@ import { UnplacedPanel } from '../components/plan/UnplacedPanel'
 import { AutoPlaceBar } from '../components/plan/AutoPlaceBar'
 import { ScheduleForm } from '../components/plan/ScheduleForm'
 import { ExecutionLogForm } from '../components/plan/ExecutionLogForm'
+import { SaveConfirmDialog } from '../components/plan/SaveConfirmDialog'
 import { ErrorState } from '../components/common/ErrorState'
 import {
   useApplyAutoPlace,
@@ -22,14 +23,17 @@ import {
   useLogExecution,
   useMoveBlock,
   usePlaceTask,
+  usePlanValidation,
   useRemoveBlockWithUndo,
   useResizeBlock,
   useSaveAvailability,
+  useSaveWeek,
   useSetBlockComplete,
   useUnplacedTasks,
   useUpdateSchedule,
   useWeekPlan,
 } from '../features/plan/usePlanData'
+import { severityLabels } from '../features/plan/violationMessages'
 import {
   usePlanHistory,
   selectCanUndo,
@@ -53,6 +57,11 @@ import {
 import { useAppStore, selectCanWrite } from '../store/useAppStore'
 import { toast } from '../hooks/useToasts'
 import { systemMessages } from '../constants/systemMessages'
+
+// How long the PLAN-23 highlight stays on a block: two pulses of --duration-slow
+// (320ms) plus a beat, so the ring is gone shortly after the animation ends
+// instead of lingering as a permanent marker.
+const FOCUS_HIGHLIGHT_MS = 900
 
 // Sum of active availability windows across the week = the "available" total the
 // summary bar compares planned time against (PLAN-01).
@@ -85,8 +94,17 @@ function WeeklyPage() {
   const [scheduleForm, setScheduleForm] = useState(null) // { mode, block?, slot? } | null
   const [execLog, setExecLog] = useState(null) // { block } | null
 
+  // ST-F1-05: the block PLAN-23 asked to focus, and the warnings-only save confirm.
+  const [focusRequest, setFocusRequest] = useState(null) // { planBlockId, token } | null
+  const [confirmSaveOpen, setConfirmSaveOpen] = useState(false)
+
   const gridBodyRef = useRef(null)
   const unplacedPanelRef = useRef(null)
+  // Pending "take the highlight back down" timer (PLAN-23); see handleSelectIssue.
+  const focusClearTimerRef = useRef(null)
+
+  // Don't let that timer fire into an unmounted page.
+  useEffect(() => () => clearTimeout(focusClearTimerRef.current), [])
 
   const planQuery = useWeekPlan(weekStartISO)
   const availQuery = useAvailability()
@@ -105,6 +123,7 @@ function WeeklyPage() {
   const logExecution = useLogExecution()
   const createSchedule = useCreateScheduleBlock()
   const updateSchedule = useUpdateSchedule()
+  const saveWeekPlan = useSaveWeek()
   const navigate = useNavigate()
 
   const history = usePlanHistory()
@@ -114,7 +133,10 @@ function WeeklyPage() {
 
   const plan = planQuery.data
   const availability = useMemo(() => availQuery.data ?? [], [availQuery.data])
-  const blocks = plan?.blocks ?? []
+  // Memoized because the validation loop debounces on this array's IDENTITY: an
+  // inline `plan?.blocks ?? []` would be a new array every render and would keep
+  // rescheduling the debounce forever (see usePlanValidation).
+  const blocks = useMemo(() => plan?.blocks ?? [], [plan])
   const readOnly = isPastWeek(weekStartISO)
   // Badge count = the unplaced LIST length (single source), not the per-week
   // plan.unplacedCount (which is cached per week and can go stale — Thomas HIGH).
@@ -123,6 +145,94 @@ function WeeklyPage() {
   const days = useMemo(() => weekDaysOf(weekStartISO), [weekStartISO])
   const range = useMemo(() => visibleRange(mode, availability), [mode, availability])
   const availableMinutes = availableMinutesOf(availability)
+
+  // --- validation (ST-F1-05: PLAN-21~28) ------------------------------------
+
+  // A past week is read-only, so there is nothing to validate and nothing to save.
+  const validation = usePlanValidation({
+    weeklyPlanId: plan?.weeklyPlanId,
+    blocks,
+    enabled: !readOnly,
+  })
+
+  // Until the first dry-run answers, fall back to the counts the week payload
+  // carries. Showing "0 위반" for the ~400ms before the first result would be a
+  // brief lie in exactly the direction that matters (it implies "safe to save").
+  const blockingCount = validation.hasResult
+    ? validation.blockingCount
+    : (plan?.validation?.blockCount ?? 0)
+  const warningCount = validation.hasResult
+    ? validation.warningCount
+    : (plan?.validation?.warningCount ?? 0)
+
+  /*
+    Layer 1 input: the worst severity per block plus how many issues it carries.
+    One block can appear in several issues (an overlap that is ALSO outside the
+    availability window), and the block only has room for one chip — 차단 wins,
+    and the count tells the user there is more to read in the panel.
+  */
+  const violationsByBlockId = useMemo(() => {
+    const marks = {}
+    for (const issue of validation.issues) {
+      for (const blockId of issue.targetBlockIds) {
+        const existing = marks[blockId]
+        if (!existing) {
+          marks[blockId] = {
+            severity: issue.severity,
+            label: severityLabels[issue.severity],
+            count: 1,
+          }
+          continue
+        }
+        existing.count += 1
+        if (issue.severity === 'blocking' && existing.severity !== 'blocking') {
+          existing.severity = 'blocking'
+          existing.label = severityLabels.blocking
+        }
+      }
+    }
+    return marks
+  }, [validation.issues])
+
+  const warningIssues = useMemo(
+    () => validation.issues.filter((i) => i.severity !== 'blocking'),
+    [validation.issues],
+  )
+
+  /*
+    PLAN-23. The panel names a target; the block does the scrolling and focusing
+    (only it knows its DOM node). The panel is CLOSED first on every breakpoint,
+    not just mobile: both shells are focus-trapped modals, so leaving it open
+    would either swallow the focus move or leave focus inside an overlay covering
+    the block the user just asked to see.
+  */
+  const handleSelectIssue = (issue) => {
+    const target = blocks.find((b) => issue.targetBlockIds.includes(b.planBlockId))
+    setReviewOpen(false)
+    if (!target) {
+      toast({ tone: 'info', message: '이 항목의 대상 블록을 찾을 수 없습니다' })
+      return
+    }
+
+    // A 가용 시간 밖 block (V5) is, by definition, often outside what focus mode
+    // renders — scrolling to a block that isn't in the DOM looks like the panel
+    // did nothing. Widen to 24h first so there is something to scroll to.
+    const startMin = minutesOfDay(target.startAt)
+    const endMin = minutesOfDay(target.endAt)
+    if (startMin < range.startMinutes || endMin > range.endMinutes) setMode('24h')
+
+    // A counter, not the id: re-selecting the SAME block must retrigger the
+    // scroll/focus/pulse, which only a changed value can do.
+    setFocusRequest((prev) => ({ planBlockId: target.planBlockId, token: (prev?.token ?? 0) + 1 }))
+
+    // The highlight is an ANNOUNCEMENT, not a selection state, so it has to be
+    // taken back down: the ring is rendered as long as focusRequest names this
+    // block, and a CSS animation reverts to its base style when it ends rather
+    // than staying at its final keyframe. Clearing here covers both the animated
+    // and the reduced-motion (static ring) paths with one rule.
+    clearTimeout(focusClearTimerRef.current)
+    focusClearTimerRef.current = setTimeout(() => setFocusRequest(null), FOCUS_HIGHLIGHT_MS)
+  }
 
   // --- move (drag/keyboard) → optimistic PATCH + history --------------------
 
@@ -481,14 +591,98 @@ function WeeklyPage() {
     )
   }
 
-  // --- save (PLAN-03: this story owns the undo-stack reset) -----------------
+  // --- save (PLAN-03 · PLAN-28: the validation-gated confirm) ----------------
 
-  const handleSave = () => {
-    // Validation-gated confirm (POST .../confirmation) is ST-F1-05; here the
-    // save's ST-F1-02 responsibility is to clear the client undo stack so the
-    // plan can no longer be reverted past this point (AC-4).
-    history.clear()
-    toast({ tone: 'success', message: '주간 계획을 저장했습니다' })
+  /*
+    The gate has three outcomes, decided by the CURRENT dry-run result:
+      차단 > 0   → the save button is disabled (PlanHeader owns that, with the
+                   reason as adjacent text); this handler is unreachable.
+      경고 only  → a confirm dialog, because the plan is savable but imperfect.
+      깨끗함     → save immediately; asking would be a pointless click.
+  */
+  const handleSaveClick = () => {
+    // `validation.stale` is not belt-and-braces: the button is disabled in the
+    // same conditions, but this handler is also the one path a stray Enter or a
+    // stale click can still reach, and confirming a plan nobody checked is the
+    // exact failure this gate exists to prevent.
+    if (!plan || !canWrite || blockingCount > 0 || validation.stale) return
+    if (warningCount > 0) {
+      setConfirmSaveOpen(true)
+      return
+    }
+    commitSave()
+  }
+
+  /*
+    PUT status:"CONFIRMED". Two things happen only on SUCCESS: the undo stack is
+    cleared (PLAN-03 — a confirmed week is the new floor, nothing may be undone
+    past it) and the week is refetched, since confirming can change server-side
+    fields we don't model locally.
+  */
+  const commitSave = () => {
+    if (!plan) return
+    saveWeekPlan.mutate(
+      {
+        weeklyPlanId: plan.weeklyPlanId,
+        weekStartISO,
+        weekStartDate: plan.weekStartDate,
+        weekEndDate: plan.weekEndDate,
+        totalPlannedMinutes: plan.totalPlannedMinutes ?? 0,
+      },
+      {
+        onSuccess: () => {
+          setConfirmSaveOpen(false)
+          history.clear()
+        },
+        onError: (error) => {
+          setConfirmSaveOpen(false)
+          handleSaveError(error)
+        },
+      },
+    )
+  }
+
+  /*
+    AC-4 — the confirm race. A 409 means someone (another tab/device) confirmed a
+    newer version of this week first, so what we validated is no longer what the
+    server holds. The panel is re-synced from the error's own `details.issues`
+    when it carries them, and from a forced dry-run when it doesn't; the week is
+    refetched either way, so the grid, the counts and the save gate all end up
+    describing the CURRENT server state rather than the one we submitted.
+
+    The save button goes back to DISABLED immediately and without a dedicated
+    conflict flag: both branches below make `validation.stale` true — adopted
+    server issues are stamped as not-ours, and the forced dry-run is in flight —
+    so the gate is shut the moment the 409 lands, not a round trip later. It
+    reopens only once a fresh dry-run vouches for the refreshed plan.
+
+    The dry-run is forced in BOTH branches on purpose: TanStack's structural
+    sharing can hand back the identical blocks array after the refetch, which
+    would leave the debounce loop with nothing to react to and the gate shut
+    forever.
+
+    Nor is OVL-CONFLICT shown here — that overlay is not mounted by any screen yet
+    (errorRouting.js only catalogs the routing), so an in-panel refresh plus one
+    toast is the whole surface, with no duplicate conflict UI to collide with.
+  */
+  const handleSaveError = (error) => {
+    // Match the CODE first and fall back to the status: `E-PLAN-004` is the
+    // confirm race specifically, while a bare 409 on this endpoint could be any
+    // optimistic-lock rejection — telling the user "다른 곳에서 먼저 저장되었습니다"
+    // about an unrelated conflict would be a confident, wrong explanation.
+    const isConfirmRace = error?.code === 'E-PLAN-004' || error?.status === 409
+    if (isConfirmRace) {
+      const serverIssues = error?.details?.issues
+      if (Array.isArray(serverIssues)) validation.applyServerIssues(serverIssues)
+      validation.revalidate(blocks)
+      planQuery.refetch()
+      toast({
+        tone: 'error',
+        message: '이 주간 계획이 다른 곳에서 먼저 저장되었습니다. 검토 항목을 다시 확인해 주세요',
+      })
+      return
+    }
+    toast({ tone: 'error', message: systemMessages.error.writeTitle })
   }
 
   // --- render ---------------------------------------------------------------
@@ -506,11 +700,15 @@ function WeeklyPage() {
   return (
     <div className="flex flex-col gap-4">
       <PlanHeader
-        reviewCount={plan?.validation?.warningCount ?? 0}
+        blockingCount={blockingCount}
+        warningCount={warningCount}
+        validationStale={validation.stale}
+        validationDelayed={validation.delayed}
         onOpenReview={() => setReviewOpen(true)}
-        onSave={handleSave}
-        saveDisabled={!canWrite}
-        saveDisabledReason={systemMessages.offline.disabledReason}
+        onSave={handleSaveClick}
+        saving={saveWeekPlan.isPending}
+        canWrite={canWrite}
+        offlineReason={systemMessages.offline.disabledReason}
         readOnly={readOnly}
       />
 
@@ -563,6 +761,8 @@ function WeeklyPage() {
             onEmptySlot={handleEmptySlot}
             onResizeCommit={handleResizeCommit}
             onBlockDropOutside={handleBlockDropOutside}
+            violationsByBlockId={violationsByBlockId}
+            focusRequest={focusRequest}
             // Shrink the grid by ~the draft bar's height while it's shown, so the
             // bar never adds net page height (no new scroll).
             bodyMaxHeight={autoDraft ? 'calc(62vh - 5rem)' : '62vh'}
@@ -623,10 +823,23 @@ function WeeklyPage() {
 
       <ReviewPanel
         open={reviewOpen}
-        blockCount={plan?.validation?.blockCount ?? 0}
-        warningCount={plan?.validation?.warningCount ?? 0}
-        issues={[]}
+        blockingCount={blockingCount}
+        warningCount={warningCount}
+        issues={validation.issues}
+        delayed={validation.delayed}
+        onSelectIssue={handleSelectIssue}
         onClose={() => setReviewOpen(false)}
+      />
+
+      {/* Warnings-only save confirmation (PLAN-28). 차단 never gets here — the
+          save button is disabled while any remains. */}
+      <SaveConfirmDialog
+        open={confirmSaveOpen}
+        warningCount={warningCount}
+        warnings={warningIssues}
+        saving={saveWeekPlan.isPending}
+        onConfirm={commitSave}
+        onCancel={() => setConfirmSaveOpen(false)}
       />
 
       <UnplacedPanel
