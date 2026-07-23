@@ -155,6 +155,18 @@ function seedFixedSchedules() {
 const weeks = new Map()
 let availability = seedAvailability()
 const fixedSchedules = seedFixedSchedules()
+// ST-F1-06 week exceptions: fixedScheduleId -> Set<weekStartISO> currently
+// "이번 주만 비활성화". A Set (not a boolean) because the toggle is PER WEEK — the
+// same fixed schedule can be deactivated for one week and stay active every other
+// week, which is the whole point of PLAN-33/34 (never a global on/off).
+const weekExceptionsByFixedId = new Map()
+
+// True unless THIS week has an exception recorded for THIS fixed schedule. Read
+// by both the V2 rule (a deactivated fixed schedule stops blocking) and
+// getFixedSchedules (the `activeThisWeek` the ghost display keys off).
+function isFixedActiveForWeek(fixed, weekStartISO) {
+  return !weekExceptionsByFixedId.get(fixed.fixedScheduleId)?.has(weekStartISO)
+}
 let unplacedTasks = seedUnplacedTasks()
 // Full data of tasks that have been placed as blocks, kept so "배치 해제" (PLAN-16)
 // can restore the original task to the unplaced backlog (and later A4 remainder).
@@ -319,12 +331,16 @@ function computeValidationIssues(weekStartISO, blocks) {
   }
 
   // V2 고정 일정 충돌 (차단) — a plan block sitting on an immovable fixed schedule.
+  // A fixed schedule deactivated for THIS week (ST-F1-06 PLAN-33) is skipped: the
+  // whole point of "이번 주만 비활성화" is that it stops blocking for that week
+  // specifically, without touching any other week's V2 result.
   for (const block of inWeek) {
     const weekdayKey = WEEKDAY_KEYS[block.dayIndex]
     const startMin = minutesOfDay(block.startAt)
     const endMin = minutesOfDay(block.endAt)
     for (const fixed of fixedSchedules) {
       if (fixed.weekday !== weekdayKey) continue
+      if (!isFixedActiveForWeek(fixed, weekStartISO)) continue
       if (startMin >= fixed.endMinutes || endMin <= fixed.startMinutes) continue
       push('V2', [block.planBlockId], {
         blockTitle: block.title,
@@ -448,6 +464,43 @@ export const mockBackend = {
   async getAvailability() {
     await delay(60)
     return availability
+  },
+
+  // GET /fixed-schedules?status=ACTIVE — ST-F1-06. `weekStartISO` is a mock-only
+  // extra argument (see fixedScheduleApi.js's ASSUMPTION note): the real 07번
+  // 명세서 GET has no weekly concept at all, so this is where that gap is
+  // papered over — `activeThisWeek` is computed fresh per call from the week
+  // exception store rather than stored on the schedule itself.
+  async getFixedSchedules(weekStartISO) {
+    await delay(60)
+    return {
+      fixedSchedules: fixedSchedules.map((f) => ({
+        ...f,
+        activeThisWeek: isFixedActiveForWeek(f, weekStartISO),
+      })),
+    }
+  },
+
+  // POST /fixed-schedules/{id}/week-exceptions — PLAN-33 이번 주만 비활성화. The
+  // contract marks this non-idempotent (api-contracts.md §2.2), but a Set makes a
+  // repeat call for the SAME week a harmless no-op here — there is no meaningful
+  // "second" deactivation of a week that is already deactivated.
+  async addFixedWeekException(fixedScheduleId, weekStartISO) {
+    await delay()
+    if (!weekExceptionsByFixedId.has(fixedScheduleId)) {
+      weekExceptionsByFixedId.set(fixedScheduleId, new Set())
+    }
+    weekExceptionsByFixedId.get(fixedScheduleId).add(weekStartISO)
+    return { message: 'CREATED' }
+  },
+
+  // DELETE /fixed-schedules/{id}/week-exceptions/{weekStartDate} — PLAN-34 다시
+  // 활성화. Idempotent per the contract: deleting an exception that is already
+  // gone (e.g. a stale UI retry) is treated as success, not a 404.
+  async removeFixedWeekException(fixedScheduleId, weekStartISO) {
+    await delay()
+    weekExceptionsByFixedId.get(fixedScheduleId)?.delete(weekStartISO)
+    return { message: 'DELETED' }
   },
 
   async patchBlock(planBlockId, patch) {

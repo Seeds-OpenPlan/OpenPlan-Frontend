@@ -36,6 +36,7 @@ import {
   postExecutionRecord,
 } from './taskApi'
 import { patchSchedule, postScheduleBlock } from './scheduleApi'
+import { addFixedException, getFixedSchedules, removeFixedException } from './fixedScheduleApi'
 import { addWeeksISO } from './planTime'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
@@ -43,6 +44,7 @@ import { systemMessages } from '../../constants/systemMessages'
 export const weekPlanKey = (weekStartISO) => ['weekPlan', weekStartISO]
 export const availabilityKey = () => ['availability']
 export const unplacedTasksKey = (projectId = null) => ['unplacedTasks', projectId]
+export const fixedSchedulesKey = (weekStartISO) => ['fixedSchedules', weekStartISO]
 
 const WEEK_STALE_MS = 60 * 1000
 
@@ -615,6 +617,60 @@ export function useUpdateSchedule() {
     onSuccess: (_data, { weekStartISO }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       toast({ tone: 'success', message: '일정을 수정했습니다' })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+// --- ST-F1-06: fixed schedule blocks · week exceptions -----------------------
+
+/**
+ * GET /fixed-schedules — recurring, immovable schedules plus this week's
+ * `activeThisWeek` (PLAN-33/34). A generous staleTime: a fixed schedule's own
+ * weekday/time rarely changes (그 편집은 ST-F1-12 소관, out of scope here) and its
+ * per-week exception only changes through `useToggleFixedException` below, which
+ * invalidates this exact key on success — so there is nothing for a short
+ * staleTime to catch that the mutation doesn't already refresh.
+ */
+export function useFixedSchedules(weekStartISO) {
+  return useQuery({
+    queryKey: fixedSchedulesKey(weekStartISO),
+    queryFn: () => getFixedSchedules(weekStartISO),
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
+/**
+ * Returns `toggle({ fixedScheduleId, weekStartISO, activate })` — PLAN-33 이번 주만
+ * 비활성화 (`activate: false`, POST a week-exception) / PLAN-34 다시 활성화
+ * (`activate: true`, DELETE it).
+ *
+ * Deliberately NOT optimistic, unlike the drag/placement hooks above: those exist
+ * to hide network latency from a POINTER interaction with a <100ms budget. This
+ * is a menu click — a plain invalidate-on-success is simpler and correct, and
+ * skips modeling a rollback for a cache shape (fixed schedules) that nothing else
+ * writes to.
+ *
+ * The caller (WeeklyPage) is expected to ALSO force `validation.revalidate(blocks)`
+ * in its own `onSuccess` (AC-3): this hook only knows about the fixed-schedules
+ * cache, not the validation loop, which lives in `usePlanValidation` and needs
+ * the CURRENT block set as its argument — threading that through this generic
+ * hook would couple it to a caller-specific concern it has no other reason to
+ * know about.
+ */
+export function useToggleFixedException() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ fixedScheduleId, weekStartISO, activate }) =>
+      activate
+        ? removeFixedException(fixedScheduleId, weekStartISO)
+        : addFixedException(fixedScheduleId, weekStartISO),
+    onSuccess: (_data, { weekStartISO, activate }) => {
+      queryClient.invalidateQueries({ queryKey: fixedSchedulesKey(weekStartISO) })
+      toast({
+        tone: 'success',
+        message: activate ? '고정 일정을 다시 활성화했습니다' : '이번 주만 비활성화했습니다',
+      })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })

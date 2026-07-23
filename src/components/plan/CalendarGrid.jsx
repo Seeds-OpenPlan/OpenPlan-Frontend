@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PlanBlock } from './PlanBlock'
+import { FixedScheduleBlock } from './FixedScheduleBlock'
 import { usePlanDrag } from '../../features/plan/usePlanDrag'
 import {
   availabilityForColumn,
@@ -18,6 +19,7 @@ import {
   minutesOfDay,
   parseISODate,
   snapMinutes,
+  WEEKDAY_KEYS,
   WEEKDAY_LABELS_KO,
   WEEKEND_COLUMN_INDICES,
 } from '../../features/plan/planTime'
@@ -148,6 +150,10 @@ export function CalendarGrid({
   // the review panel most recently asked to focus (PLAN-23).
   violationsByBlockId = null,
   focusRequest = null,
+  // ST-F1-06: this week's recurring fixed schedules (weekday + minutes, plus
+  // activeThisWeek) and the handler that opens their block-action menu.
+  fixedSchedules = null,
+  onOpenFixedMenu,
   bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
 }) {
   const gridRef = useRef(null)
@@ -254,6 +260,19 @@ export function CalendarGrid({
       }
       return { block, dayIndex, startMin, endMin, isDragged }
     })
+    .filter((p) => p.dayIndex >= 0)
+
+  // Fixed schedules (ST-F1-06) recur by WEEKDAY, not by a specific date, so their
+  // column comes from WEEKDAY_KEYS rather than weekDays.indexOf(dateOf(...)) —
+  // the same schedule renders in the same column every week, regardless of which
+  // week is on screen.
+  const positionedFixed = (fixedSchedules ?? [])
+    .map((f) => ({
+      f,
+      dayIndex: WEEKDAY_KEYS.indexOf(f.weekday),
+      startMin: f.startMinutes,
+      endMin: f.endMinutes,
+    }))
     .filter((p) => p.dayIndex >= 0)
 
   // Draft blocks from an auto-place proposal (ST-F1-03 RB-PLAN-01) — laid out like
@@ -404,6 +423,29 @@ export function CalendarGrid({
                 />
               ))
             })}
+
+          {/* Fixed-schedule layer (ST-F1-06). Rendered BEHIND real plan blocks
+              (z-[5], below the block layer's z-10/z-20/z-30) so a TASK/SCHEDULE
+              block placed on top of one — the V2 고정 일정 충돌 case — stays the
+              readable, interactive element on top, with the fixed schedule it
+              conflicts with still visible around its edges underneath. */}
+          {positionedFixed.map(({ f, dayIndex, startMin, endMin }) => {
+            const rect = blockRect(startMin, endMin, range)
+            return (
+              <FixedScheduleBlock
+                key={f.fixedScheduleId}
+                schedule={f}
+                disabled={readOnly}
+                style={{
+                  left: `calc(${dayIndex} / 7 * 100% + 2px)`,
+                  width: `calc(100% / 7 - 4px)`,
+                  top: rect.top,
+                  height: rect.height,
+                }}
+                onOpenMenu={(pos) => onOpenFixedMenu?.(f, pos)}
+              />
+            )
+          })}
 
           {/* Block layer. A dragged block is positioned in pixels via a GPU
               transform (translate3d) instead of animated top/left, so its
