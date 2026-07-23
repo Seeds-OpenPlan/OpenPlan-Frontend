@@ -137,6 +137,45 @@ export function PlanBlock({
       behavior: reducedMotion ? 'auto' : 'smooth',
     })
     el.focus({ preventScroll: true })
+
+    // PLAN-23 shake: one horizontal wobble on the block, layered on the same
+    // focusToken pulse-ring request (no separate state or timer). Skipped
+    // under reduced motion — a lateral wobble is a vestibular trigger and has
+    // no static substitute, so we simply don't run it.
+    if (reducedMotion) return
+
+    // Owner decision: the block should wobble AFTER it finishes sliding into
+    // view, not mid-flight. scrollIntoView({behavior:'smooth'}) is async and
+    // may scroll several ancestors at once, so instead of guessing which one
+    // emits `scrollend` we watch this element's own viewport position across
+    // animation frames and fire once it holds still for a frame. Driving the
+    // animation imperatively (rather than a permanent className) means nothing
+    // auto-plays before the scroll settles; the none→reflow→set trick makes it
+    // replay cleanly even when the SAME block is re-selected (same class string
+    // would otherwise not restart a CSS animation without a remount, and a
+    // remount would drop the `.focus()` above).
+    let raf = 0
+    let prevTop = null
+    let stable = 0
+    const play = () => {
+      el.style.animation = 'none'
+      void el.offsetHeight
+      el.style.animation =
+        'block-focus-shake var(--duration-slow) var(--ease-standard) 1'
+    }
+    const tick = () => {
+      const top = el.getBoundingClientRect().top
+      if (prevTop !== null && Math.abs(top - prevTop) < 0.5) stable += 1
+      else stable = 0
+      prevTop = top
+      if (stable >= 2) {
+        play()
+        return
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
   }, [focusToken, reducedMotion])
 
   // Detail card for short blocks: anchored to the block's on-screen rect and
@@ -260,6 +299,10 @@ export function PlanBlock({
         dragging ? 'z-30 cursor-grabbing opacity-90 shadow-modal ring-2 ring-focus-ring' : 'z-10 shadow-card',
         resizing ? 'ring-2 ring-focus-ring' : '',
         pending ? 'opacity-70' : '',
+        // PLAN-23 shake is driven imperatively from the focusToken effect above
+        // (inline `animation`, fired only after the scroll settles) rather than
+        // by a class here — a permanent class would auto-play the wobble while
+        // the block is still sliding into view, which the owner didn't want.
       ].join(' ')}
     >
       {/* A2 resize handles (top/bottom edge). Pointer-only; keyboard users edit

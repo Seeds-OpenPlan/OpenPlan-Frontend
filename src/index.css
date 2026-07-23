@@ -215,6 +215,39 @@
   }
 }
 
+/*
+  PLAN-23 "shake" — a companion to the pulse ring above (owner-requested): one
+  quick horizontal wobble on the BLOCK ITSELF, not the ring overlay, so
+  "review → click an issue" reads as a nudge, not just a glow. Runs ONCE
+  (PlanBlock sets the inline animation with iteration-count 1, not 2 like the
+  ring) and settles back to translateX(0) — no fill-mode, matching the ring's
+  own "falls back to the element's base style when it finishes" behavior, so
+  there is nothing left to clear afterward. PlanBlock fires it imperatively only
+  AFTER the scroll-into-view settles (owner decision), so it wobbles in place,
+  not mid-flight. Skipped entirely under prefers-reduced-motion — see
+  PlanBlock's own `reducedMotion` branch (a lateral wobble is a vestibular
+  trigger, and unlike the ring there is no static substitute for a shake, so
+  the right answer is just "don't run it").
+*/
+@keyframes block-focus-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-4px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+}
+
 /* Toast entrance: rises and fades in. */
 @keyframes toast-rise {
   from {

@@ -137,7 +137,9 @@ function FilterChip({ active, onClick, children }) {
       onClick={onClick}
       aria-pressed={active}
       className={[
-        'rounded-chip px-2.5 py-1 text-caption font-medium transition-colors',
+        // fix J-2: fully rounded (owner decision), not the chip radius token —
+        // vertical padding is untouched, only the corner radius changed.
+        'rounded-full px-2.5 py-1 text-caption font-medium transition-colors',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
         active
           ? 'bg-brand-600 text-white'
