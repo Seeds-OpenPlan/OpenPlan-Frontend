@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { AlertTriangleIcon } from './statusIcons'
 import { Button } from './Button'
+import { BrandLogo } from './BrandLogo'
 import { systemMessages } from '../../constants/systemMessages'
 
 /*
@@ -41,8 +42,13 @@ export function ErrorState({
     const handleAction = onAction ?? (() => window.location.reload())
     return (
       <div className="min-h-screen bg-surface-sunken text-text">
+        {/* No h-bar here (unlike TopNav/MobileTopBar/HydrateFallback): this
+            header has no explicit height today (py-3, content-driven), and
+            size="title" keeps BrandLogo at its original text-title line-
+            height so this stays exactly as tall as before — text-lg's taller
+            line-height would add a few px here with nothing to absorb it. */}
         <header className="border-b border-border bg-surface px-4 py-3">
-          <span className="text-title font-bold text-brand-600">OpenPlan</span>
+          <BrandLogo size="title" />
         </header>
         <main className="mx-auto flex max-w-md flex-col items-center gap-4 px-4 py-20 text-center">
           <AlertTriangleIcon className="text-warning-600" size={64} />

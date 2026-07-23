@@ -778,15 +778,20 @@ function WeeklyPage() {
             viewports, ends up right behind the tab bar at rest (scrollTop 0)
             regardless of how much trailing padding `<main>` reserves below
             it — that padding only becomes reachable once scrolled into.
-            bottom-18 (72px) clears BottomTabBar's ~57px height with a 15px
-            gap, measured from the viewport now instead of the card. No
-            ancestor between here and <body> sets transform/filter/contain/
-            perspective, so `fixed` really is viewport-relative here, not
-            card-relative (checked AppLayout, App, main.jsx).
+            bottom-18 (72px) clears BottomTabBar with a 16px gap: 72px =
+            --spacing-bar (56px, the tab bar's own height) + 16px, measured
+            from the viewport now instead of the card. Kept as the literal
+            bottom-18 utility rather than a calc() off the token, like
+            AppLayout's pb-24 and Toaster's bottom-24 (the other two spots
+            that clear this same bar) — this exact, owner-approved 72px
+            can't drift from an arithmetic slip. No ancestor between here and
+            <body> sets transform/filter/contain/perspective, so `fixed`
+            really is viewport-relative here, not card-relative (checked
+            AppLayout, App, main.jsx).
 
             Desktop (md:absolute): reverts to the pre-existing card-pinned,
             grid-overlaying behavior (design) — there's no tab bar to clear,
-            and the card is already centered (max-w-6xl mx-auto), so pinning
+            and the card is already centered (max-w-page mx-auto), so pinning
             to the viewport instead would visually detach the buttons from
             the grid they act on. */}
         <div className="pointer-events-none fixed inset-x-4 bottom-18 z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6">

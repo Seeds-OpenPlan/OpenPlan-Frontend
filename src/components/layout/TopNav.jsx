@@ -1,19 +1,15 @@
-import { Link, NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import { navItems } from './navItems'
 import { BellIcon, UserIcon } from './icons'
+import { BrandLogo } from '../common/BrandLogo'
 
 // 데스크톱 공통 상단 헤더 + 상단 내비게이션. md 미만에서는 숨김.
 function TopNav() {
   return (
     <header className="hidden border-b border-border bg-surface md:block">
-      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+      <div className="mx-auto flex h-bar max-w-page items-center justify-between px-page-x">
         {/* 로고 클릭 시 대시보드로 이동. 메뉴는 가운데 정렬(justify-between). */}
-        <Link
-          to="/"
-          className="rounded text-lg font-bold text-brand-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          OpenPlan
-        </Link>
+        <BrandLogo to="/" />
 
         {/* Horizontal pill tabs: icon-only at rest, the label expands on hover
             (and stays open for the active tab so the current page is labeled). */}
