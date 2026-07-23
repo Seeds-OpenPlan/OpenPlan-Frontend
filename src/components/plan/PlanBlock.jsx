@@ -75,6 +75,15 @@ export function PlanBlock({
   dragging = false,
   boundary = null,
   disabled = false,
+  // ST-F1-02 AC-5: a past week is read-only EXCEPT its TASK blocks' 완료 전환/
+  // 실제 시간 기록, which stay reachable through this same menu — so a block
+  // that still has actions can't use `disabled` (that also hides the menu).
+  // `moveLocked` is the narrower lock: it blocks drag/resize/keyboard-nudge
+  // (all plan-CHANGING moves) while leaving focus, the context menu, and
+  // Enter/Space untouched. A fully `disabled` block is moveLocked too — see
+  // `moveBlocked` below — so callers only need to set this for the
+  // "read-only week, but this block still has actions" case.
+  moveLocked = false,
   dragActive = false,
   resizing = false,
   pending = false, // optimistic block whose server id hasn't reconciled yet
@@ -92,7 +101,10 @@ export function PlanBlock({
 }) {
   // A pending (temp-id) block is shown but not yet interactable: acting on it
   // before the POST resolves would target a non-existent server id (temp-id race).
+  // `locked` is the FULL lock (no menu either); `moveBlocked` additionally
+  // covers the read-only-week-but-still-has-actions case above.
   const locked = disabled || pending
+  const moveBlocked = locked || moveLocked
   const timeLabel = `${formatMinutesLabel(startMin)} - ${formatMinutesLabel(endMin)}`
   const typeClass = TYPE_CLASSES[block.blockType] ?? TYPE_CLASSES.TASK
   // Completed blocks read as done via a check + strikethrough + dimming, never by
@@ -161,22 +173,27 @@ export function PlanBlock({
   const handleKeyDown = (e) => {
     if (locked) return
     switch (e.key) {
+      // Arrow keys nudge (move) the block — still preventDefault even when
+      // moveLocked so a focused, read-only-week block doesn't scroll the page
+      // out from under the user on every arrow press; it just doesn't move.
       case 'ArrowUp':
         e.preventDefault()
-        onNudge?.({ dMin: -5 })
+        if (!moveLocked) onNudge?.({ dMin: -5 })
         break
       case 'ArrowDown':
         e.preventDefault()
-        onNudge?.({ dMin: 5 })
+        if (!moveLocked) onNudge?.({ dMin: 5 })
         break
       case 'ArrowLeft':
         e.preventDefault()
-        onNudge?.({ dDay: -1 })
+        if (!moveLocked) onNudge?.({ dDay: -1 })
         break
       case 'ArrowRight':
         e.preventDefault()
-        onNudge?.({ dDay: 1 })
+        if (!moveLocked) onNudge?.({ dDay: 1 })
         break
+      // Opening the menu is never move-locked: it's the one path to a past
+      // week's 완료 전환/실제 시간 기록 (AC-5).
       case 'Enter':
       case ' ':
         e.preventDefault()
@@ -195,7 +212,16 @@ export function PlanBlock({
       tabIndex={disabled ? -1 : 0}
       aria-label={`${block.title}, ${timeLabel}${isDone ? ', 완료' : ''}${
         violationLabel ? `, ${violationLabel}` : ''
-      }${disabled ? ', 읽기 전용' : ''}`}
+      }${
+        // Fully disabled (no menu at all) vs. move-locked but still reachable
+        // for 완료 전환/실제 시간 기록. Two DIFFERENT things can set moveLocked
+        // now (plan-polish fix G added a second one) — a past week (AC-5) and
+        // an auto-place draft under review (fix G) — so this stays worded
+        // generically ("이동 불가", not "지난 주") rather than naming either
+        // cause specifically; the visible banner (PlanHeader's read-only strip,
+        // or AutoPlaceBar's own caption) is what states WHICH one applies.
+        disabled ? ', 읽기 전용' : moveLocked ? ', 이동·리사이즈 불가 · 완료 전환·기록만 가능' : ''
+      }`}
       aria-disabled={disabled || undefined}
       style={{
         ...style,
@@ -204,7 +230,7 @@ export function PlanBlock({
         touchAction: 'none',
       }}
       onPointerDown={
-        locked
+        moveBlocked
           ? undefined
           : (e) => {
               closeDetail()
@@ -230,7 +256,7 @@ export function PlanBlock({
         typeClass,
         violation ? VIOLATION_BORDER_CLASSES[violation.severity] : '',
         isDone ? 'opacity-60' : '',
-        locked ? 'cursor-default' : 'cursor-grab',
+        moveBlocked ? 'cursor-default' : 'cursor-grab',
         dragging ? 'z-30 cursor-grabbing opacity-90 shadow-modal ring-2 ring-focus-ring' : 'z-10 shadow-card',
         resizing ? 'ring-2 ring-focus-ring' : '',
         pending ? 'opacity-70' : '',
@@ -239,7 +265,7 @@ export function PlanBlock({
       {/* A2 resize handles (top/bottom edge). Pointer-only; keyboard users edit
           time via the task/schedule form. onResizeStart stops propagation so it
           never starts a block MOVE. Group-hover reveals a subtle grip. */}
-      {onResizeStart && !locked && !dragging && (
+      {onResizeStart && !moveBlocked && !dragging && (
         <>
           <span
             aria-hidden="true"

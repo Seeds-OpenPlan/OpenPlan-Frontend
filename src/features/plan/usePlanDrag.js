@@ -47,7 +47,8 @@ export function usePlanDrag({ gridRef, range, onCommit, onDropOutside, disabled 
 
   const onBlockPointerDown = useCallback(
     (e, block, dayIndex, startMin) => {
-      // Left button only; a read-only (past) week disables dragging entirely.
+      // Left button only; `disabled` (a read-only past week, or — plan-polish
+      // fix G — an auto-place draft under review) disables dragging entirely.
       if (disabled || e.button !== 0) return
 
       const duration = (new Date(block.endAt) - new Date(block.startAt)) / 60000
