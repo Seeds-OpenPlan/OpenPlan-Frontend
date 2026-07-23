@@ -20,6 +20,7 @@ import {
   useAutoPlace,
   useAvailability,
   useCreateScheduleBlock,
+  useFixedSchedules,
   useLogExecution,
   useMoveBlock,
   usePlaceTask,
@@ -29,6 +30,7 @@ import {
   useSaveAvailability,
   useSaveWeek,
   useSetBlockComplete,
+  useToggleFixedException,
   useUnplacedTasks,
   useUpdateSchedule,
   useWeekPlan,
@@ -108,6 +110,8 @@ function WeeklyPage() {
 
   const planQuery = useWeekPlan(weekStartISO)
   const availQuery = useAvailability()
+  const fixedSchedulesQuery = useFixedSchedules(weekStartISO)
+  const toggleFixedException = useToggleFixedException()
   const moveBlock = useMoveBlock()
   const saveAvailability = useSaveAvailability()
   // Fetch the FULL backlog (no server projectId filter); the panel filters by
@@ -497,11 +501,48 @@ function WeeklyPage() {
     })
   }
 
+  // --- fixed schedule menu (ST-F1-06: PLAN-33/34) ---------------------------
+
+  // Open the block menu for a FIXED schedule. `schedule` carries activeThisWeek,
+  // so it's tagged blockType:'FIXED' and reused as the menu's `block` — the menu
+  // only needs a title to show and a type to branch its item list on, exactly
+  // like a TASK/SCHEDULE block already does.
+  const openFixedMenu = (schedule, position) => {
+    setMenu({ open: true, block: { ...schedule, blockType: 'FIXED' }, position })
+  }
+
+  // AC-3: after the exception toggle lands, force a dry-run against the SAME
+  // block set — nothing about the local blocks changed, only the server's fixed-
+  // schedule state, so `revalidate` (not the debounced loop, which keys off the
+  // blocks signature) is what actually re-runs V2 for this week.
+  const handleToggleFixedException = (schedule) => {
+    toggleFixedException.mutate(
+      { fixedScheduleId: schedule.fixedScheduleId, weekStartISO, activate: schedule.activeThisWeek === false },
+      { onSuccess: () => validation.revalidate(blocks) },
+    )
+  }
+
   // Menu items per block type (AC-1). Delete/unplace are soft — a "실행 취소" toast
   // defers the server op (no confirm dialog). 태스크 편집/프로젝트에서 보기 navigate
   // to screens that land in ST-F1-09/08 (route seams).
   const menuItemsFor = (block) => {
     if (!block || readOnly) return []
+    if (block.blockType === 'FIXED') {
+      const active = block.activeThisWeek !== false
+      return [
+        {
+          key: active ? 'deactivate' : 'reactivate',
+          // AC-1's "주차 한정임을 문구로 명시" is carried by this LABEL itself —
+          // "이번 주만" already states the scope in words, so no separate caption
+          // is needed alongside it (a prior version added one; the owner found it
+          // redundant on review, and removing it also removed the only consumer
+          // of BlockActionMenu's `note` prop — see that file's history if a
+          // future action needs a caption again).
+          label: active ? '이번 주만 비활성화' : '다시 활성화',
+          onSelect: () => handleToggleFixedException(block),
+        },
+      ]
+    }
     if (block.blockType === 'SCHEDULE') {
       return [
         { key: 'edit', label: '일정 편집', onSelect: () => openScheduleEdit(block) },
@@ -763,6 +804,8 @@ function WeeklyPage() {
             onBlockDropOutside={handleBlockDropOutside}
             violationsByBlockId={violationsByBlockId}
             focusRequest={focusRequest}
+            fixedSchedules={fixedSchedulesQuery.data ?? []}
+            onOpenFixedMenu={openFixedMenu}
             // Shrink the grid by ~the draft bar's height while it's shown, so the
             // bar never adds net page height (no new scroll).
             bodyMaxHeight={autoDraft ? 'calc(62vh - 5rem)' : '62vh'}
