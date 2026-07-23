@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { PlanHeader } from '../components/plan/PlanHeader'
@@ -96,8 +96,22 @@ function WeeklyPage() {
   const [reviewOpen, setReviewOpen] = useState(false)
 
   // ST-F1-03: unplaced panel + auto-place draft + empty-slot task picker.
-  const [panelOpen, setPanelOpen] = useState(false)
-  const [projectFilter, setProjectFilter] = useState(null)
+  //
+  // plan-polish seams (ST-F1-08/10 entry points): `?openUnplaced=1` (dashboard's
+  // "지금 배치하기") opens the panel outright; `?project={id}` (PROJ-15/19, a
+  // project screen) opens it PRE-FILTERED, per the panel's own existing PROJ-15
+  // doc comment on `projectId` below — filtering while the panel stays closed
+  // would be invisible, so either param alone opens it, and they combine fine
+  // (`?openUnplaced=1&project=xxx`) since both just seed independent state.
+  // Read directly into these two states' own lazy initializers (not mirrored
+  // via an Effect) — same reasoning `?openReplan=1` already uses below; the
+  // params are stripped from the URL once, further down, so a refresh never
+  // reopens/refilters.
+  const initialProjectFilter = searchParams.get('project') || null
+  const [panelOpen, setPanelOpen] = useState(
+    () => searchParams.get('openUnplaced') === '1' || Boolean(initialProjectFilter),
+  )
+  const [projectFilter, setProjectFilter] = useState(() => initialProjectFilter)
   const [autoDraft, setAutoDraft] = useState(null) // { placements, unplaced } | null
   const [slotMenu, setSlotMenu] = useState(null) // { point, slot } | null
 
@@ -129,6 +143,46 @@ function WeeklyPage() {
 
   // Don't let that timer fire into an unmounted page.
   useEffect(() => () => clearTimeout(focusClearTimerRef.current), [])
+
+  // plan-polish: the desktop unplaced panel's vertical bounds. It used to be a
+  // fixed `top` + a vh-relative max-height, which could sit right over the
+  // auto-place bar's [적용] button. Anchored instead between two REAL layout
+  // landmarks, read via getBoundingClientRect (viewport-relative — matches the
+  // panel's own `position: fixed`):
+  //   top    = gridWrapperRef's top — right below the SummaryBar wrapper.
+  //   bottom = floatingControlsRef's bottom — the UndoRedo/FAB row, which is
+  //            bottom-anchored by CSS (`bottom-6`/`bottom-18`) so its rect stays
+  //            put even while the FAB child itself unmounts (it hides whenever
+  //            this same panel is open — see the render below).
+  //
+  // (fix E note: this used to also branch on `autoDraft` and cache/estimate
+  // AutoPlaceBar's height, because the grid's own top moved depending on
+  // whether the bar was showing. Now that the bar is an overlay — see its
+  // render below — the grid's top is invariant to `autoDraft` by construction,
+  // so that branching/caching is gone; a plain, single measurement is correct.)
+  const gridWrapperRef = useRef(null)
+  const floatingControlsRef = useRef(null)
+  const [panelBounds, setPanelBounds] = useState(null) // { top, height } | null until measured
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const top = gridWrapperRef.current?.getBoundingClientRect().top
+      const bottom = floatingControlsRef.current?.getBoundingClientRect().bottom
+      if (top == null || bottom == null) return
+      // Floors the height so a measurement race (or a pathologically short
+      // viewport) can never hand the panel a collapsed or negative max-height.
+      setPanelBounds({ top, height: Math.max(bottom - top, 240) })
+    }
+    measure()
+    // Resize is the only thing that can move these landmarks without this
+    // component re-rendering on its own — e.g. WeekNav/SummaryBar text
+    // reflowing at a narrower width. No ResizeObserver/scroll listener: the
+    // page's own scroll container is document-level, and the anchors' HEIGHT
+    // (not position within a scrolling ancestor) is what changes here, which a
+    // resize listener already covers.
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
 
   const planQuery = useWeekPlan(weekStartISO)
   const availQuery = useAvailability()
@@ -185,6 +239,20 @@ function WeeklyPage() {
   // rescheduling the debounce forever (see usePlanValidation).
   const blocks = useMemo(() => plan?.blocks ?? [], [plan])
   const readOnly = isPastWeek(weekStartISO)
+  // plan-polish fix G: an auto-place DRAFT freezes every OTHER block the same
+  // way a past week does — moving/resizing/deleting one while it's under
+  // review would invalidate the block set the draft's placements were
+  // computed against, so [적용] could commit a batch that no longer matches
+  // what's on screen. `readOnly` keeps its OWN narrower meaning (used verbatim
+  // by PlanHeader's "지난 주간 계획" banner and other past-week-SPECIFIC copy,
+  // which would be actively wrong to show during a draft review on the
+  // CURRENT week) — `planLocked` is the wider "can't edit right now" gate
+  // reused everywhere CalendarGrid/UnplacedPanel/the move-commit path already
+  // gated on bare `readOnly`, extending (not duplicating) those same gates
+  // rather than building a parallel lock system (see CalendarGrid's `readOnly`
+  // prop below, and PlanBlock's `disabled`/`moveLocked` split from AC-5, which
+  // already exists for exactly this kind of "locked, but not EVERYTHING" case).
+  const planLocked = readOnly || Boolean(autoDraft)
   // Badge count = the unplaced LIST length (single source), not the per-week
   // plan.unplacedCount (which is cached per week and can go stale — Thomas HIGH).
   const unplacedCount = unplacedQuery.data?.length ?? 0
@@ -304,16 +372,59 @@ function WeeklyPage() {
   }
 
   // A user-initiated move: commit it AND push an undo entry.
+  //
+  // plan-polish (PLAN-20 follow-up): every week-crossing move — the drag's own
+  // boundary commit, keyboard nudge past a day edge (CalendarGrid's makeNudge),
+  // and the menu's "다음/이전 주로 이동" (below) — funnels through here, so this
+  // one guard covers all three rather than teaching each caller its own check.
+  // A block moved INTO a past week would land somewhere read-only, with no way
+  // back except the very move just blocked (past weeks disable dragging AND
+  // this menu item — see menuItemsFor) — reject it here instead. The CURRENT
+  // week is never "past" (isPastWeek excludes it), so a move back from a
+  // future week to the present still goes through untouched.
   const handleUserMove = (target) => {
     const block = blocks.find((b) => b.planBlockId === target.planBlockId)
     if (!block) return
+    // fix G: the primary defense is upstream (usePlanDrag's disabled, PlanBlock's
+    // moveBlocked, the menu simply omitting move items — all fed by planLocked
+    // below), but this is the ONE choke point every move path funnels through
+    // (drag, keyboard nudge, and the menu's move-to-adjacent-week), so it gets
+    // its own check too rather than trusting three separate UI gates to agree.
+    if (planLocked) return
     const { targetWeek, startAt, endAt } = resolveTarget(target)
+    if (isPastWeek(targetWeek)) {
+      // No cache write happens, so the block's dragState (already cleared by
+      // usePlanDrag's handleUp by the time this runs) leaves it rendering at
+      // its untouched, pre-drag position — this toast is the only thing that
+      // tells the user the drop DID register, rather than silently no-op-ing.
+      toast({ tone: 'info', message: '지난 주로는 블록을 이동할 수 없습니다' })
+      return
+    }
     applyMove({ planBlockId: target.planBlockId, startAt, endAt, sourceWeek: weekStartISO, targetWeek })
     history.record({
       type: 'move',
       planBlockId: target.planBlockId,
       before: { startAt: block.startAt, endAt: block.endAt, week: weekStartISO },
       after: { startAt, endAt, week: targetWeek },
+    })
+  }
+
+  // ST-F1-04 PLAN-20 menu entry (plan-polish): reuses handleUserMove — the SAME
+  // optimistic PATCH + undo-record path dragging a block across a week edge
+  // already takes — rather than a new one. Only the week changes: dayIndex/
+  // startMin/endMin come straight off the block's OWN current position (`days`
+  // is THIS week's column list, so `days.indexOf` gives back the same column
+  // index resolveTarget will re-apply to the target week — same weekday, same
+  // time either side of the move).
+  const moveBlockToAdjacentWeek = (block, boundary) => {
+    const dayIndex = days.indexOf(dateOf(block.startAt))
+    if (dayIndex < 0) return
+    handleUserMove({
+      planBlockId: block.planBlockId,
+      boundary,
+      dayIndex,
+      startMin: minutesOfDay(block.startAt),
+      endMin: minutesOfDay(block.endAt),
     })
   }
 
@@ -371,7 +482,11 @@ function WeeklyPage() {
   // Place one task into a resolved grid slot; span = the task's estimated
   // duration, clamped to the end of the day. Optimistic (usePlaceTask).
   const placeTaskAt = (task, slot) => {
-    if (!plan || readOnly) return
+    // fix G: a new placement is exactly the kind of plan change a draft under
+    // review can't tolerate (same reasoning as planLocked's own header comment)
+    // — the panel's task cards already stop offering drag/quick-place while
+    // locked (UnplacedPanel's `disabled`, below), so this is the backstop.
+    if (!plan || planLocked) return
     const duration = task.estimatedMinutes ?? 60
     let startMin = slot.startMin
     let endMin = startMin + duration
@@ -481,7 +596,9 @@ function WeeklyPage() {
   // A block's edge-drag lands here as a target slot; commit new start/end times.
   // Shrinking a TASK block frees remainder time back to the unplaced panel (A4).
   const handleResizeCommit = (block, { dayIndex, startMin, endMin }) => {
-    if (readOnly) return
+    // fix G: resize is a plan change, same as a move — locked while a draft is
+    // under review, on top of the pre-existing past-week lock.
+    if (planLocked) return
     const dayISO = days[dayIndex]
     resizeBlock({
       weekStartISO,
@@ -565,12 +682,53 @@ function WeeklyPage() {
     )
   }
 
+  // PLAN-20 menu entry (plan-polish), shared by TASK/SCHEDULE — FIXED has no
+  // "other week" concept at all (it recurs by weekday, never a specific date).
+  // "다음 주로 이동" always applies (moving further into the future is never
+  // blocked); "이전 주로 이동" is OMITTED entirely — not shown disabled — when
+  // the previous week is already past, per handleUserMove's own guard above.
+  // Omitting rather than disabling: BlockActionMenu's item shape has no
+  // disabled/reason field today (unlike the Button atom's disabledReason), and
+  // every other conditionally-unavailable item in menuItemsFor below (태스크
+  // 편집/프로젝트에서 보기/배치 해제, all gated on `readOnly`) already follows
+  // "just don't push it" — this keeps that one convention instead of adding a
+  // second, disabled-item pattern to a menu component three block types share.
+  const moveMenuItems = (block) => {
+    const items = [
+      {
+        key: 'move-next',
+        label: '다음 주로 이동',
+        onSelect: () => moveBlockToAdjacentWeek(block, 'next'),
+      },
+    ]
+    if (!isPastWeek(addWeeksISO(weekStartISO, -1))) {
+      items.push({
+        key: 'move-prev',
+        label: '이전 주로 이동',
+        onSelect: () => moveBlockToAdjacentWeek(block, 'prev'),
+      })
+    }
+    return items
+  }
+
   // Menu items per block type (AC-1). Delete/unplace are soft — a "실행 취소" toast
   // defers the server op (no confirm dialog). 태스크 편집/프로젝트에서 보기 navigate
   // to screens that land in ST-F1-09/08 (route seams).
+  //
+  // plan-polish (AC-5 fix, extended by fix G): the read-only-except-완료/기록
+  // shape now has TWO triggers — a past week (AC-5) and an auto-place draft
+  // under review (fix G) — both folded into `planLocked` (see its own header
+  // comment above) rather than checking `readOnly` and `autoDraft` separately
+  // in every branch below. FIXED's exception toggle and SCHEDULE's edit/delete
+  // are both plan changes and stay blocked either way; TASK's complete/log are
+  // exempted, only its OTHER items (편집/프로젝트에서 보기/배치 해제/다음·이전
+  // 주로 이동) are blocked.
   const menuItemsFor = (block) => {
-    if (!block || readOnly) return []
+    if (!block) return []
     if (block.blockType === 'FIXED') {
+      // A weekly exception is a plan change, and FIXED has no 완료/기록
+      // equivalent — nothing is exempt here.
+      if (planLocked) return []
       const active = block.activeThisWeek !== false
       return [
         {
@@ -587,8 +745,13 @@ function WeeklyPage() {
       ]
     }
     if (block.blockType === 'SCHEDULE') {
+      // A schedule block has no 완료/기록 concept either (that's TASK-only,
+      // below) — edit/delete are both plan changes, so a locked week/draft
+      // gets nothing.
+      if (planLocked) return []
       return [
         { key: 'edit', label: '일정 편집', onSelect: () => openScheduleEdit(block) },
+        ...moveMenuItems(block),
         {
           key: 'delete',
           label: '일정 삭제',
@@ -597,7 +760,9 @@ function WeeklyPage() {
         },
       ]
     }
-    // TASK block
+    // TASK block. complete/log are the two AC-5 carve-outs — always present,
+    // locked week/draft or not; everything past them changes the PLAN itself
+    // (moves the task off/around the week), so those stay gated on `planLocked`.
     const done = block.status === 'COMPLETED'
     const items = [
       {
@@ -607,8 +772,9 @@ function WeeklyPage() {
           setBlockComplete({ weekStartISO, taskId: block.taskId, complete: !done }),
       },
       { key: 'log', label: '실제 시간 기록', onSelect: () => setExecLog({ block }) },
-      { key: 'edit', label: '태스크 편집', onSelect: () => navigate(`/tasks/${block.taskId}/edit`) },
     ]
+    if (planLocked) return items
+    items.push({ key: 'edit', label: '태스크 편집', onSelect: () => navigate(`/tasks/${block.taskId}/edit`) })
     if (block.projectId) {
       items.push({
         key: 'project',
@@ -616,6 +782,7 @@ function WeeklyPage() {
         onSelect: () => navigate(`/projects/${block.projectId}`),
       })
     }
+    items.push(...moveMenuItems(block))
     items.push({
       key: 'unplace',
       label: '배치 해제',
@@ -790,6 +957,27 @@ function WeeklyPage() {
     // — no ref needed.
   }, [searchParams, setSearchParams])
 
+  // Strip `?openUnplaced=1`/`?project={id}` the same way, once they've done
+  // their job (already seeded into panelOpen/projectFilter's lazy initializers
+  // above). One effect for both since they always arrive/leave together from
+  // this page's point of view — no ordering dependency between the two deletes.
+  useEffect(() => {
+    const hasOpenUnplaced = searchParams.get('openUnplaced') === '1'
+    const hasProject = searchParams.get('project') !== null
+    if (!hasOpenUnplaced && !hasProject) return
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('openUnplaced')
+        next.delete('project')
+        return next
+      },
+      { replace: true },
+    )
+    // Same once-per-mount reasoning as the `openReplan` effect above: both
+    // params are gone from `searchParams` after the first pass.
+  }, [searchParams, setSearchParams])
+
   // Every open (re)requests all three generated alternatives against whatever
   // the CURRENT draft is — see useReplanOptions's header for why reusing a
   // stale batch would be wrong, not just wasteful.
@@ -901,17 +1089,7 @@ function WeeklyPage() {
           onModeChange={setMode}
         />
 
-        {autoDraft && (
-          <AutoPlaceBar
-            placedCount={autoDraft.placements.length}
-            unplacedCount={autoDraft.unplaced.length}
-            applying={applyAutoPlace.isPending}
-            onApply={applyDraft}
-            onCancel={cancelDraft}
-          />
-        )}
-
-        <div className="relative">
+        <div ref={gridWrapperRef} className="relative">
           {showColumnSkeleton && (
             <div
               className="pointer-events-none absolute inset-0 z-40 animate-pulse rounded-card bg-surface/40"
@@ -924,7 +1102,17 @@ function WeeklyPage() {
             mode={mode}
             blocks={blocks}
             availability={availability}
-            readOnly={readOnly}
+            // fix G: CalendarGrid's `readOnly` prop is really "can't edit right
+            // now" — it already drives every plan-changing gate inside (drag,
+            // resize, the availability handles, right-click-to-place, and the
+            // AC-5 disabled/moveLocked split on PlanBlock/FixedScheduleBlock),
+            // so passing `planLocked` here — instead of adding a second,
+            // parallel `draftLocked` prop CalendarGrid would need to OR into
+            // every one of those gates itself — extends all of them to the
+            // draft-review case for free. PlanHeader below still gets the bare
+            // `readOnly` (its "지난 주간 계획" banner would be WRONG to show
+            // during a draft review on the CURRENT week).
+            readOnly={planLocked}
             onMoveCommit={handleUserMove}
             onOpenMenu={(block, position) => setMenu({ open: true, block, position })}
             onAvailabilityCommit={handleAvailabilityCommit}
@@ -938,11 +1126,91 @@ function WeeklyPage() {
             focusRequest={focusRequest}
             fixedSchedules={fixedSchedulesQuery.data ?? []}
             onOpenFixedMenu={openFixedMenu}
-            // Shrink the grid by ~the draft bar's height while it's shown, so the
-            // bar never adds net page height (no new scroll).
-            bodyMaxHeight={autoDraft ? 'calc(62vh - 5rem)' : '62vh'}
+            // No bodyMaxHeight override: the grid always uses CalendarGrid's own
+            // constant default now (fix E removed the autoDraft-shrink hack this
+            // prop used to carry — AutoPlaceBar is an overlay, so nothing about
+            // it needs the grid to compensate anymore).
           />
         </div>
+
+        {/* Auto-place draft banner (fix F). Styled and positioned like a toast
+            (rounded-card + shadow-modal, floats above the card, bottom of
+            screen) but deliberately NOT the Toaster queue below: that one
+            auto-dismisses on a timer and gets pushed out by a later toast —
+            this carries a live [적용]/[취소] decision that has to stay on
+            screen until the user acts on it either way.
+
+            This REPLACES fix E's first attempt (an overlay anchored to
+            SummaryBar's own bottom): that kept the grid frozen but traded it
+            for covering SummaryBar's stats AND its 포커스/24시간 토글 for as
+            long as the draft was open — a real usability cost the owner
+            flagged. This version covers NOTHING: it floats outside the
+            section's flex-col flow entirely (same reasoning as the
+            floating-controls block right below — `fixed` on mobile /
+            `md:absolute` on desktop, anchored to this `relative` section), so
+            it still can never resize or reposition the grid (fix E's actual
+            fix), while not sitting over any existing content at rest either.
+
+            Positioning, deliberately NOT bottom-center like Toaster:
+            - Left-anchored (`left-4`/`md:left-6`, matching the floating
+              controls' own left inset) and width-capped on desktop
+              (`md:max-w-sm`, 384px) so it can never reach into the unplaced
+              panel's column on the right. The panel spans nearly this whole
+              card's height while open (its bottom edge is pinned to
+              floatingControlsRef's bottom, its top to the grid's), so a
+              bottom-CENTERED banner wide enough to read comfortably would
+              overlap it on plenty of real desktop widths (checked: an
+              ~448px-wide centered bar's right edge already passes the
+              panel's left edge on a 1024px viewport, the narrow end of what
+              counts as "desktop" here).
+            - Stacked ABOVE the undo/redo/FAB row with real clearance
+              (`bottom-36` mobile / `md:bottom-24` desktop vs. that row's own
+              `bottom-18`/`md:bottom-6`), not beside or below it — sitting
+              over any of those controls would make [적용]/[취소] itself
+              unreachable the same way fix E's own bug did (a floating
+              notification covering an actionable control), and `bottom-18`
+              already clears the mobile BottomTabBar the same way the
+              floating-controls comment above documents, so stacking further
+              up than that keeps this banner clear of the tab bar too.
+
+            fix I width math (the owner's exact two-sentence caption, each
+            forced onto its OWN line via AutoPlaceBar's `md:whitespace-nowrap`
+            — see that file): the longer sentence ("초안입니다. 적용해도 주간
+            계획은 아직 저장되지 않습니다.") is ~24 full-width Korean glyphs +
+            8 narrow marks (spaces/periods) — at text-caption (12px) this is
+            roughly 350-360px, +24px for AutoPlaceBar's own `p-3` padding ≈
+            374-384px needed. `md:max-w-sm` is EXACTLY 384px — this was
+            already the safe ceiling before the panel at the narrow desktop
+            floor (768px viewport: this banner's right edge at 24+384=408px
+            vs. the panel's left edge at 768-8-344=416px, an 8px margin) —
+            there is no room to widen the cap further without risking the
+            panel, so the two are right at the edge of each other. This is a
+            STATIC estimate, not a measured one — I could not verify the exact
+            wrap point pixel-for-pixel without a live browser (dev server is
+            on :5177 per the lead; worth an actual check at ~768px width
+            specifically). Mobile is NOT held to the same nowrap guarantee —
+            see AutoPlaceBar's own comment on why forcing it risks a page-wide
+            horizontal-scroll bug instead of just an occasional 3rd line;
+            the computed floor below which even a best-effort fit starts
+            failing is roughly a 410-420px viewport (32px of `left-4 right-4`
+            margin + 24px padding + the ~355-360px sentence), well above the
+            ~360-412px many phones actually are, in portrait. */}
+        {autoDraft && (
+          <div
+            role="status"
+            className="pointer-events-none fixed bottom-36 left-4 right-4 z-30 md:absolute md:bottom-24 md:left-6 md:right-auto md:max-w-sm"
+          >
+            <div className="pointer-events-auto rounded-card shadow-modal">
+              <AutoPlaceBar
+                placedCount={autoDraft.placements.length}
+                unplacedCount={autoDraft.unplaced.length}
+                applying={applyAutoPlace.isPending}
+                onApply={applyDraft}
+                onCancel={cancelDraft}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Floating controls: undo/redo bottom-left, unplaced FAB bottom-right.
 
@@ -969,11 +1237,18 @@ function WeeklyPage() {
             and the card is already centered (max-w-page mx-auto), so pinning
             to the viewport instead would visually detach the buttons from
             the grid they act on. */}
-        <div className="pointer-events-none fixed inset-x-4 bottom-18 z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6">
+        <div
+          ref={floatingControlsRef}
+          className="pointer-events-none fixed inset-x-4 bottom-18 z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6"
+        >
           <div className="pointer-events-auto">
+            {/* fix G: an undo/redo IS a block move, so it's gated the same as
+                any other move while a draft is under review — undoing (or
+                redoing) a prior move would change the block set the draft's
+                placements were computed against, same as a fresh drag would. */}
             <UndoRedo
-              canUndo={canUndo && !readOnly}
-              canRedo={canRedo && !readOnly}
+              canUndo={canUndo && !planLocked}
+              canRedo={canRedo && !planLocked}
               onUndo={handleUndo}
               onRedo={handleRedo}
             />
@@ -1067,6 +1342,8 @@ function WeeklyPage() {
         open={panelOpen}
         panelRef={unplacedPanelRef}
         onClose={() => setPanelOpen(false)}
+        topBound={panelBounds?.top}
+        heightBound={panelBounds?.height}
         count={unplacedCount}
         tasks={unplacedQuery.data ?? []}
         isLoading={unplacedQuery.isLoading}
@@ -1076,7 +1353,23 @@ function WeeklyPage() {
         onProjectFilterChange={setProjectFilter}
         onAutoPlace={handleAutoPlace}
         autoPlacing={autoPlace.isPending}
-        disabled={readOnly}
+        // fix G: `disabled` now also covers "a draft is under review" (not
+        // just past-week), which additionally disables re-triggering [자동
+        // 배치] while one is already open — a deliberate side effect, not a
+        // separate fix, since re-running it mid-review would silently replace
+        // the very draft the user is looking at. `disabledReason` used to be a
+        // literal "지난 주는 편집할 수 없습니다" baked into UnplacedPanel — that
+        // wording would be WRONG for the draft-review reason, so it's now
+        // computed here (the one place that knows WHICH of the two applies)
+        // and passed through instead.
+        disabled={planLocked}
+        disabledReason={
+          readOnly
+            ? '지난 주는 편집할 수 없습니다'
+            : autoDraft
+              ? '초안을 적용하거나 취소한 후 이용할 수 있습니다'
+              : undefined
+        }
         onTaskPointerDown={placementDrag.begin}
         onQuickPlace={quickPlace}
       />

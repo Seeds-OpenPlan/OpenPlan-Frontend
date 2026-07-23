@@ -18,8 +18,10 @@ import { useReducedMotion } from '../../hooks/useReducedMotion'
 
   Project filter (AC-4 / PROJ-15/19): the panel accepts a projectId to open
   pre-filtered. The chips are derived from the loaded tasks — the authoritative
-  project list arrives with the projects surface (ST-F1-08); entry FROM a project
-  screen is that story's seam.
+  project list arrives with the projects surface (ST-F1-08). Entry FROM a
+  project screen (or the dashboard) is wired in WeeklyPage via the
+  `?project={id}` / `?openUnplaced=1` URL seams (plan-polish), which seed
+  `projectId`/`open` here and then strip themselves from the URL.
 */
 
 const PANEL_TITLE_ID = 'unplaced-panel-title'
@@ -34,6 +36,11 @@ function PanelBody({
   onAutoPlace,
   autoPlacing,
   disabled,
+  // plan-polish fix G: `disabled` now covers TWO different reasons (a past
+  // week, or an auto-place draft under review), each with its OWN wording —
+  // the caller (WeeklyPage, the only place that knows WHICH one applies)
+  // passes the right string through here instead of this component guessing.
+  disabledReason,
   onTaskPointerDown,
   onQuickPlace,
 }) {
@@ -81,7 +88,7 @@ function PanelBody({
         loading={autoPlacing}
         loadingLabel="배치 중"
         disabled={disabled || (tasks?.length ?? 0) === 0}
-        disabledReason={disabled ? '지난 주는 편집할 수 없습니다' : undefined}
+        disabledReason={disabled ? disabledReason : undefined}
         className="w-full shrink-0"
       >
         자동 배치
@@ -143,24 +150,49 @@ function FilterChip({ active, onClick, children }) {
 }
 
 const PANEL_WIDTH = 344 // px (w ~21.5rem)
-const DEFAULT_POS = { right: 24, top: 96 } // px offset from the top-RIGHT corner
+// Rightmost edge the drag clamp below allows (its own lower bound on `right`,
+// the offset FROM the right edge — smaller means further right). The default
+// position lands exactly there so a freshly opened panel never has to be
+// dragged out of the way first (plan-polish: it used to sit 24px in, right
+// over the auto-place bar's [적용] button).
+const RIGHTMOST = 8
+// Used only until the FIRST layout measurement lands (WeeklyPage's
+// useLayoutEffect fires before paint, so this is normally invisible) — a
+// reasonable top absent any measurement at all.
+const FALLBACK_TOP = 96
 
-export function UnplacedPanel({ open, onClose, count = 0, panelRef, ...bodyProps }) {
+export function UnplacedPanel({
+  open,
+  onClose,
+  count = 0,
+  panelRef,
+  // plan-polish: viewport-Y landmarks from WeeklyPage — topBound is the grid
+  // wrapper's top (right below the auto-place bar when a draft is open, or
+  // right below the summary bar otherwise) and heightBound is the distance
+  // from there down to the unplaced FAB's bottom. Together they replace the
+  // old fixed `top: 96` + `max-h-[72vh]` so the panel's resting position and
+  // cap never straddle the FAB or the auto-place bar's own controls.
+  topBound,
+  heightBound,
+  ...bodyProps
+}) {
   const isDesktop = useIsDesktop()
   const reducedMotion = useReducedMotion()
 
   // Desktop panel is a movable floating card (so it never permanently covers the
   // Sunday column). Position is stored as an offset from the top-RIGHT corner so
   // it keeps its distance from the right edge on window resize (never sliding off
-  // screen). Remembered across opens; null = default top-right.
+  // screen). Remembered across opens; null = default (rightmost, right below the
+  // auto-place bar/summary bar) — see RIGHTMOST/topBound above.
   const [pos, setPos] = useState(null)
+  const defaultPos = { right: RIGHTMOST, top: topBound ?? FALLBACK_TOP }
 
   const startPanelDrag = (e) => {
     // Don't start a move when the pointer is on an interactive control (e.g. ✕).
     if (e.target.closest('button')) return
     e.preventDefault()
     const start = { x: e.clientX, y: e.clientY }
-    const base = pos ?? DEFAULT_POS
+    const base = pos ?? defaultPos
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
     const move = (ev) => {
       setPos({
@@ -222,7 +254,7 @@ export function UnplacedPanel({ open, onClose, count = 0, panelRef, ...bodyProps
   // scale from the top-right corner — rather than sliding across the screen (which
   // read as a wrong position + a close flicker). When closed it's transparent,
   // non-interactive, and inert (unfocusable).
-  const p = pos ?? DEFAULT_POS
+  const p = pos ?? defaultPos
   const panelStyle = {
     width: PANEL_WIDTH,
     // Inline color-mix guarantees a visible translucency regardless of how the
@@ -232,6 +264,11 @@ export function UnplacedPanel({ open, onClose, count = 0, panelRef, ...bodyProps
     // same distance from the right edge (it never slides off screen).
     right: p.right,
     top: p.top,
+    // A real pixel cap between the two layout landmarks (see the topBound/
+    // heightBound doc above) instead of a vh-relative guess, so the panel can
+    // never grow past the unplaced FAB. Falls back to the old vh figure only
+    // for the instant before WeeklyPage's first measurement lands.
+    maxHeight: heightBound ?? '72vh',
     transformOrigin: 'top right',
     transform: open ? 'scale(1)' : 'scale(0.97)',
     opacity: open ? 1 : 0,
@@ -248,7 +285,7 @@ export function UnplacedPanel({ open, onClose, count = 0, panelRef, ...bodyProps
       // inert (React 19) blocks focus/interaction while closed.
       {...(open ? {} : { inert: '' })}
       style={panelStyle}
-      className="fixed z-40 flex max-h-[72vh] flex-col gap-3 rounded-card border border-border p-4 shadow-modal backdrop-blur-md"
+      className="fixed z-40 flex flex-col gap-3 rounded-card border border-border p-4 shadow-modal backdrop-blur-md"
     >
       {/* Header doubles as the drag handle (cursor-move); the ✕ button opts out of
           the move via the closest('button') guard in startPanelDrag. */}

@@ -14,6 +14,7 @@
 
 import {
   addDaysISO,
+  addWeeksISO,
   composeTimestamp,
   currentWeekStartISO,
   dateOf,
@@ -100,6 +101,76 @@ function seedBlocks(weekStartISO) {
     mk(2, 10 * 60 + 50, 12 * 60 + 10, '모의 면접 답변 1차 정리', 'TASK', 'brand'),
     mk(2, 14 * 60 + 15, 15 * 60 + 10, '자기소개 스크립트', 'TASK', 'brand'),
     mk(4, 15 * 60, 16 * 60, '병원 방문', 'SCHEDULE', null),
+  ]
+}
+
+// DEV-ONLY seed for the PREVIOUS week (ST-F1-02 AC-5 demo). Without this, a
+// past week's grid is empty in the mock — ensureWeek only ever creates a week
+// the first time something asks for it, and nothing asks for a past one until
+// the user navigates ‹ into it, so there was no way to see (or verify) the
+// AC-5 carve-out (완료 전환/실제 시간 기록 stay usable on a read-only past week,
+// everything else stays blocked) without hand-building a past plan first. Mix
+// of TASK (one COMPLETED, one not — both toggle directions are reachable) and
+// SCHEDULE (menuItemsFor returns [] for a past-week SCHEDULE; a TASK block
+// returns [complete, log] — see WeeklyPage.jsx) so a 우클릭 on each contrasts
+// directly against the other. Deliberately much smaller than seedBlocks (this
+// week) and produces no validation issues of its own — it exists to exercise
+// AC-5, not to re-demo ST-F1-05's blocking-violation case a second time.
+function seedPastWeekBlocks(weekStartISO) {
+  const day = (offset) => addDaysISO(weekStartISO, offset)
+  const mk = (offset, startMin, endMin, title, blockType, status) => {
+    let scheduleId = null
+    let taskId = null
+    if (blockType === 'SCHEDULE') {
+      scheduleId = nextId('sched')
+      schedulesById.set(scheduleId, {
+        scheduleId,
+        title,
+        estimatedMinutes: endMin - startMin,
+        priority: 2,
+        memo: '',
+        status: 'ACTIVE',
+      })
+    } else {
+      taskId = nextId('task')
+      placedTaskData.set(taskId, {
+        taskId,
+        title,
+        estimatedMinutes: endMin - startMin,
+        priority: 2,
+        projectId: null,
+        projectName: null,
+        dueDate: null,
+        reason: null,
+      })
+    }
+    return {
+      planBlockId: nextId('block'),
+      blockType,
+      title,
+      tone: blockType === 'TASK' ? 'brand' : null,
+      status,
+      taskId,
+      scheduleId,
+      startAt: composeTimestamp(day(offset), startMin),
+      endAt: composeTimestamp(day(offset), endMin),
+    }
+  }
+  return [
+    // TASK, already completed — "완료로 표시" should offer "미완료로 되돌리기".
+    // MON 10:30 (not 09:00): this week's fixed schedule "아침 스터디" runs
+    // MON 09:00-10:00 (seedFixedSchedules) — starting after it avoids a V2
+    // 고정 일정 충돌 this seed isn't meant to demonstrate (that's ST-F1-05's
+    // OWN seed, on the CURRENT week, above).
+    mk(0, 10 * 60 + 30, 12 * 60, '지난주 발표 자료 준비', 'TASK', 'COMPLETED'),
+    // TASK, still open — "완료로 표시" should offer the forward direction.
+    mk(1, 10 * 60, 11 * 60, '주간 회고 정리', 'TASK', 'SCHEDULED'),
+    // SCHEDULE — its menu should be EMPTY on a past week (no 완료/기록 concept).
+    mk(2, 14 * 60, 15 * 60, '치과 예약', 'SCHEDULE', 'SCHEDULED'),
+    // A second completed TASK, on a different day (THU — clear of THU's own
+    // fixed "주간 팀 회의" 11:00-12:00), so 실제 시간 기록 has more than one
+    // candidate block to try it on.
+    mk(3, 9 * 60 + 30, 10 * 60 + 30, '코드 리뷰', 'TASK', 'COMPLETED'),
   ]
 }
 
@@ -244,8 +315,15 @@ function blockFromPlacement({ taskId, title, startAt, endAt }) {
 
 function ensureWeek(weekStartISO) {
   if (!weeks.has(weekStartISO)) {
-    // The current week is richly seeded; other weeks start empty (still valid).
-    const blocks = weekStartISO === currentWeekStartISO() ? seedBlocks(weekStartISO) : []
+    // The current week is richly seeded (ST-F1-05's blocking-violation demo);
+    // the week right before it is seeded too, but separately (AC-5's past-week
+    // demo — see seedPastWeekBlocks' header). Every other week still starts
+    // empty, which remains valid — nothing here requires a week to be seeded.
+    let blocks = []
+    if (weekStartISO === currentWeekStartISO()) blocks = seedBlocks(weekStartISO)
+    else if (weekStartISO === addWeeksISO(currentWeekStartISO(), -1)) {
+      blocks = seedPastWeekBlocks(weekStartISO)
+    }
     weeks.set(weekStartISO, {
       weeklyPlanId: nextId('wp'),
       weekStartDate: weekStartISO,

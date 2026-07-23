@@ -262,6 +262,37 @@ export function CalendarGrid({
     })
     .filter((p) => p.dayIndex >= 0)
 
+  // plan-polish: a block fully covered by a longer one is unreachable (its
+  // pointer events sit under the block on top), and same-z siblings paint in
+  // DOM order — so a long block added after a short one on the same day was
+  // always the one left grabbable. Rank duration WITHIN each day column only
+  // (blocks in different columns never visually overlap, so ranking across all
+  // seven is pointless and would blow past the z-index budget below); shorter
+  // duration → higher rank → painted on top. Dense rank (equal durations share
+  // one level) so identical-length blocks keep their EXISTING relative order —
+  // same z level means paint order falls back to untouched DOM order. Capped at
+  // 9 levels so the bump (10..19) can never reach the availability-handle tier
+  // (z-20) even if one day is stacked with more than ten blocks. Render order
+  // itself (and therefore Tab order) is left alone; only z-index changes.
+  const zBumpByBlockId = {}
+  {
+    const byDay = new Map()
+    for (const p of positioned) {
+      const list = byDay.get(p.dayIndex) ?? []
+      list.push(p)
+      byDay.set(p.dayIndex, list)
+    }
+    for (const dayPositioned of byDay.values()) {
+      const durationsDesc = [...new Set(dayPositioned.map((p) => p.endMin - p.startMin))].sort(
+        (a, b) => b - a,
+      )
+      for (const p of dayPositioned) {
+        const rank = durationsDesc.indexOf(p.endMin - p.startMin) // 0 = longest that day
+        zBumpByBlockId[p.block.planBlockId] = Math.min(rank, 9)
+      }
+    }
+  }
+
   // Fixed schedules (ST-F1-06) recur by WEEKDAY, not by a specific date, so their
   // column comes from WEEKDAY_KEYS rather than weekDays.indexOf(dateOf(...)) —
   // the same schedule renders in the same column every week, regardless of which
@@ -454,7 +485,7 @@ export function CalendarGrid({
           {positioned.map(({ block, dayIndex, startMin, endMin, isDragged }) => {
             const rect = blockRect(startMin, endMin, range)
             const colW = gridWidth / 7
-            const style =
+            const baseStyle =
               isDragged && colW > 0
                 ? {
                     left: 0,
@@ -470,6 +501,12 @@ export function CalendarGrid({
                     top: rect.top,
                     height: rect.height,
                   }
+            // The dragged block keeps its z-30 from the className alone (an inline
+            // zIndex here would win the cascade over that class and fight it), so
+            // the duration bump only ever applies while at rest.
+            const style = isDragged
+              ? baseStyle
+              : { ...baseStyle, zIndex: 10 + (zBumpByBlockId[block.planBlockId] ?? 0) }
             return (
               <PlanBlock
                 key={block.planBlockId}
@@ -478,7 +515,17 @@ export function CalendarGrid({
                 endMin={endMin}
                 dragging={isDragged}
                 boundary={isDragged ? dragState.boundary : null}
-                disabled={readOnly}
+                // ST-F1-02 AC-5 (extended by plan-polish fix G): while `readOnly`
+                // is set — a past week, OR (fix G) an auto-place draft under
+                // review on the CURRENT week; this component only ever sees the
+                // combined flag, not which one applies, and doesn't need to — a
+                // TASK block's 완료 전환/실제 시간 기록 stay reachable (both live
+                // behind this same menu, so it can't be fully `disabled`), but
+                // SCHEDULE has neither action, so it stays fully disabled.
+                // `moveLocked` then blocks the plan-changing paths (drag/resize/
+                // nudge) on top, for every block type, whenever `readOnly` is set.
+                disabled={readOnly && block.blockType !== 'TASK'}
+                moveLocked={readOnly}
                 // Any drag in progress (this or another block, or a panel→grid
                 // placement) suppresses the hover detail card, so pointer-capture
                 // swallowing mouseleave can't leave stale cards on the grid.
