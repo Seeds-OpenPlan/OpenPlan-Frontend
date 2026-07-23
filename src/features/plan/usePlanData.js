@@ -37,6 +37,8 @@ import {
 } from './taskApi'
 import { patchSchedule, postScheduleBlock } from './scheduleApi'
 import { addFixedException, getFixedSchedules, removeFixedException } from './fixedScheduleApi'
+import { generateReplanOption, selectReplanOption } from './replanApi'
+import { GENERATED_STRATEGY_TYPES } from './replanStrategies'
 import { addWeeksISO } from './planTime'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
@@ -872,6 +874,125 @@ export function useSaveWeek() {
     onSuccess: (_data, { weekStartISO }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       toast({ tone: 'success', message: '주간 계획을 저장했습니다' })
+    },
+  })
+}
+
+// --- ST-F1-07: replan alternatives (PLAN-29 · RB-PLAN-03~05) -----------------
+
+// NFR-029 "진행 5초 안내" — a slow-connection NOTICE, not a spinner replacement.
+// The three strategies below run in parallel, so this timer covers the WHOLE
+// batch: if even one is still in flight 5s after generation started, the modal
+// says so instead of leaving a bare per-card skeleton with no explanation.
+const SLOW_GENERATE_MS = 5000
+
+const IDLE_STRATEGY_STATE = { status: 'idle', option: null, error: null }
+
+function initialStrategyState() {
+  return Object.fromEntries(GENERATED_STRATEGY_TYPES.map((t) => [t, IDLE_STRATEGY_STATE]))
+}
+
+/**
+ * Drives the THREE generated alternatives (MINIMAL_CHANGE/DEADLINE_FIRST/
+ * WORKLOAD_BALANCE) as an explicit per-strategy state machine — idle → loading →
+ * success | error — so one strategy failing to generate never blocks the other
+ * two from rendering (a partial result beats an all-or-nothing spinner). The
+ * BASELINE (기존 계획 유지안) alternative is NOT modeled here: it never calls the
+ * server at all — see replanStrategies.js's BASELINE_OPTION, which
+ * ReplanOptionsModal renders as a fourth, always-ready card.
+ *
+ * NOT a useQuery: each call's body is "generate a NEW alternative against the
+ * CURRENT draft", never cached, never meaningfully retried (a stale-server retry
+ * of "generate" is not the same request once the draft has moved on) — the same
+ * reasoning usePlanValidation gives for being a plain callback-driven hook.
+ *
+ * Deliberately NOT wired to a persisted default strategy here: FIX-12's "재계획
+ * 대안 기본값" picker is ST-F1-12, which does not exist yet, so there is no
+ * `user_preferences.default_replan_strategy` value to read. The caller
+ * (WeeklyPage) defaults the modal's SELECTION to BASELINE instead — the one
+ * alternative that changes nothing, which is the safest default when no
+ * preference has been set (see ReplanOptionsModal).
+ */
+export function useReplanOptions(weeklyPlanId) {
+  const [byType, setByType] = useState(initialStrategyState)
+  const [slowNotice, setSlowNotice] = useState(false)
+  const slowTimerRef = useRef(null)
+  // Guards a late response from a PREVIOUS generate() call (e.g. a fast retry
+  // right after a slow initial batch) from overwriting a newer one's state.
+  const seqRef = useRef(0)
+
+  const runOne = useCallback(
+    (strategyType, seq) => {
+      setByType((prev) => ({ ...prev, [strategyType]: { status: 'loading', option: null, error: null } }))
+      generateReplanOption(weeklyPlanId, strategyType)
+        .then((option) => {
+          if (seq !== seqRef.current) return
+          setByType((prev) => ({ ...prev, [strategyType]: { status: 'success', option, error: null } }))
+        })
+        .catch((error) => {
+          if (seq !== seqRef.current) return
+          setByType((prev) => ({ ...prev, [strategyType]: { status: 'error', option: null, error } }))
+        })
+    },
+    [weeklyPlanId],
+  )
+
+  const generate = useCallback(
+    (types = GENERATED_STRATEGY_TYPES) => {
+      if (!weeklyPlanId) return
+      seqRef.current += 1
+      const seq = seqRef.current
+      clearTimeout(slowTimerRef.current)
+      setSlowNotice(false)
+      slowTimerRef.current = setTimeout(() => setSlowNotice(true), SLOW_GENERATE_MS)
+      for (const type of types) runOne(type, seq)
+    },
+    [weeklyPlanId, runOne],
+  )
+
+  // Regenerate just the ONE strategy a user asked to retry, leaving the other
+  // two (already succeeded or still loading) alone.
+  const retry = useCallback((type) => generate([type]), [generate])
+
+  const reset = useCallback(() => {
+    seqRef.current += 1 // invalidate any response still in flight
+    clearTimeout(slowTimerRef.current)
+    setByType(initialStrategyState())
+    setSlowNotice(false)
+  }, [])
+
+  useEffect(() => () => clearTimeout(slowTimerRef.current), [])
+
+  const isGenerating = Object.values(byType).some((s) => s.status === 'loading')
+  // No effect needed to take `slowNotice` back down once generation finishes:
+  // every consumer reads it as `slowNotice && isGenerating` (see
+  // ReplanOptionsModal), so a stale `true` left over from a just-finished batch
+  // is already inert — and the NEXT generate() call clears it itself before
+  // arming a fresh timer, so nothing is left "on" would ever surface again.
+
+  return { byType, generate, retry, reset, isGenerating, slowNotice }
+}
+
+/**
+ * PATCH /replan-options/{id}/selection — AC-3 "초안 교체 반영". The endpoint
+ * returns no updated week (07 spec: `{message:"APPLIED"}` only), so success just
+ * invalidates the week query; the caller (WeeklyPage) is expected to ALSO force
+ * `validation.revalidate(blocks)` afterward, same split as
+ * useToggleFixedException's header explains — this hook only knows about the
+ * week cache, not the validation loop.
+ *
+ * No onError here on purpose (mirrors useSaveWeek): a 409 on this endpoint means
+ * "this option is no longer selectable" (already applied, or the plan moved on
+ * since it was generated) and the recovery is "다시 생성", which is a
+ * modal-specific UI decision the CALLER makes, not a generic toast this hook
+ * could give on its own.
+ */
+export function useApplyReplanOption() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ replanOptionId }) => selectReplanOption(replanOptionId),
+    onSuccess: (_data, { weekStartISO }) => {
+      queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
     },
   })
 }
