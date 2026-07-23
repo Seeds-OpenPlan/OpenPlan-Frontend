@@ -95,6 +95,31 @@
   /* --- Spacing: keep Tailwind's 4px base; layout rhythm uses 8px multiples --- */
   --spacing: 0.25rem;
 
+  /* --- Layout: shared chrome dimensions (nav-parity fixes, ST-F1-01/04).
+     These exist because the same three numbers kept getting hand-copied
+     into TopNav, MobileTopBar, BottomTabBar, AppLayout, HydrateFallback, and
+     ErrorState, and drifted every time only some of the copies were updated.
+     Named entries in the spacing and container namespaces below extend
+     Tailwind's own scales (same mechanism as the numeric --spacing above),
+     so e.g. h-bar and max-w-page are real generated utilities, not
+     arbitrary values. --- */
+  /* 56px: every horizontal chrome bar's height — TopNav, MobileTopBar,
+     BottomTabBar, and HydrateFallback's skeleton header all render at
+     exactly this height so neither the responsive breakpoint swap nor the
+     loading->real-shell swap ever jumps vertically. */
+  --spacing-bar: 3.5rem;
+  /* 16px: shared page horizontal inset — TopNav/MobileTopBar/BottomTabBar's
+     px-4 and AppLayout/HydrateFallback's <main> px-4 all reference this so
+     the header logo and the page content stay left-edge-aligned at every
+     viewport width (a one-value difference here was the ST-F1-01 desktop
+     8px jump this cycle fixed). */
+  --spacing-page-x: 1rem;
+  /* 72rem: shared page max-width — same value as Tailwind's built-in 6xl,
+     named here so AppLayout/TopNav/HydrateFallback's max-w-page all read
+     from one place instead of three copies of the (otherwise unexplained)
+     "6xl" literal. */
+  --container-page: 72rem;
+
   /* --- Radius: context-specific, avoids a uniform rounded-lg --- */
   --radius-chip: 0.375rem;
   --radius-control: 0.625rem;

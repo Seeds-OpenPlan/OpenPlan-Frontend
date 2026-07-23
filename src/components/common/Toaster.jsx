@@ -4,9 +4,11 @@ import { useToastStore, useToasts } from '../../hooks/useToasts'
 
 /*
   Toast host (design-handoff §1). Mounted once in AppLayout. Subscribes to the
-  toast queue and renders each toast bottom-center. The bottom offset clears the
-  mobile BottomTabBar (matches AppLayout's pb-24 pattern) so toasts are never
-  hidden behind it.
+  toast queue and renders each toast bottom-center. bottom-24 (96px) clears
+  the mobile BottomTabBar the same way AppLayout's pb-24 does: --spacing-bar
+  (56px, the tab bar's own height) + 40px of breathing room, kept as the
+  literal utility rather than a calc() off the token so this owner-approved
+  96px can't drift from an arithmetic slip.
 
   This cycle only the reconnect toast ("다시 연결되었습니다") fires; the queue is
   ready for later save-success toasts.
