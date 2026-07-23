@@ -225,6 +225,12 @@ export function normalizeValidationPayload(payload) {
  *   409 + details.issues → those issues, exactly like a 200 body
  *   409 without issues   → one UNSPECIFIED_CONFLICT_CODE issue, which is blocking,
  *                          so the gate closes even though nothing can be pointed at
+ * "without issues" covers BOTH a missing/non-array `details.issues` AND an EMPTY
+ * array — a 409 saying "conflict found" alongside `issues: []` is the server
+ * confirming a conflict while failing to list it, not confirming there is none.
+ * Treating `[]` as "zero issues" would derive `blockingCount: 0` from a
+ * rejection whose entire premise was 충돌 발견, silently reopening the save
+ * gate on the exact response meant to close it.
  * Every other status still rejects and is handled as a genuine failure upstream.
  */
 export function validatePlan(weeklyPlanId, blocks) {
@@ -246,8 +252,11 @@ export function validatePlan(weeklyPlanId, blocks) {
   ).then(normalizeValidationPayload, (error) => {
     if (error?.status !== 409) throw error
     const issues = error?.details?.issues
+    // `.length > 0`, not just `Array.isArray`: an EMPTY array is still "without
+    // issues" (see the comment above) and must fall through to the blocking
+    // fallback rather than normalizing to zero issues.
     return normalizeValidationPayload({
-      issues: Array.isArray(issues) ? issues : [{ code: UNSPECIFIED_CONFLICT_CODE }],
+      issues: Array.isArray(issues) && issues.length > 0 ? issues : [{ code: UNSPECIFIED_CONFLICT_CODE }],
     })
   })
 }
