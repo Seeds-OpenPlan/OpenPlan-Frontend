@@ -5,7 +5,13 @@ import WeeklyPage from '../pages/WeeklyPage'
 import ProjectsPage from '../pages/ProjectsPage'
 import ProjectWorkspacePage from '../pages/ProjectWorkspacePage'
 import StatisticsPage from '../pages/StatisticsPage'
-import SettingsPage from '../pages/SettingsPage'
+import SettingsLayout from '../pages/settings/SettingsLayout'
+import SettingsDefaultsPage from '../pages/settings/SettingsDefaultsPage'
+import SettingsAvailabilityPage from '../pages/settings/SettingsAvailabilityPage'
+import SettingsFixedSchedulesPage from '../pages/settings/SettingsFixedSchedulesPage'
+import SettingsAccountPage from '../pages/settings/SettingsAccountPage'
+import SettingsCalendarPage from '../pages/settings/SettingsCalendarPage'
+import SettingsNotificationsPage from '../pages/settings/SettingsNotificationsPage'
 import NotFoundPage from '../pages/NotFoundPage'
 import ForbiddenPage from '../pages/ForbiddenPage'
 import RootErrorBoundary from './RootErrorBoundary'
@@ -93,7 +99,28 @@ export const router = createBrowserRouter([
       // post-review — it opens as TaskEditModal (a Dialog/BottomSheet),
       // mounted by TaskRow.jsx and WeeklyPage.jsx, not routed here.
       { path: 'statistics', Component: StatisticsPage },
-      { path: 'settings', Component: SettingsPage },
+      // SCR-SET (ST-F1-12) — nested master-detail (SettingsLayout renders the
+      // nav list itself, unconditionally; `<Outlet/>` is the right-hand DETAIL
+      // pane only — see that file's own header). The index route's element is
+      // `null` on MOBILE (nothing to show until a row is tapped — item 6,
+      // BottomSheet); on DESKTOP SettingsLayout redirects `/settings` straight
+      // to SETTINGS_FIRST_DETAIL_PATH before this element ever paints (item 1).
+      // 순서는 오너 지정(item 3): 기본값 → 가용시간 → 고정일정 → 계정관리 →
+      // 캘린더연동 → 알림. 캘린더 연동(FIX-13~17)은 다시 독립 라우트다(오너
+      // 리뷰 3차 item 4 — 2차의 "계정 화면 섹션" 병합은 정정됨).
+      {
+        path: 'settings',
+        Component: SettingsLayout,
+        children: [
+          { index: true, element: null },
+          { path: 'defaults', Component: SettingsDefaultsPage }, // FIX-10~12 · RB-FIX-01
+          { path: 'availability', Component: SettingsAvailabilityPage }, // FIX-01~03
+          { path: 'fixed-schedules', Component: SettingsFixedSchedulesPage }, // FIX-04~09
+          { path: 'account', Component: SettingsAccountPage }, // ACCT-01/02
+          { path: 'calendar', Component: SettingsCalendarPage }, // FIX-13~17
+          { path: 'notifications', Component: SettingsNotificationsPage }, // NOTI-01
+        ],
+      },
       { path: '403', Component: ForbiddenPage }, // ★ SCR-403
       { path: '*', Component: NotFoundPage },
     ],

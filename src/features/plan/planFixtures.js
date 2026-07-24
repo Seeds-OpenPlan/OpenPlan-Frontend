@@ -230,6 +230,10 @@ function seedUnplacedTasks() {
   They are not returned as plan blocks, so the grid is unchanged.
 */
 function seedFixedSchedules() {
+  // version/effectiveFrom/effectiveTo/source/status mirror the ERD fields
+  // ST-B2-12 documents (fixed_schedules table) — ST-F1-06 only ever READ
+  // weekday/start/end, so those four were never seeded until ST-F1-12's CRUD
+  // needed them (optimistic lock + MANUAL-only status-edit guard, §ST-B2-12 AC-4).
   return [
     {
       fixedScheduleId: nextId('fixed'),
@@ -237,6 +241,11 @@ function seedFixedSchedules() {
       weekday: 'MON',
       startMinutes: 9 * 60,
       endMinutes: 10 * 60,
+      effectiveFrom: null,
+      effectiveTo: null,
+      source: 'MANUAL',
+      status: 'ACTIVE',
+      version: 1,
     },
     {
       fixedScheduleId: nextId('fixed'),
@@ -244,6 +253,11 @@ function seedFixedSchedules() {
       weekday: 'THU',
       startMinutes: 11 * 60,
       endMinutes: 12 * 60,
+      effectiveFrom: null,
+      effectiveTo: null,
+      source: 'MANUAL',
+      status: 'ACTIVE',
+      version: 1,
     },
   ]
 }
@@ -263,6 +277,42 @@ const weekExceptionsByFixedId = new Map()
 // getFixedSchedules (the `activeThisWeek` the ghost display keys off).
 function isFixedActiveForWeek(fixed, weekStartISO) {
   return !weekExceptionsByFixedId.get(fixed.fixedScheduleId)?.has(weekStartISO)
+}
+
+/*
+ * ST-F1-12 (settings) 고정 일정 충돌 미리보기's mock backbone. Mirrors the SAME
+ * overlap test the V2 rule above uses, just run against a CANDIDATE window
+ * (not-yet-saved weekday/start/end) instead of an already-seeded fixed
+ * schedule — that's the whole meaning of a "dry-run" per ST-B2-12 AC-1
+ * ("가상 고정일정을 저장된 계획이 있는 주차들 스냅샷에 포함해 validate").
+ *
+ * Only scans weeks THIS mock already knows about (`weeks` — every week the
+ * user has actually opened this session): a mock has no real calendar
+ * horizon to scan "all future weeks" against, and the settings screen only
+ * needs to demonstrate "conflict found / not found", not an exhaustive
+ * server-side sweep.
+ */
+function scanFixedConflicts(weekday, startMinutes, endMinutes) {
+  const dayIndex = WEEKDAY_KEYS.indexOf(weekday)
+  if (dayIndex < 0) return []
+  const affected = []
+  for (const week of weeks.values()) {
+    const dayISO = weekDays(week.weekStartDate)[dayIndex]
+    const conflicts = week.blocks.filter((b) => {
+      if (dateOf(b.startAt) !== dayISO) return false
+      const bStart = minutesOfDay(b.startAt)
+      const bEnd = minutesOfDay(b.endAt)
+      return bStart < endMinutes && startMinutes < bEnd
+    })
+    if (conflicts.length > 0) {
+      affected.push({
+        weekStartDate: week.weekStartDate,
+        conflictCount: conflicts.length,
+        blockTitles: conflicts.map((b) => b.title),
+      })
+    }
+  }
+  return affected
 }
 let unplacedTasks = seedUnplacedTasks()
 // Full data of tasks that have been placed as blocks, kept so "배치 해제" (PLAN-16)
@@ -999,6 +1049,109 @@ export const mockBackend = {
     await delay()
     weekExceptionsByFixedId.get(fixedScheduleId)?.delete(weekStartISO)
     return { message: 'DELETED' }
+  },
+
+  // GET /fixed-schedules (ST-F1-12 고정 일정 관리 — no weekStartDate: the
+  // settings LIST is week-agnostic, unlike ST-F1-06's plan-grid read above).
+  // `hasConflict` is a settings-only convenience the 07 명세서 doesn't promise;
+  // it is derived here from the SAME overlap scan conflict-previews uses, so
+  // the list badge and the preview dialog can never disagree with each other.
+  async getFixedSchedulesAll() {
+    await delay(60)
+    return {
+      fixedSchedules: fixedSchedules.map((f) => ({
+        ...f,
+        hasConflict: scanFixedConflicts(f.weekday, f.startMinutes, f.endMinutes).length > 0,
+      })),
+    }
+  },
+
+  // POST /fixed-schedules (ST-B2-12 생성). MANUAL source, ACTIVE status,
+  // version 1 — matches every other create path's fresh-row shape.
+  async createFixedSchedule(body) {
+    await delay()
+    const created = {
+      fixedScheduleId: nextId('fixed'),
+      title: body.title,
+      weekday: body.weekday,
+      startMinutes: body.startMinutes,
+      endMinutes: body.endMinutes,
+      effectiveFrom: body.effectiveFrom ?? null,
+      effectiveTo: body.effectiveTo ?? null,
+      source: 'MANUAL',
+      status: 'ACTIVE',
+      version: 1,
+    }
+    fixedSchedules.push(created)
+    return created
+  },
+
+  // PATCH /fixed-schedules/{id} (ST-B2-12 편집). Same optimistic-lock shape
+  // as projectFixtures/planFixtures' own updateTask: a version mismatch
+  // throws an AppError-shaped rejection directly (withDevFallback only
+  // catches a NETWORK failure — whatever this throws IS what the caller's
+  // onError receives). AC-4 "MANUAL status 항상 ACTIVE — PATCH로 status 변경
+  // 시도 422": any attempt to change status on a MANUAL row is rejected before
+  // the version check even runs (a 422 is a request-shape rejection, not a
+  // conflict — checking it first matches that ordering).
+  async updateFixedSchedule(fixedScheduleId, patch) {
+    await delay()
+    const existing = fixedSchedules.find((f) => f.fixedScheduleId === fixedScheduleId)
+    if (!existing) {
+      const err = new Error('mock: fixed schedule not found')
+      err.status = 404
+      throw err
+    }
+    if (patch.status != null && patch.status !== existing.status && existing.source === 'MANUAL') {
+      const err = new Error('mock: MANUAL fixed schedule status is always ACTIVE')
+      // Thomas 리뷰 MEDIUM fix: was E-COM-009, which §2 공통 불변식 문서가
+      // 5분 배수 위반 하나에만 1:1로 예약해 둔 코드다 — 이 실패는 5분 단위와
+      // 무관한 별개 검증(상태 변경 자체가 MANUAL 행에서 금지)이라 그 코드를
+      // 빌려 쓰면 코드↔의미 1:1이 깨진다. [가정-확장] E-FIX-001 — 07 API
+      // 명세서에 없는 코드, 이 mock이 만든 자리표시자다(현재 UI에서 이
+      // 경로로 status를 보내는 호출부가 없어 dead path지만, 실제로 호출될
+      // 때를 대비해 의미를 정확히 남겨 둔다).
+      err.code = 'E-FIX-001'
+      err.status = 422
+      throw err
+    }
+    if (patch.version != null && patch.version !== existing.version) {
+      const err = new Error('mock: fixed schedule version conflict')
+      err.code = 'E-COM-006'
+      err.status = 409
+      err.details = { latest: { ...existing } }
+      throw err
+    }
+    Object.assign(existing, {
+      title: patch.title ?? existing.title,
+      weekday: patch.weekday ?? existing.weekday,
+      startMinutes: patch.startMinutes ?? existing.startMinutes,
+      endMinutes: patch.endMinutes ?? existing.endMinutes,
+      effectiveFrom: patch.effectiveFrom !== undefined ? patch.effectiveFrom : existing.effectiveFrom,
+      effectiveTo: patch.effectiveTo !== undefined ? patch.effectiveTo : existing.effectiveTo,
+      version: existing.version + 1,
+    })
+    return existing
+  },
+
+  // DELETE /fixed-schedules/{id} (ST-B2-12 AC-3: week_exceptions CASCADE).
+  async deleteFixedSchedule(fixedScheduleId) {
+    await delay()
+    const idx = fixedSchedules.findIndex((f) => f.fixedScheduleId === fixedScheduleId)
+    if (idx >= 0) fixedSchedules.splice(idx, 1)
+    weekExceptionsByFixedId.delete(fixedScheduleId)
+    return { message: 'DELETED' }
+  },
+
+  // POST /fixed-schedules/conflict-previews (ST-B2-12 AC-1, dry-run — no
+  // persistence). `excludeFixedScheduleId` lets an EDIT preview skip the row
+  // being edited (unused by the scan itself today — it compares against plan
+  // BLOCKS, never other fixed schedules — kept in the signature so the real
+  // endpoint's request shape is already right when BE lands it).
+  async previewFixedScheduleConflicts({ weekday, startMinutes, endMinutes }) {
+    await delay()
+    const affectedWeeks = scanFixedConflicts(weekday, startMinutes, endMinutes)
+    return { affectedWeeks, hasConflict: affectedWeeks.length > 0 }
   },
 
   async patchBlock(planBlockId, patch) {
