@@ -242,50 +242,59 @@ function DiscardConfirmDialog({ onKeepEditing, onDiscard }) {
 }
 
 /*
-  AC-3 미리보기 disclosure (owner review, dev-server walkthrough — DEFAULT
-  COLLAPSED). A real <button> with aria-expanded/aria-controls, not a styled
-  <div>, so it is keyboard-operable (Enter/Space) and announced correctly by
-  screen readers without any extra ARIA role.
+  AC-3 미리보기 trigger + STACKED OVERLAY (owner review, dev-server
+  walkthrough — supersedes the earlier single-card inline disclosure: an
+  expanding inline panel grew the EDIT MODAL itself, which then picked up its
+  own right-side scrollbar — the owner found that uncomfortable and asked for
+  the preview to instead "겹쳐지게 올라오는" (rise as a layer ON TOP of the
+  edit modal) via its own Dialog/BottomSheet, so the edit modal never grows
+  or scrolls because of it.
+
+  `TaskEditPreviewTrigger` owns only the open/closed boolean and renders the
+  button — the button ITSELF never changes size, so the edit modal's content
+  height is now ALWAYS just "form fields + one button row", regardless of
+  preview state. `TaskEditPreviewOverlay` is the actual stacked layer: a
+  Dialog(desktop, size="xl" — same width the preview always had)/
+  BottomSheet(mobile) via useIsDesktop, exactly like every other overlay
+  shell in this codebase, which is also what gives it the Esc-topmost fix
+  from Dialog.jsx/BottomSheet.jsx's own overlayStack.js for free — pressing
+  Esc while the preview is open closes ONLY the preview (the edit modal
+  beneath, also a Dialog/BottomSheet, is no longer topmost while this is
+  open) — see overlayStack.js's own header for the general mechanism.
 
   WHY CONDITIONAL MOUNT, not a `hidden`/CSS-collapsed panel with the hook left
   running: useTaskEditPreview owns useWeekPlan + useAvailability + the debounced
   usePlanValidation dry-run (GET the active week, POST validation-issues on
-  every estimatedMinutes/title keystroke). Firing that on every keystroke
-  while the user can't even SEE the result would be pure waste — network
-  calls with no payoff. Mounting `TaskEditPreviewBody` (the component that
-  actually calls the hook) ONLY when `open` means the hook simply does not
-  exist while collapsed: no request, no debounce timer, nothing to
-  separately "pause" via an enabled flag. Collapsing again UNMOUNTS it
-  outright, which tears the whole dry-run down — any request already in
-  flight is abandoned; React 18+ treats a late resolve on an unmounted
-  component as a safe no-op (no leak, no warning). Expanding again mounts a
-  FRESH instance that starts a fresh dry-run from the CURRENT field values —
-  never stale data from before the collapse.
+  every estimatedMinutes/title keystroke). Firing that while the user can't
+  even SEE the result would be pure waste. Mounting `TaskEditPreviewBody`
+  (the component that actually calls the hook) ONLY while the overlay is
+  open means the hook simply does not exist otherwise: no request, no
+  debounce timer, nothing to separately "pause" via an enabled flag. Closing
+  the overlay UNMOUNTS it outright, tearing the whole dry-run down — any
+  request already in flight is abandoned; React 18+ treats a late resolve on
+  an unmounted component as a safe no-op. Opening it again mounts a FRESH
+  instance that starts a fresh dry-run from the CURRENT field values — never
+  stale data from before the close.
 */
-function TaskEditPreviewDisclosure({ taskId, title, estimatedMinutes }) {
+function TaskEditPreviewTrigger({ taskId, title, estimatedMinutes }) {
   const [open, setOpen] = useState(false)
-  const panelId = useId()
 
-  // ONE bordered card: the button is its header, and expanding reveals the body
-  // INSIDE the same card (a `border-t` when open separates header from body).
-  // Previously the button and the preview were two separate bordered cards, so
-  // expanding looked like a second "미리보기" panel appearing below the toggle
-  // (owner review) — merged here so it reads as one panel opening.
   return (
-    <div className="overflow-hidden rounded-card border border-border bg-surface">
+    <>
+      {/* aria-haspopup="dialog" (not aria-controls — Thomas code review,
+          MINOR): the panel this opens is a SEPARATE portaled Dialog/
+          BottomSheet, not a DOM sibling this button's own id can reference —
+          aria-controls pointing at an id that doesn't exist while collapsed
+          would be wrong every time this button is CLOSED, which is the
+          default state. aria-expanded still tracks open/closed. */}
       <button
         type="button"
         aria-expanded={open}
-        aria-controls={panelId}
+        aria-haspopup="dialog"
         onClick={() => setOpen((v) => !v)}
-        className={[
-          'flex w-full items-center justify-between gap-2 px-4 py-3 text-label font-semibold text-text transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
-          open ? 'border-b border-border' : '',
-        ].join(' ')}
+        className="flex w-full items-center justify-between gap-2 rounded-card border border-border bg-surface px-4 py-3 text-label font-semibold text-text transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
         <span>미리보기</span>
-        {/* ChevronRightIcon rotated to point down when open — reuses the
-            existing chevron rather than adding a new icon component. */}
         <ChevronRightIcon
           className={[
             'text-lg text-text-muted motion-safe:transition-transform motion-safe:duration-fast motion-safe:ease-standard',
@@ -294,16 +303,64 @@ function TaskEditPreviewDisclosure({ taskId, title, estimatedMinutes }) {
         />
       </button>
       {open && (
-        <div id={panelId} className="px-4 pb-4 pt-3">
-          <TaskEditPreviewBody taskId={taskId} title={title} estimatedMinutes={estimatedMinutes} />
-        </div>
+        <TaskEditPreviewOverlay
+          taskId={taskId}
+          title={title}
+          estimatedMinutes={estimatedMinutes}
+          onClose={() => setOpen(false)}
+        />
       )}
+    </>
+  )
+}
+
+function TaskEditPreviewOverlay({ taskId, title, estimatedMinutes, onClose }) {
+  const isDesktop = useIsDesktop()
+  const titleId = useId()
+  const closeRef = useRef(null)
+
+  const body = (
+    <div className="flex flex-col gap-3">
+      {/* sr-only: TaskEditPreview's OWN <h2> (inside TaskEditPreviewBody
+          below) already shows "미리보기 · {주차}" visibly — this exists only
+          so Dialog/BottomSheet's required aria-labelledby has a stable id to
+          point at, without a second, visually duplicate heading. */}
+      <h2 id={titleId} className="sr-only">
+        미리보기
+      </h2>
+      <div className="flex justify-end">
+        <button
+          ref={closeRef}
+          type="button"
+          onClick={onClose}
+          aria-label="닫기"
+          className="rounded-control px-2 py-1 text-label text-text-muted hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          닫기
+        </button>
+      </div>
+      <TaskEditPreviewBody taskId={taskId} title={title} estimatedMinutes={estimatedMinutes} />
     </div>
+  )
+
+  // Same shell/size the preview always rendered at (size="xl" — the mini-week
+  // needs the room; see Dialog.jsx's own comment on why 'xl' exists at all).
+  // The mini-week's own ~4h cap (TaskEditPreview.jsx's PREVIEW_MAX_HEIGHT_PX)
+  // still scrolls internally exactly as before — only the OUTER container
+  // changed from "inline in the edit modal" to "its own overlay".
+  return isDesktop ? (
+    <Dialog open onClose={onClose} labelledById={titleId} initialFocusRef={closeRef} size="xl">
+      {body}
+    </Dialog>
+  ) : (
+    <BottomSheet open onClose={onClose} labelledById={titleId} initialFocusRef={closeRef}>
+      {body}
+    </BottomSheet>
   )
 }
 
 // Split out so useTaskEditPreview — and everything it fetches/validates —
-// only exists for as long as the disclosure above is expanded.
+// only exists for as long as the overlay above is open.
 function TaskEditPreviewBody({ taskId, title, estimatedMinutes }) {
   // `title` feeds the virtual block's own label so a violation message
   // naming it stays accurate; priority/status/category/memo don't affect any
@@ -523,10 +580,11 @@ function TaskEditForm({ task, titleFieldRef, onDirtyChange, onRequestClose, onDo
         </div>
       </form>
 
-      {/* AC-3 미리보기 — collapsed by default (owner review); see
-          TaskEditPreviewDisclosure's own header for why the dry-run itself
-          (not just the visual panel) is gated on `open`, not merely hidden. */}
-      <TaskEditPreviewDisclosure taskId={task.taskId} title={trimmedTitle} estimatedMinutes={estimatedMinutes} />
+      {/* AC-3 미리보기 — closed by default, opens as a STACKED OVERLAY over
+          this modal (owner review); see TaskEditPreviewTrigger's own header
+          for why (both the visual layer AND the dry-run itself are gated on
+          `open`, not merely hidden). */}
+      <TaskEditPreviewTrigger taskId={task.taskId} title={trimmedTitle} estimatedMinutes={estimatedMinutes} />
 
       <ConflictOverlay
         open={Boolean(conflict)}

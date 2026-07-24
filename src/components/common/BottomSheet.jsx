@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { isTopmostOverlay, popOverlay, pushOverlay } from '../../utils/overlayStack'
 
 /*
   Bottom sheet (components.md §6, mobile shell). Same accessibility contract and
@@ -12,6 +13,11 @@ import { useFocusTrap } from '../../hooks/useFocusTrap'
   handle is a real 48px button so keyboard and touch users can both close.
 
   Content over 90vh scrolls inside the sheet; the page behind is scroll-locked.
+
+  STACKED OVERLAYS: Esc/backdrop are scoped to the TOPMOST open overlay via
+  the shared stack in utils/overlayStack.js — same fix, same reasoning as
+  Dialog.jsx's own header comment (that file's own copy is the fuller
+  version; not repeated here).
 
   `scrollBody` (default true) mirrors Dialog's own opt-out (see Dialog.jsx's
   comment for the full reasoning): a caller that owns its own fixed-header +
@@ -31,6 +37,7 @@ export function BottomSheet({
   children,
 }) {
   const containerRef = useRef(null)
+  const overlayId = useId()
 
   useFocusTrap(containerRef, { open, initialFocusRef, returnFocusRef })
 
@@ -43,22 +50,41 @@ export function BottomSheet({
     }
   }, [open])
 
+  // See Dialog.jsx's own comment on why `onClose` is read via a ref inside
+  // the handler rather than closed over directly (keeps the registration
+  // effect's deps stable across re-renders, so this instance's stack
+  // position never shuffles just because an unrelated prop changed).
+  const onCloseRef = useRef(onClose)
   useEffect(() => {
-    if (!open || !onClose) return
+    onCloseRef.current = onClose
+  })
+
+  useEffect(() => {
+    if (!open) return undefined
+    pushOverlay(overlayId)
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      if (!onCloseRef.current) return
+      if (!isTopmostOverlay(overlayId)) return
+      onCloseRef.current()
     }
     document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+    return () => {
+      popOverlay(overlayId)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open, overlayId])
 
   if (!open) return null
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center">
+      {/* Backdrop click — topmost-only guard, same reasoning as Dialog.jsx's
+          own (cheap; in practice a lower sheet's backdrop can never receive
+          the click anyway). */}
       <div
         className="absolute inset-0 bg-[var(--color-overlay-scrim)]"
-        onClick={onClose ? () => onClose() : undefined}
+        onClick={onClose ? () => isTopmostOverlay(overlayId) && onClose() : undefined}
         aria-hidden="true"
       />
       <div

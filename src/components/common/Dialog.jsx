@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { isTopmostOverlay, popOverlay, pushOverlay } from '../../utils/overlayStack'
 
 /*
   Centered modal dialog (components.md §6, desktop shell). Renders in a portal
@@ -14,6 +15,14 @@ import { useFocusTrap } from '../../hooks/useFocusTrap'
 
   Focus is trapped and restored via useFocusTrap. `aria-modal` + aria-labelledby
   wire the dialog to its title for screen readers.
+
+  STACKED OVERLAYS (Thomas code review, MAJOR): Esc/backdrop are scoped to the
+  TOPMOST open Dialog/BottomSheet via the shared module-level stack in
+  utils/overlayStack.js — see that file's own header for the full bug this
+  fixes (an Esc used to fire every stacked instance's listener at once).
+  Every instance registers on the stack while open REGARDLESS of whether it
+  has an `onClose` (a non-dismissable overlay like ConflictOverlay must still
+  occupy the top slot, or Esc would fall through to whatever is beneath it).
 
   Height contract matches BottomSheet's (a tall consumer — e.g. ReviewPanel with
   many warnings — used to overflow the viewport with no way to scroll to the
@@ -47,6 +56,7 @@ export function Dialog({
   children,
 }) {
   const containerRef = useRef(null)
+  const overlayId = useId()
 
   useFocusTrap(containerRef, { open, initialFocusRef, returnFocusRef })
 
@@ -60,15 +70,37 @@ export function Dialog({
     }
   }, [open])
 
-  // Esc closes only when dismissal is allowed (onClose present).
+  // `onClose` is very often a fresh arrow-function reference every render
+  // (every caller in this codebase passes one inline) — a ref, read inside
+  // the handler below rather than closed over directly, keeps the
+  // REGISTRATION effect's own deps down to `[open, overlayId]` (both stable
+  // across re-renders). Without this split, an unrelated re-render while
+  // open would pop-then-repush this instance on EVERY render, silently
+  // moving it to the top of the stack even though nothing about its
+  // open/closed state actually changed — exactly the kind of stacking-order
+  // bug this whole mechanism exists to prevent.
+  const onCloseRef = useRef(onClose)
   useEffect(() => {
-    if (!open || !onClose) return
+    onCloseRef.current = onClose
+  })
+
+  // Register on the shared stack (regardless of `onClose` — see this file's
+  // own header) and respond to Esc ONLY while topmost.
+  useEffect(() => {
+    if (!open) return undefined
+    pushOverlay(overlayId)
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      if (!onCloseRef.current) return
+      if (!isTopmostOverlay(overlayId)) return
+      onCloseRef.current()
     }
     document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+    return () => {
+      popOverlay(overlayId)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open, overlayId])
 
   if (!open) return null
 
@@ -81,10 +113,15 @@ export function Dialog({
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Scrim. Backdrop click closes only when dismissal is allowed. */}
+      {/* Scrim. Backdrop click closes only when dismissal is allowed, AND
+          only for the topmost instance — cheap, same guard as Esc above.
+          In practice a lower overlay's own backdrop can never receive this
+          click anyway (the topmost one's backdrop covers the full viewport
+          and is later in DOM/paint order), but the explicit check costs
+          nothing and removes any doubt. */}
       <div
         className="absolute inset-0 bg-[var(--color-overlay-scrim)] motion-safe:transition-opacity motion-safe:duration-slow"
-        onClick={onClose ? () => onClose() : undefined}
+        onClick={onClose ? () => isTopmostOverlay(overlayId) && onClose() : undefined}
         aria-hidden="true"
       />
       <div
