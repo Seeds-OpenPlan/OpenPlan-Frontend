@@ -11,6 +11,11 @@ import {
 } from '../../features/plan/planGeometry'
 import { dateOf, formatMinutesLabel, minutesOfDay, weekLabelKO, WEEKDAY_LABELS_KO } from '../../features/plan/planTime'
 import { compareBySeverity, severityLabels, violationCopy } from '../../features/plan/violationMessages'
+import {
+  VIOLATION_BORDER_CLASSES,
+  VIOLATION_CHIP_CLASSES,
+  VIOLATION_STRIPES,
+} from '../../features/plan/violationStyles'
 
 /*
   AC-3 미리보기 — a compact, READ-ONLY mini weekly grid, fed by
@@ -48,17 +53,24 @@ function MiniBlock({ block, range, isVirtual, violation }) {
   const endMin = minutesOfDay(block.endAt)
   const rect = blockRect(startMin, endMin, range)
   const timeLabel = `${formatMinutesLabel(startMin)}-${formatMinutesLabel(endMin)}`
+  // Violation look is shared with the real weekly plan (PlanBlock) via
+  // violationStyles.js — same border color AND the same diagonal hatch stripe,
+  // so 차단/경고 read identically here and there (owner request). Falls back to
+  // the virtual-block brand outline, then the plain block border.
   const borderClass = violation
-    ? violation.severity === 'blocking'
-      ? 'border-danger-500'
-      : 'border-warning-500'
+    ? VIOLATION_BORDER_CLASSES[violation.severity]
     : isVirtual
       ? 'border-brand-600'
       : 'border-border'
 
   return (
     <div
-      style={{ top: rect.top, height: rect.height }}
+      style={{
+        top: rect.top,
+        height: rect.height,
+        // Same hatch PlanBlock paints into a violated block's background.
+        ...(violation ? { backgroundImage: VIOLATION_STRIPES[violation.severity] } : null),
+      }}
       aria-label={`${isVirtual ? '미리보기 · ' : ''}${block.title}, ${timeLabel}${
         violation ? `, ${severityLabels[violation.severity]} ${violation.label}` : ''
       }`}
@@ -76,8 +88,8 @@ function MiniBlock({ block, range, isVirtual, violation }) {
       {violation && (
         <span
           className={[
-            'mt-0.5 inline-flex items-center gap-0.5 rounded-chip px-1 py-px text-[0.55rem] font-bold text-white',
-            violation.severity === 'blocking' ? 'bg-danger-600' : 'bg-warning-600',
+            'mt-0.5 inline-flex items-center gap-0.5 rounded-chip px-1 py-px text-[0.55rem] font-bold',
+            VIOLATION_CHIP_CLASSES[violation.severity],
           ].join(' ')}
         >
           <AlertTriangleIcon size={8} />
@@ -137,17 +149,19 @@ export function TaskEditPreview({
         </p>
       ) : (
         <div className="overflow-hidden rounded-control border border-border">
-          <div className="grid grid-cols-7 border-b border-border bg-surface-sunken text-center text-caption text-text-muted">
-            {WEEKDAY_LABELS_KO.map((label) => (
-              <span key={label} className="border-l border-border py-1 first:border-l-0">
-                {label}
-              </span>
-            ))}
-          </div>
-          {/* The ONLY scrolling region (capped height — "compact"); the
-              header row above stays put so the day columns never scroll out
-              of view along with the blocks. */}
+          {/* The header row lives INSIDE the same scroll container as the body
+              and is pinned with `sticky` — so both share one width and the
+              scrollbar can't offset the 7 header columns from the 7 body
+              columns (previously the header sat outside the scroll box and drifted
+              by the scrollbar's width). */}
           <div className="overflow-y-auto" style={{ maxHeight: PREVIEW_MAX_HEIGHT_PX }}>
+            <div className="sticky top-0 z-20 grid grid-cols-7 border-b border-border bg-surface-sunken text-center text-caption text-text-muted">
+              {WEEKDAY_LABELS_KO.map((label) => (
+                <span key={label} className="border-l border-border py-1 first:border-l-0">
+                  {label}
+                </span>
+              ))}
+            </div>
             <div className="relative grid grid-cols-7" style={{ height: rangeHeightPx(range) }}>
               {ticks.map((h) => (
                 <div
