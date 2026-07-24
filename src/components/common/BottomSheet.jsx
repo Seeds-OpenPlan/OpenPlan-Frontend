@@ -1,6 +1,13 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import {
+  getOverlayStackSnapshot,
+  isTopmostOverlay,
+  popOverlay,
+  pushOverlay,
+  subscribeOverlayStack,
+} from '../../utils/overlayStack'
 
 /*
   Bottom sheet (components.md §6, mobile shell). Same accessibility contract and
@@ -13,12 +20,27 @@ import { useFocusTrap } from '../../hooks/useFocusTrap'
 
   Content over 90vh scrolls inside the sheet; the page behind is scroll-locked.
 
+  STACKED OVERLAYS: Esc/backdrop are scoped to the TOPMOST open overlay via
+  the shared stack in utils/overlayStack.js — same fix, same reasoning as
+  Dialog.jsx's own header comment (that file's own copy is the fuller
+  version; not repeated here).
+
   `scrollBody` (default true) mirrors Dialog's own opt-out (see Dialog.jsx's
   comment for the full reasoning): a caller that owns its own fixed-header +
   scrolling-list layout passes `scrollBody={false}` to get an unpadded flex box
   sized to the sheet's available height instead of Dialog's default
   padded/scrolling one — so mobile gets the same layout as desktop, not a second
   nested scroller.
+
+  `boxRef`/`heightPx` mirror Dialog's own additive props (see that file's
+  comment for the full reasoning) — `boxRef` forwards this sheet's own
+  rendered box out to a caller that needs to MEASURE it; `heightPx` is an
+  inline fixed-height override for a caller matching ITS OWN size to
+  something measured elsewhere.
+
+  SINGLE SCRIM mirrors Dialog's own fix too (see that file's comment and
+  utils/overlayStack.js's header) — only the bottom-most open overlay on the
+  shared stack paints a visible tint.
 */
 
 export function BottomSheet({
@@ -28,9 +50,13 @@ export function BottomSheet({
   initialFocusRef,
   returnFocusRef,
   scrollBody = true,
+  boxRef,
+  heightPx,
   children,
 }) {
   const containerRef = useRef(null)
+  const overlayId = useId()
+  const stackSnapshot = useSyncExternalStore(subscribeOverlayStack, getOverlayStackSnapshot)
 
   useFocusTrap(containerRef, { open, initialFocusRef, returnFocusRef })
 
@@ -43,30 +69,57 @@ export function BottomSheet({
     }
   }, [open])
 
+  // See Dialog.jsx's own comment on why `onClose` is read via a ref inside
+  // the handler rather than closed over directly (keeps the registration
+  // effect's deps stable across re-renders, so this instance's stack
+  // position never shuffles just because an unrelated prop changed).
+  const onCloseRef = useRef(onClose)
   useEffect(() => {
-    if (!open || !onClose) return
+    onCloseRef.current = onClose
+  })
+
+  useEffect(() => {
+    if (!open) return undefined
+    pushOverlay(overlayId)
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      if (!onCloseRef.current) return
+      if (!isTopmostOverlay(overlayId)) return
+      onCloseRef.current()
     }
     document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+    return () => {
+      popOverlay(overlayId)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open, overlayId])
 
   if (!open) return null
 
+  // Same reasoning as Dialog.jsx's own — bottom-most (or the only one open)
+  // → visible scrim; stacked above something else → transparent.
+  const showScrim = stackSnapshot.length === 0 || stackSnapshot[0] === overlayId
+
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center">
+      {/* Backdrop click-catcher — always present, only visibly tinted when
+          bottom-most (showScrim); see Dialog.jsx's own comment for the full
+          reasoning. Dismissal itself stays topmost-only (cheap guard). */}
       <div
-        className="absolute inset-0 bg-[var(--color-overlay-scrim)]"
-        onClick={onClose ? () => onClose() : undefined}
+        className={['absolute inset-0', showScrim ? 'bg-[var(--color-overlay-scrim)]' : 'bg-transparent'].join(' ')}
+        onClick={onClose ? () => isTopmostOverlay(overlayId) && onClose() : undefined}
         aria-hidden="true"
       />
       <div
-        ref={containerRef}
+        ref={(node) => {
+          containerRef.current = node
+          if (boxRef) boxRef.current = node
+        }}
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelledById}
         tabIndex={-1}
+        style={heightPx != null ? { height: heightPx } : undefined}
         className={[
           'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-sheet bg-surface shadow-modal',
           'motion-safe:transition-transform motion-safe:duration-slow motion-safe:ease-emphasized',

@@ -40,6 +40,31 @@ const delay = (ms = MOCK_LATENCY_MS) => new Promise((r) => setTimeout(r, ms))
 let uid = 100
 const nextId = (prefix) => `${prefix}-${(uid += 1)}`
 
+// FIX (ST-F1-09 code review, Thomas — BLOCKER): every TASK id THIS mock mints
+// uses the `plan-task` prefix, deliberately DIFFERENT from
+// projectFixtures.js's own `task` prefix. Both modules start their own local
+// `uid` counter at 100, so with a shared prefix they would mint COLLIDING ids
+// (both produce `task-101`, `task-102`, …) — projectApi.getTask (ST-F1-09,
+// GET /tasks/{taskId}) searches ONLY the project store, so a colliding id
+// reached via WeeklyPage.jsx's "태스크 편집" context menu (which passes a
+// PLAN block's taskId, minted here) would silently resolve to an unrelated
+// PROJECT task and let the edit page save over it — no error, wrong data.
+// A distinct prefix makes the two stores' id spaces disjoint BY CONSTRUCTION
+// (no counter-coordination needed), so a plan-only id can never accidentally
+// match a project task. No plan-feature code parses/matches taskId by string
+// shape (grepped before this change), so the prefix itself is free to change.
+//
+// FOLLOW-UP (owner review, dev-server walkthrough): a `plan-task-*` id used
+// to just 404 at projectApi.getTask past this point — correct-but-incomplete,
+// since the owner confirmed a plan block IS a real, editable task in
+// production (the 404 was purely this DEV-mock split, not a real state).
+// projectApi.getTask now routes a `plan-task-*` id to THIS module's own
+// getTask/updateTask (below, near setTaskStatus) instead of 404ing — the
+// disjoint-prefix guarantee THIS comment describes is exactly what makes
+// that routing safe (a plan id can never accidentally reach the PROJECT
+// store's getTask and edit the wrong task — the original BLOCKER this fix
+// prevents). A truly unknown id (neither prefix's store has it) still 404s.
+
 // Seed availability: Mon–Fri 09:00–18:00 active, weekend off.
 function seedAvailability() {
   return WEEKDAY_KEYS.map((weekday, i) => ({
@@ -69,7 +94,7 @@ function seedBlocks(weekStartISO) {
         status: 'ACTIVE',
       })
     } else {
-      taskId = nextId('task')
+      taskId = nextId('plan-task')
       // Register the task with its estimate = initial duration, so A4 remainder
       // works when a SEEDED task block is shrunk (est − placed > 0).
       placedTaskData.set(taskId, {
@@ -132,7 +157,7 @@ function seedPastWeekBlocks(weekStartISO) {
         status: 'ACTIVE',
       })
     } else {
-      taskId = nextId('task')
+      taskId = nextId('plan-task')
       placedTaskData.set(taskId, {
         taskId,
         title,
@@ -178,7 +203,7 @@ function seedPastWeekBlocks(weekStartISO) {
 // per-week) — a task is a candidate for any week until it's placed as a block.
 function seedUnplacedTasks() {
   const mk = (title, estimatedMinutes, priority, projectId, projectName, dueOffset) => ({
-    taskId: nextId('task'),
+    taskId: nextId('plan-task'),
     projectId,
     projectName,
     title,
@@ -289,6 +314,82 @@ function placedRemainders() {
     }
   }
   return out
+}
+
+/*
+  --- SCR-TASK-EDIT bridge (ST-F1-09, owner follow-up) ---------------------
+
+  Originally this store had no generic "get/update a task by id" — every
+  consumer here reads a task bundled with something else (a block, the
+  unplaced list). SCR-TASK-EDIT's WeeklyPage entry point ("태스크 편집" on a
+  placed block) needs exactly that, by a bare `plan-task-*` id, and the owner
+  confirmed a plan block IS a real, editable task in production (the
+  not-found this used to show was a DEV-mock artifact of the project/plan
+  stores staying separate, not a real state) — see projectApi.getTask's own
+  header for the namespace-routing that calls into this section, and
+  planFixtures.js's own `nextId('plan-task')` comment for why routing by id
+  PREFIX is safe (the two stores' ids can never collide).
+
+  `placedTaskData` is checked before `unplacedTasks`: once a task has EVER
+  been placed it lives there permanently (rememberPlaced's own header) and is
+  the richer, canonical record; `unplacedTasks` only holds tasks that were
+  NEVER placed at all. A task placed once then fully unplaced again is NOT
+  back in `unplacedTasks` (its backlog presence is a computed `placedRemainders`
+  entry, not real membership) — placedTaskData.get still finds it correctly.
+*/
+function findPlanTaskSource(taskId) {
+  return placedTaskData.get(taskId) ?? unplacedTasks.find((t) => t.taskId === taskId) ?? null
+}
+
+// A plan-origin task has no explicit status field until it is edited via
+// SCR-TASK-EDIT (below), which then persists one exactly like the project
+// store always has. Before that first edit, status is DERIVED — mirrors
+// TaskRow.jsx's own UNASSIGNED/IN_PROGRESS/COMPLETED semantics: never placed
+// → UNASSIGNED; placed with every block COMPLETED → COMPLETED; placed with
+// at least one non-COMPLETED block → IN_PROGRESS.
+function derivePlanTaskStatus(taskId) {
+  if (unplacedTasks.some((t) => t.taskId === taskId)) return 'UNASSIGNED'
+  let hasBlock = false
+  let allCompleted = true
+  for (const week of weeks.values()) {
+    for (const block of week.blocks) {
+      if (block.taskId !== taskId) continue
+      hasBlock = true
+      if (block.status !== 'COMPLETED') allCompleted = false
+    }
+  }
+  return hasBlock ? (allCompleted ? 'COMPLETED' : 'IN_PROGRESS') : 'UNASSIGNED'
+}
+
+// Mirrors projectFixtures.js's own isDueSoon (3-day horizon, never "임박" once
+// COMPLETED) — a tiny, deliberate duplication rather than exporting/importing
+// across the two mock stores just for this one predicate.
+const PLAN_TASK_DUE_SOON_DAYS = 3
+function isPlanTaskDueSoon(dueDate, status) {
+  if (!dueDate || status === 'COMPLETED') return false
+  const diffDays = Math.round((new Date(dueDate) - new Date()) / (24 * 60 * 60 * 1000))
+  return diffDays >= 0 && diffDays <= PLAN_TASK_DUE_SOON_DAYS
+}
+
+// The SAME normalized, editable shape projectFixtures' own task records use
+// (see projectApi.normalizeTask) — TaskEditModal reads either origin through
+// one shape and never needs to know which store answered.
+function normalizePlanTaskDetail(taskId, src) {
+  const status = src.status || derivePlanTaskStatus(taskId)
+  return {
+    taskId: src.taskId,
+    projectId: src.projectId ?? null,
+    title: src.title,
+    memo: src.memo ?? '', // [가정—신규] plan tasks never carried a memo field before this
+    estimatedMinutes: src.estimatedMinutes,
+    priority: src.priority ?? 2,
+    dueDate: src.dueDate ?? null,
+    status,
+    category: src.category ?? null, // [가정—신규] — see projectApi.normalizeTask's own note
+    version: src.version ?? 1, // [가정—신규] — optimistic-lock counter, first write starts it
+    updatedAt: src.updatedAt ?? null, // [가정—신규]
+    dueSoon: isPlanTaskDueSoon(src.dueDate, status),
+  }
 }
 
 function findWeekByPlanId(weeklyPlanId) {
@@ -1010,6 +1111,78 @@ export const mockBackend = {
       }
     }
     return { message: 'STATUS_UPDATED' }
+  },
+
+  // GET /tasks/{taskId}, `plan-task-*` half ([가정—신규], ST-F1-09 owner
+  // follow-up) — see findPlanTaskSource's own header for the full contract.
+  // projectApi.getTask routes here by id prefix; a `task-*` id never reaches
+  // this method at all.
+  async getTask(taskId) {
+    await delay(60)
+    const src = findPlanTaskSource(taskId)
+    if (!src) {
+      const err = new Error('mock: plan task not found')
+      err.status = 404
+      throw err
+    }
+    return normalizePlanTaskDetail(taskId, src)
+  },
+
+  // PATCH /tasks/{taskId}, `plan-task-*` half ([가정—신규], ST-F1-09 owner
+  // follow-up). Same optimistic-lock contract as projectFixtures'
+  // updateTask (version mismatch → E-COM-006 + details.latest), so
+  // ConflictOverlay/"재시도" work identically regardless of which store
+  // answered.
+  async updateTask(taskId, body) {
+    await delay()
+    const src = findPlanTaskSource(taskId)
+    if (!src) {
+      const err = new Error('mock: plan task not found')
+      err.status = 404
+      throw err
+    }
+    const currentVersion = src.version ?? 1
+    if (body.version != null && body.version !== currentVersion) {
+      const err = new Error('mock: plan task version conflict')
+      err.code = 'E-COM-006'
+      err.status = 409
+      err.details = { latest: normalizePlanTaskDetail(taskId, src) }
+      throw err
+    }
+    Object.assign(src, {
+      title: body.title ?? src.title,
+      estimatedMinutes: body.estimatedMinutes ?? src.estimatedMinutes,
+      priority: body.priority ?? src.priority,
+      dueDate: body.dueDate !== undefined ? body.dueDate : src.dueDate,
+      // First save captures whatever status the form showed (itself the
+      // DERIVED value, if never explicitly saved before) — see
+      // normalizePlanTaskDetail's own `src.status || derivePlanTaskStatus`.
+      // From then on this explicit value wins over the derived one, exactly
+      // like every other persisted field here.
+      status: body.status ?? src.status ?? derivePlanTaskStatus(taskId),
+      category: body.category !== undefined ? body.category : src.category,
+      memo: body.memo ?? src.memo,
+    })
+    src.version = currentVersion + 1
+    src.updatedAt = new Date().toISOString()
+
+    // Reflect the new title onto every PLACED block for this task, so the
+    // calendar grid shows the edit on refetch (mirrors updateSchedule's own
+    // title-mirroring for SCHEDULE blocks below). Deliberately NOT resizing
+    // a block's startAt/endAt to a new estimatedMinutes — that would
+    // silently move/resize something the user never touched on the grid, a
+    // bigger behavior change than "reflect the edit" calls for. Persisting
+    // the task record itself (above) is the guaranteed part; this mirror is
+    // best-effort and title-only.
+    if (body.title !== undefined) {
+      for (const week of weeks.values()) {
+        for (const block of week.blocks) {
+          if (block.taskId === taskId) block.title = src.title
+        }
+      }
+    }
+
+    return { message: 'UPDATED' }
   },
 
   // DELETE /plan-blocks/{planBlockId}. A SCHEDULE block is simply removed

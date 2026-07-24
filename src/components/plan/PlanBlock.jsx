@@ -4,6 +4,11 @@ import { formatMinutesLabel } from '../../features/plan/planTime'
 import { PX_PER_MIN } from '../../features/plan/planGeometry'
 import { AlertTriangleIcon, CheckCircleIcon } from '../common/statusIcons'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
+import {
+  VIOLATION_BORDER_CLASSES,
+  VIOLATION_CHIP_CLASSES,
+  VIOLATION_STRIPES,
+} from '../../features/plan/violationStyles'
 
 // Below this rendered height a block can't show its title legibly, so a
 // hover/focus detail card supplements it (readability aid — the block's
@@ -48,25 +53,6 @@ const TYPE_CLASSES = {
   absolutely-positioned overlay, because a positioned overlay paints ABOVE the
   block's static text and would wash out the title.
 */
-const VIOLATION_BORDER_CLASSES = {
-  blocking: 'border-danger-500',
-  warning: 'border-warning-500',
-}
-
-const VIOLATION_CHIP_CLASSES = {
-  blocking: 'bg-danger-600 text-white',
-  warning: 'bg-warning-600 text-white',
-}
-
-// Blocking = tight, high-contrast hatch; warning = wider, softer hatch. The two
-// patterns are distinguishable in greyscale.
-const VIOLATION_STRIPES = {
-  blocking:
-    'repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-danger-600) 20%, transparent) 0, color-mix(in srgb, var(--color-danger-600) 20%, transparent) 4px, transparent 4px, transparent 9px)',
-  warning:
-    'repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-warning-600) 18%, transparent) 0, color-mix(in srgb, var(--color-warning-600) 18%, transparent) 3px, transparent 3px, transparent 14px)',
-}
-
 export function PlanBlock({
   block,
   style,

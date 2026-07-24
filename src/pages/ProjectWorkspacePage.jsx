@@ -9,6 +9,7 @@ import NotFoundPage from './NotFoundPage'
 import ForbiddenPage from './ForbiddenPage'
 import { TaskRow } from '../components/project/TaskRow'
 import { TaskCreateForm } from '../components/project/TaskCreateForm'
+import { TaskEditModal } from '../components/task/TaskEditModal'
 import { DeleteTaskDialog } from '../components/project/DeleteTaskDialog'
 import { TaskStructuringDraft } from '../components/project/TaskStructuringDraft'
 import { StructureWarningBanner } from '../components/project/StructureWarningBanner'
@@ -23,7 +24,6 @@ import {
   useProjectWbs,
   useUpdateProject,
   useUpdateProjectStatus,
-  useUpdateTask,
   useUpdateTaskSchedule,
 } from '../features/project/useProjectData'
 import { useAppStore, selectCanWrite } from '../store/useAppStore'
@@ -48,14 +48,19 @@ function ProjectWorkspacePage() {
 
   const tab = searchParams.get('tab') === 'plan' ? 'plan' : 'task'
   const [taskFilter, setTaskFilter] = useState('ALL') // 'ALL' | 'ACTIVE' | 'DONE'
-  // G-1 (owner review 2026-07-24): ONE overlay slot for both create AND
-  // edit — `'create'` or a task object — same "single discriminated slot"
-  // shape ProjectsPage's own `overlay` state already uses for ITS four
-  // overlays, rather than a second boolean+error pair duplicating
-  // taskCreateOpen/createTaskError for edit. TaskCreateForm itself reads
-  // `task` (undefined in create mode) to switch its own copy/prefill.
-  const [taskFormTarget, setTaskFormTarget] = useState(null) // null | 'create' | task
+  // G-1 (owner review 2026-07-24, superseded 2026-07-24 by ST-F1-09): this
+  // used to double as an edit-mode slot too (`'create'` or a task object) —
+  // see TaskRow.jsx's own updated G-1 comment for why 편집 now navigates to
+  // SCR-TASK-EDIT instead. Only `'create'` is ever set here now; kept as a
+  // string sentinel (not a bare boolean) so a future second overlay reason
+  // can reuse the same "one discriminated slot" shape ProjectsPage's own
+  // `overlay` state already uses, rather than reintroducing a fresh flag.
+  const [taskFormTarget, setTaskFormTarget] = useState(null) // null | 'create'
   const [taskFormError, setTaskFormError] = useState(false)
+  // ST-F1-09 (owner review, modal decision): 편집 opens TaskEditModal — a
+  // taskId, not a task object (the modal fetches its own detail via
+  // useTask). Page-local, mirrors deleteTaskTarget's own shape below.
+  const [taskEditTaskId, setTaskEditTaskId] = useState(null)
   const [deleteTaskTarget, setDeleteTaskTarget] = useState(null) // task | null
   const [deleteTaskError, setDeleteTaskError] = useState(false)
   const [manageOpen, setManageOpen] = useState(false)
@@ -67,7 +72,6 @@ function ProjectWorkspacePage() {
   const warningsQuery = useProjectStructureWarnings(projectId)
   const wbsQuery = useProjectWbs(projectId)
   const createTask = useCreateTask()
-  const updateTask = useUpdateTask()
   const deleteTask = useDeleteTask()
   const updateProject = useUpdateProject()
   const updateProjectStatus = useUpdateProjectStatus()
@@ -134,23 +138,15 @@ function ProjectWorkspacePage() {
     status: taskStatusById.get(n.taskId),
   }))
 
-  // G-1: `taskFormTarget` doubles as create/edit — 'create' calls the
-  // original POST, anything else (a task object) is the row being edited
-  // and calls PATCH instead. Both close the SAME overlay slot on success.
+  // G-1 (superseded 2026-07-24): this used to branch on `taskFormTarget`
+  // being 'create' vs. a task object (PATCH). Now that 편집 navigates to
+  // SCR-TASK-EDIT instead (TaskRow.jsx), `taskFormTarget` is only ever
+  // 'create', so this is a plain POST — the update branch was removed
+  // rather than left dead.
   const handleTaskFormSubmit = (body) => {
     setTaskFormError(false)
-    if (taskFormTarget === 'create') {
-      createTask.mutate(
-        { projectId, body },
-        {
-          onSuccess: () => setTaskFormTarget(null),
-          onError: () => setTaskFormError(true),
-        },
-      )
-      return
-    }
-    updateTask.mutate(
-      { projectId, taskId: taskFormTarget.taskId, body },
+    createTask.mutate(
+      { projectId, body },
       {
         onSuccess: () => setTaskFormTarget(null),
         onError: () => setTaskFormError(true),
@@ -329,7 +325,7 @@ function ProjectWorkspacePage() {
                   key={task.taskId}
                   task={task}
                   projectId={projectId}
-                  onEdit={setTaskFormTarget}
+                  onEdit={setTaskEditTaskId}
                   onDelete={setDeleteTaskTarget}
                 />
               ))}
@@ -366,15 +362,18 @@ function ProjectWorkspacePage() {
         />
       )}
 
-      {taskFormTarget && (
+      {taskFormTarget === 'create' && (
         <TaskCreateForm
-          task={taskFormTarget === 'create' ? undefined : taskFormTarget}
           onClose={() => setTaskFormTarget(null)}
           onSubmit={handleTaskFormSubmit}
-          submitting={taskFormTarget === 'create' ? createTask.isPending : updateTask.isPending}
+          submitting={createTask.isPending}
           submitError={taskFormError}
           onRetry={() => setTaskFormError(false)}
         />
+      )}
+
+      {taskEditTaskId && (
+        <TaskEditModal taskId={taskEditTaskId} onClose={() => setTaskEditTaskId(null)} />
       )}
 
       <DeleteTaskDialog
