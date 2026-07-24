@@ -40,6 +40,22 @@ const delay = (ms = MOCK_LATENCY_MS) => new Promise((r) => setTimeout(r, ms))
 let uid = 100
 const nextId = (prefix) => `${prefix}-${(uid += 1)}`
 
+// FIX (ST-F1-09 code review, Thomas — BLOCKER): every TASK id THIS mock mints
+// uses the `plan-task` prefix, deliberately DIFFERENT from
+// projectFixtures.js's own `task` prefix. Both modules start their own local
+// `uid` counter at 100, so with a shared prefix they would mint COLLIDING ids
+// (both produce `task-101`, `task-102`, …) — projectApi.getTask (ST-F1-09,
+// GET /tasks/{taskId}) searches ONLY the project store, so a colliding id
+// reached via WeeklyPage.jsx's "태스크 편집" context menu (which passes a
+// PLAN block's taskId, minted here) would silently resolve to an unrelated
+// PROJECT task and let the edit page save over it — no error, wrong data.
+// A distinct prefix makes the two stores' id spaces disjoint BY CONSTRUCTION
+// (no counter-coordination needed), so a plan-only id can never accidentally
+// match a project task; projectApi.getTask now 404s for it instead — see
+// that function's own header comment for why that is the correct behavior,
+// not a workaround. No plan-feature code parses/matches taskId by string
+// shape (grepped before this change), so the prefix itself is free to change.
+
 // Seed availability: Mon–Fri 09:00–18:00 active, weekend off.
 function seedAvailability() {
   return WEEKDAY_KEYS.map((weekday, i) => ({
@@ -69,7 +85,7 @@ function seedBlocks(weekStartISO) {
         status: 'ACTIVE',
       })
     } else {
-      taskId = nextId('task')
+      taskId = nextId('plan-task')
       // Register the task with its estimate = initial duration, so A4 remainder
       // works when a SEEDED task block is shrunk (est − placed > 0).
       placedTaskData.set(taskId, {
@@ -132,7 +148,7 @@ function seedPastWeekBlocks(weekStartISO) {
         status: 'ACTIVE',
       })
     } else {
-      taskId = nextId('task')
+      taskId = nextId('plan-task')
       placedTaskData.set(taskId, {
         taskId,
         title,
@@ -178,7 +194,7 @@ function seedPastWeekBlocks(weekStartISO) {
 // per-week) — a task is a candidate for any week until it's placed as a block.
 function seedUnplacedTasks() {
   const mk = (title, estimatedMinutes, priority, projectId, projectName, dueOffset) => ({
-    taskId: nextId('task'),
+    taskId: nextId('plan-task'),
     projectId,
     projectName,
     title,

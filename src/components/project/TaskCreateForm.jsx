@@ -13,15 +13,16 @@ import { useIsDesktop } from '../../hooks/useMediaQuery'
   which doesn't exist yet) — same 60-minute fallback ST-F1-09's own AC-1 uses
   for the identical gap, so this doesn't invent a NEW fallback number.
 
-  G-1 (owner review 2026-07-24): also doubles as the task EDIT form — an
-  optional `task` prop switches every piece of copy ("추가"→"저장" etc.) and
-  prefills the fields from it instead of the create-mode defaults above. The
-  lead's instruction was explicit: reuse THIS modal rather than build a
-  separate SCR-TASK-EDIT-shaped screen (that page is ST-F1-09's own scope,
-  still unbuilt) — same form, same validation, same overlay shell, just a
-  different initial state and submit label. `task.taskId` itself is never
-  editable here (there's no field for it), so nothing about the identity of
-  the row changes, only its own metadata.
+  G-1 (owner review 2026-07-24, superseded 2026-07-24 by ST-F1-09): this
+  modal used to also double as the task EDIT form (an optional `task` prop
+  switching copy/prefill) while SCR-TASK-EDIT didn't exist yet. ST-F1-09 has
+  since built that dedicated page (`/tasks/:taskId/edit`, TaskEditPage) — it
+  needs a full page (AC-2 suggestion chip, AC-3 mini-week preview) a modal has
+  no room for — so TaskRow.jsx's own 편집 action now navigates there instead
+  of opening this form. The `task` prop / edit-mode branch below is kept
+  as-is (harmless, still correct if ever reused) rather than stripped, since
+  removing a working code path isn't this story's job; ProjectWorkspacePage
+  no longer passes `task`, so in practice this component is create-only again.
 */
 
 const FIELD =

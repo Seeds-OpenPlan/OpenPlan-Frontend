@@ -14,11 +14,13 @@ import {
   deleteProject,
   deleteTask,
   duplicateProject,
+  getCategories,
   getProject,
   getProjects,
   getProjectStructureWarnings,
   getProjectTasks,
   getProjectWbs,
+  getTask,
   updateProject,
   updateProjectStatus,
   updateTask,
@@ -32,6 +34,8 @@ export const projectKey = (projectId) => ['project', projectId]
 export const projectTasksKey = (projectId) => ['projectTasks', projectId]
 export const structureWarningsKey = (projectId) => ['projectStructureWarnings', projectId]
 export const projectWbsKey = (projectId) => ['projectWbs', projectId]
+export const taskKey = (taskId) => ['task', taskId]
+export const categoriesKey = () => ['categories']
 
 /** GET /projects — SCR-PROJ-LIST (§PROJ.1). Tabs split this client-side. */
 export function useProjects() {
@@ -132,6 +136,26 @@ export function useDuplicateProject() {
   })
 }
 
+/** GET /tasks/{taskId} — SCR-TASK-EDIT's own hydration (ST-F1-09, no bundled
+ * project task list to read from — see projectApi.getTask's own header). */
+export function useTask(taskId) {
+  return useQuery({
+    queryKey: taskKey(taskId),
+    queryFn: () => getTask(taskId),
+    enabled: Boolean(taskId),
+  })
+}
+
+/** GET /categories — SCR-TASK-EDIT's 카테고리 Select (ST-F1-09 AC-1). A long
+ * staleTime: this is a small, rarely-changing lookup list, not per-task data. */
+export function useCategories() {
+  return useQuery({
+    queryKey: categoriesKey(),
+    queryFn: getCategories,
+    staleTime: 10 * 60 * 1000,
+  })
+}
+
 /** GET /projects/{id}/tasks — 태스크 탭 (§PROJ.2.1). */
 export function useProjectTasks(projectId) {
   return useQuery({
@@ -173,16 +197,20 @@ export function useCreateTask() {
  * there too (the fixed column's own label, and the default-duration math the
  * [기간 설정] button uses). No onError toast: the form's own inline
  * ErrorState + "다시 시도" carries the failure (same reasoning as
- * useCreateProject/useUpdateProject above). */
+ * useCreateProject/useUpdateProject above). Also invalidates `taskKey(taskId)`
+ * (added for ST-F1-09 — TaskEditPage's own detail query) so a save success
+ * doesn't leave the JUST-EDITED task's cached detail stale if the user's
+ * `history.back()` lands them right back on this same edit page. */
 export function useUpdateTask() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ taskId, body }) => updateTask(taskId, body),
-    onSuccess: (_data, { projectId }) => {
+    onSuccess: (_data, { projectId, taskId }) => {
       queryClient.invalidateQueries({ queryKey: projectTasksKey(projectId) })
       queryClient.invalidateQueries({ queryKey: projectKey(projectId) })
       queryClient.invalidateQueries({ queryKey: structureWarningsKey(projectId) })
       queryClient.invalidateQueries({ queryKey: projectWbsKey(projectId) })
+      if (taskId) queryClient.invalidateQueries({ queryKey: taskKey(taskId) })
     },
   })
 }

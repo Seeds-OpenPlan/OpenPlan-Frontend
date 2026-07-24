@@ -32,4 +32,33 @@ export const PROJECT_STATUS_OPTIONS = [
   { value: 'CLOSED', label: PROJECT_STATUS_LABELS.CLOSED },
 ]
 
+/*
+  Task-status copy (ST-F1-09 addition) — mirrors the project-status catalog
+  above, same "one catalog, many consumers" reasoning. Previously TaskRow.jsx
+  spelled these out in its own local STATUS_BADGE map; centralized here now
+  that a SECOND consumer (TaskEditPage's 상태 field, SCR-TASK-EDIT) needs the
+  identical label set — a status word should not have two places to drift
+  apart. ERD tasks.status: UNASSIGNED / IN_PROGRESS / COMPLETED.
+*/
+export const TASK_STATUS_LABELS = {
+  UNASSIGNED: '미배치',
+  IN_PROGRESS: '배치됨',
+  COMPLETED: '완료',
+}
+
+// Badge tone per status — same tones TaskRow.jsx's original STATUS_BADGE used
+// (danger = nothing placed yet, brand = placed, success = done).
+export const TASK_STATUS_BADGE_TONE = {
+  UNASSIGNED: 'danger',
+  IN_PROGRESS: 'brand',
+  COMPLETED: 'success',
+}
+
+// Ordered for TaskEditPage's 상태 radio group.
+export const TASK_STATUS_OPTIONS = [
+  { value: 'UNASSIGNED', label: TASK_STATUS_LABELS.UNASSIGNED },
+  { value: 'IN_PROGRESS', label: TASK_STATUS_LABELS.IN_PROGRESS },
+  { value: 'COMPLETED', label: TASK_STATUS_LABELS.COMPLETED },
+]
+
 export default PROJECT_STATUS_LABELS

@@ -67,11 +67,32 @@ function normalizeTask(t) {
     projectId: t.projectId ?? t.project_id ?? null,
     title: t.title,
     memo: t.memo ?? '',
+    // [가정—신규] (ST-F1-09 AC-1): the spec's preferred prefill source for a
+    // task's default estimate is user_preferences (ST-F1-12, not built yet),
+    // so both TaskCreateForm's create mode AND TaskEditPage's edit mode fall
+    // back to this SAME hardcoded 60 until that settings surface exists —
+    // one fallback number in one place, not a second copy on the edit page.
     estimatedMinutes: t.estimatedMinutes ?? t.estimated_minutes ?? 60,
     priority: t.priority ?? 2,
     dueDate: t.dueDate ?? t.due_date ?? null,
     status: t.status ?? 'UNASSIGNED', // UNASSIGNED · IN_PROGRESS · COMPLETED (ERD tasks.status)
     dueSoon: t.dueSoon ?? t.due_soon ?? false, // [가정] — no documented "마감 임박" flag; see §PROJ.0.2
+    // [가정—신규] (ST-F1-09 AC-1 카테고리 Select): no ERD column/endpoint for a
+    // task category exists yet (see getCategories below). `null` renders as
+    // the edit form's "없음" option and round-trips through PATCH unchanged.
+    category: t.category ?? null,
+    // [가정—신규] (ST-F1-09 AC-4): optimistic-lock counter for the edit
+    // page's conflict overlay. No other task write path in this codebase
+    // needed it (create has nothing to conflict with; delete/schedule don't
+    // send a body to lock); TaskEditPage is the first to.
+    version: t.version ?? 1,
+    // [가정—신규] (ST-F1-09 code review, Thomas item 5): last-saved
+    // timestamp. ConflictOverlay.jsx's own `formatSavedAt` has always read
+    // `latest?.updatedAt` for its "최신 저장 정보" box — nothing populated it
+    // before this task shape did. `null` (not a fabricated "now") when the
+    // source genuinely has none, so that box correctly stays hidden rather
+    // than showing a fake time.
+    updatedAt: t.updatedAt ?? t.updated_at ?? null,
     // §CONTRACT GAP (G-2, owner review 2026-07-24, for BE-1): an
     // IN_PROGRESS (배치됨) task's row has no way to say WHICH plan block or
     // week it's placed in — no weekStartISO, no planBlockId. That's why
@@ -79,7 +100,10 @@ function normalizeTask(t) {
     // file's own comment) — usePlanData.useRemoveBlockWithUndo (PLAN-16)
     // needs both to unplace anything. If this endpoint (or a future
     // OP-PROJ-WBS revision) starts returning them per task, that hook
-    // becomes directly reusable here.
+    // becomes directly reusable here. The SAME gap is why TaskEditPage's own
+    // AC-3 preview (useTaskEditPreview.js) can never find a task's REAL
+    // placement either — it always previews a tentative slot instead; see
+    // that hook's own header comment.
   }
 }
 
@@ -165,6 +189,61 @@ export function createTask(projectId, body) {
     () => apiClient.post(`/projects/${projectId}/tasks`, body),
     () => mockBackend.createTask(projectId, body),
   )
+}
+
+/**
+ * OP-TASK-DETAIL → GET /tasks/{taskId} ([가정—신규], ST-F1-09). No endpoint
+ * anywhere in the 07 spec or this codebase reads a SINGLE task by its bare id
+ * before this story — every prior task read came bundled with a project
+ * (getProjectTasks). SCR-TASK-EDIT is reached by just a taskId (a project
+ * row's own 편집 action, TaskRow.jsx — or WeeklyPage.jsx's own 태스크 편집
+ * context-menu item, `navigate(\`/tasks/${block.taskId}/edit\`)`), so it needs
+ * to hydrate itself from that id alone, not from an already-loaded list.
+ *
+ * CROSS-STORE GAP — flagged for reviewer / BE-1: this mock only searches the
+ * PROJECT task store (tasksByProject), the same store updateTask/deleteTask
+ * already use. A taskId that exists ONLY in the weekly-plan mock's own,
+ * entirely separate seed data (planFixtures.js's placedTaskData/
+ * unplacedTasks — the identical gap TaskRow.jsx's own G-2 comment documents
+ * from the other direction) is not found here and 404s in DEV, same as any
+ * other genuinely unknown id (NotFoundPage renders in place — the
+ * established convention, not a special case for this route). The project
+ * and plan mock stores were deliberately never unified (see this file's own
+ * header on why they stay separate); a real backend has ONE `tasks` table,
+ * so this gap is DEV-mock-only and disappears against any real/Swagger
+ * server. The route entered from a project task row — this story's own
+ * wiring — always resolves correctly, since that id always originates from
+ * THIS store.
+ *
+ * SAFE 404, NOT a silent wrong-task match (fixed post-review, Thomas
+ * BLOCKER): planFixtures.js's own task ids and this store's task ids are
+ * DISJOINT BY CONSTRUCTION — the plan mock mints `plan-task-N`, this store
+ * mints `task-N` (see planFixtures.js's own comment on its `nextId` calls).
+ * Before that fix both modules independently started their `uid` counter at
+ * 100 with the SAME `task` prefix, so a plan-only id could collide with an
+ * unrelated project task's id and this `.find()` would return that WRONG
+ * task with no error at all — the dangerous failure mode a 404 here is
+ * explicitly meant to avoid. Do not reintroduce a shared prefix between the
+ * two mock stores.
+ */
+export function getTask(taskId) {
+  return withDevFallback(
+    () => apiClient.get(`/tasks/${taskId}`),
+    () => mockBackend.getTask(taskId),
+  ).then(normalizeTask)
+}
+
+/**
+ * OP-TASK-CATEGORIES → GET /categories ([가정—신규], ST-F1-09 AC-1). No
+ * category endpoint or ERD column exists yet for tasks; see normalizeTask's
+ * own `category` note. A small static list stands in until BE-1 defines the
+ * real model.
+ */
+export function getCategories() {
+  return withDevFallback(
+    () => apiClient.get('/categories'),
+    () => mockBackend.getCategories(),
+  ).then((r) => r?.categories ?? [])
 }
 
 /**
