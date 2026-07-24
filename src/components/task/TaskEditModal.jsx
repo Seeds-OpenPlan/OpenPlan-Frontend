@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
@@ -8,7 +8,6 @@ import { ConflictOverlay } from '../common/ConflictOverlay'
 import { SkeletonListRow, SkeletonText } from '../common/Skeleton'
 import { AlertTriangleIcon } from '../common/statusIcons'
 import { MinuteStepper } from '../plan/MinuteStepper'
-import { ChevronRightIcon } from '../plan/planIcons'
 import { TaskEditPreview } from './TaskEditPreview'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
 import { useAppStore } from '../../store/useAppStore'
@@ -85,6 +84,12 @@ export function TaskEditModal({ taskId, onClose }) {
   const isDesktop = useIsDesktop()
   const taskQuery = useTask(taskId)
   const titleFieldRef = useRef(null)
+  // This modal's own rendered box (Dialog/BottomSheet's `boxRef` — see that
+  // component's own comment) — handed down to TaskEditPreviewOverlay so IT
+  // can measure and match this modal's height (owner request: same footprint,
+  // without forcing either dialog to the full viewport — see that
+  // component's own header for the full reasoning).
+  const editModalBoxRef = useRef(null)
   const [dirty, setDirty] = useState(false)
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false)
 
@@ -125,6 +130,7 @@ export function TaskEditModal({ taskId, onClose }) {
         key={taskQuery.data.taskId}
         task={taskQuery.data}
         titleFieldRef={titleFieldRef}
+        editModalBoxRef={editModalBoxRef}
         onDirtyChange={setDirty}
         onRequestClose={requestClose}
         onDone={onClose}
@@ -143,16 +149,11 @@ export function TaskEditModal({ taskId, onClose }) {
 
   return (
     <>
-      {/* `fillHeight` (owner request — preview overlay must match this
-          modal's exact footprint, not just its width): a definite height,
-          not a content-driven cap, is the only way TWO different dialogs
-          (this one, and TaskEditPreviewOverlay below) can be guaranteed the
-          SAME size regardless of either one's own content — see Dialog.jsx's
-          own comment on the prop. The form still scrolls internally if it
-          overflows (default scrollBody=true, unchanged) — nothing is clipped,
-          only short content now leaves trailing space instead of shrink-
-          wrapping tightly, which is the accepted trade-off for an exact
-          match (owner-confirmed). */}
+      {/* NATURAL height (owner follow-up: forcing this to the full viewport
+          made a short-ish form leave a lot of empty space — "모달이
+          못생겨졌어"). `boxRef` hands this rendered box out so
+          TaskEditPreviewOverlay can MEASURE it and match its OWN height to
+          this one instead — see that component's own header. */}
       {isDesktop ? (
         <Dialog
           open
@@ -160,7 +161,7 @@ export function TaskEditModal({ taskId, onClose }) {
           labelledById={TITLE_ID}
           initialFocusRef={titleFieldRef}
           size="xl"
-          fillHeight
+          boxRef={editModalBoxRef}
         >
           {body}
         </Dialog>
@@ -170,7 +171,7 @@ export function TaskEditModal({ taskId, onClose }) {
           onClose={requestClose}
           labelledById={TITLE_ID}
           initialFocusRef={titleFieldRef}
-          fillHeight
+          boxRef={editModalBoxRef}
         >
           {body}
         </BottomSheet>
@@ -274,26 +275,33 @@ function DiscardConfirmDialog({ onKeepEditing, onDiscard }) {
   or scrolls because of it.
 
   `TaskEditPreviewTrigger` owns only the open/closed boolean and renders the
-  button — the button ITSELF never changes size, so the edit modal's content
-  height is now ALWAYS just "form fields + one button row", regardless of
-  preview state. `TaskEditPreviewOverlay` is the actual stacked layer: a
-  Dialog(desktop, size="xl" — same width the preview always had)/
-  BottomSheet(mobile) via useIsDesktop, exactly like every other overlay
-  shell in this codebase, which is also what gives it the Esc-topmost fix
+  button — now a plain `Button` living IN the form's own 취소/저장 row
+  (owner follow-up: it used to be a full-width bordered card below the form;
+  now it's the far-left button on that same row, styled like every other
+  button there — "Drop the old bordered-card trigger styling"). The button
+  itself never changes size, so the edit modal's content height stays
+  "form fields + one button row" regardless of preview state.
+  `TaskEditPreviewOverlay` is the actual stacked layer: a Dialog(desktop,
+  size="xl" — same width the preview always had)/BottomSheet(mobile) via
+  useIsDesktop, exactly like every other overlay shell in this codebase,
+  which is also what gives it the Esc-topmost fix AND the single-scrim fix
   from Dialog.jsx/BottomSheet.jsx's own overlayStack.js for free — pressing
   Esc while the preview is open closes ONLY the preview (the edit modal
   beneath, also a Dialog/BottomSheet, is no longer topmost while this is
-  open) — see overlayStack.js's own header for the general mechanism.
+  open), and only ONE of the two stacked scrims ever paints — see
+  overlayStack.js's own header for both mechanisms.
 
-  FOLLOW-UP (owner request): the overlay used to be content-driven in
-  height, so a dry-run returning several 차단/경고 issues visibly RESIZED it —
-  jarring. TaskEditPreviewOverlay (below) now passes `fillHeight` (Dialog/
-  BottomSheet's own opt-in prop — see Dialog.jsx's comment) so its outer box
-  is a DEFINITE height, identical to TaskEditModal's own (same prop, same
-  value, on both), and `scrollBody={false}` so TaskEditPreview.jsx can build
-  its own fixed-header + scrolling-issue-list layout inside that fixed box —
-  0 issues and 20 issues now render at the exact same outer size; only the
-  issue list itself scrolls.
+  FOLLOW-UP (owner request, 2 rounds): round 1 made the overlay a DEFINITE
+  height so a dry-run returning several 차단/경고 issues would not visibly
+  RESIZE it, by forcing BOTH this overlay and the edit modal to the full
+  viewport height — which round 2 then flagged as ugly on a tall screen (a
+  short-ish form left a lot of empty space, "모달이 못생겨졌어"). Now: the
+  edit modal goes back to its NATURAL content-driven height; this overlay
+  MEASURES that rendered height (via `editModalBoxRef`, passed down from
+  TaskEditModal) and matches it exactly via `heightPx` — still a FIXED
+  number once measured (so 0 issues and 20 issues render identically), just
+  matched to whatever the edit modal actually is instead of the viewport cap.
+  See TaskEditPreviewOverlay's own comment for the measurement itself.
 
   WHY CONDITIONAL MOUNT, not a `hidden`/CSS-collapsed panel with the hook left
   running: useTaskEditPreview owns useWeekPlan + useAvailability + the debounced
@@ -309,7 +317,7 @@ function DiscardConfirmDialog({ onKeepEditing, onDiscard }) {
   instance that starts a fresh dry-run from the CURRENT field values — never
   stale data from before the close.
 */
-function TaskEditPreviewTrigger({ taskId, title, estimatedMinutes }) {
+function TaskEditPreviewTrigger({ taskId, title, estimatedMinutes, editModalBoxRef }) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -319,27 +327,25 @@ function TaskEditPreviewTrigger({ taskId, title, estimatedMinutes }) {
           BottomSheet, not a DOM sibling this button's own id can reference —
           aria-controls pointing at an id that doesn't exist while collapsed
           would be wrong every time this button is CLOSED, which is the
-          default state. aria-expanded still tracks open/closed. */}
-      <button
+          default state. aria-expanded still tracks open/closed. Plain
+          `secondary` Button (owner follow-up) — matches 취소 right next to it
+          in the same row now, not a bespoke card style of its own. */}
+      <Button
         type="button"
+        variant="secondary"
+        size="md"
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 rounded-card border border-border bg-surface px-4 py-3 text-label font-semibold text-text transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
-        <span>미리보기</span>
-        <ChevronRightIcon
-          className={[
-            'text-lg text-text-muted motion-safe:transition-transform motion-safe:duration-fast motion-safe:ease-standard',
-            open ? 'rotate-90' : '',
-          ].join(' ')}
-        />
-      </button>
+        미리보기
+      </Button>
       {open && (
         <TaskEditPreviewOverlay
           taskId={taskId}
           title={title}
           estimatedMinutes={estimatedMinutes}
+          editModalBoxRef={editModalBoxRef}
           onClose={() => setOpen(false)}
         />
       )}
@@ -347,30 +353,50 @@ function TaskEditPreviewTrigger({ taskId, title, estimatedMinutes }) {
   )
 }
 
-function TaskEditPreviewOverlay({ taskId, title, estimatedMinutes, onClose }) {
+function TaskEditPreviewOverlay({ taskId, title, estimatedMinutes, onClose, editModalBoxRef }) {
   const isDesktop = useIsDesktop()
   const titleId = useId()
   const closeRef = useRef(null)
+  // The edit modal's OWN rendered height, measured live — null until the
+  // first measurement lands (see the layout effect below).
+  const [matchedHeight, setMatchedHeight] = useState(null)
 
-  // `scrollBody={false}` + `fillHeight` (owner request — fixed size that
-  // never resizes with the issue count): Dialog/BottomSheet hand back an
-  // unpadded `flex-1 min-h-0` box at a DEFINITE height instead of their
-  // default padded/content-driven one, so TaskEditPreview.jsx can build its
-  // own fixed-header + scrolling-issue-list layout inside it (see that
-  // file's own header comment) — 0 issues and 20 issues render at the exact
-  // same outer size; only the issue-list region scrolls. `fillHeight` also
-  // makes this overlay's height equal TaskEditModal's own (both dialogs use
-  // the identical `h-[calc(100vh-2rem)]` — see Dialog.jsx's own comment),
-  // and `size="xl"` matches its width — together the two modals are
-  // pixel-identical footprints, satisfying "겹쳐지게 올라오는" (a layer that
-  // sits exactly over the modal beneath it, not a differently-sized one).
+  // MEASURE, don't force-full-height (owner follow-up — round 1's
+  // `fillHeight` on BOTH dialogs made the edit modal ugly on a tall screen).
+  // The edit modal is already open (and therefore already measurable) by
+  // the time this overlay can even exist — read its CURRENT rendered height
+  // once on mount, then keep watching it via ResizeObserver so a LATER
+  // change to the edit modal's own height (e.g. an inline validation error
+  // row appearing while the preview is still open) keeps the two in sync.
+  // `useLayoutEffect`, not `useEffect`: measuring synchronously before this
+  // overlay's own first paint avoids a one-frame flash at the wrong
+  // (content-driven) size before the fixed height lands.
+  useLayoutEffect(() => {
+    const node = editModalBoxRef?.current
+    if (!node) return undefined
+    const measure = () => setMatchedHeight(node.getBoundingClientRect().height)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [editModalBoxRef])
+
+  // `scrollBody={false}` (owner request, round 1 — still needed): hands back
+  // an unpadded `flex-1 min-h-0` box so TaskEditPreview.jsx can build its own
+  // fixed-header + scrolling-issue-list layout inside it (see that file's
+  // own header comment) — 0 issues and 20 issues render at the exact same
+  // outer size regardless; only the issue-list region scrolls. `heightPx`
+  // is what actually FIXES that outer size now, to the measured value above
+  // (undefined until the first measurement lands, in which case Dialog/
+  // BottomSheet fall back to their normal max-h cap for one frame at most).
+  // `size="xl"` matches the edit modal's own width, unchanged from before.
   const shellProps = {
     open: true,
     onClose,
     labelledById: titleId,
     initialFocusRef: closeRef,
     scrollBody: false,
-    fillHeight: true,
+    heightPx: matchedHeight ?? undefined,
   }
 
   const content = (
@@ -404,7 +430,7 @@ function TaskEditPreviewBody({ taskId, title, estimatedMinutes, headingId, onClo
   return <TaskEditPreview {...preview} headingId={headingId} onClose={onClose} closeButtonRef={closeButtonRef} />
 }
 
-function TaskEditForm({ task, titleFieldRef, onDirtyChange, onRequestClose, onDone }) {
+function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onRequestClose, onDone }) {
   const queryClient = useQueryClient()
 
   const [title, setTitle] = useState(task.title)
@@ -599,26 +625,35 @@ function TaskEditForm({ task, titleFieldRef, onDirtyChange, onRequestClose, onDo
 
         {submitError && <ErrorState variant="inline" onAction={() => setSubmitError(false)} />}
 
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <span role="alert" className="text-caption text-danger-700">
-            {!trimmedTitle && '제목을 입력해 주세요'}
-          </span>
-          <div className="flex shrink-0 gap-2">
-            <Button type="button" variant="secondary" size="md" onClick={onRequestClose}>
-              취소
-            </Button>
-            <Button type="submit" variant="primary" size="md" loading={updateTask.isPending} disabled={!trimmedTitle}>
-              저장
-            </Button>
+        {/* 미리보기 lives in THIS row now, far left (owner follow-up — used
+            to be a full-width bordered card below the form; see
+            TaskEditPreviewTrigger's own header for the styling change and
+            why both the visual layer AND the dry-run stay gated on `open`).
+            `flex-wrap` + the right-hand group's own `justify-end`: on a
+            narrow BottomSheet the 취소/저장 pair can drop to its own line
+            without 미리보기 losing its spot at the start. */}
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+          <TaskEditPreviewTrigger
+            taskId={task.taskId}
+            title={trimmedTitle}
+            estimatedMinutes={estimatedMinutes}
+            editModalBoxRef={editModalBoxRef}
+          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <span role="alert" className="text-caption text-danger-700">
+              {!trimmedTitle && '제목을 입력해 주세요'}
+            </span>
+            <div className="flex shrink-0 gap-2">
+              <Button type="button" variant="secondary" size="md" onClick={onRequestClose}>
+                취소
+              </Button>
+              <Button type="submit" variant="primary" size="md" loading={updateTask.isPending} disabled={!trimmedTitle}>
+                저장
+              </Button>
+            </div>
           </div>
         </div>
       </form>
-
-      {/* AC-3 미리보기 — closed by default, opens as a STACKED OVERLAY over
-          this modal (owner review); see TaskEditPreviewTrigger's own header
-          for why (both the visual layer AND the dry-run itself are gated on
-          `open`, not merely hidden). */}
-      <TaskEditPreviewTrigger taskId={task.taskId} title={trimmedTitle} estimatedMinutes={estimatedMinutes} />
 
       <ConflictOverlay
         open={Boolean(conflict)}

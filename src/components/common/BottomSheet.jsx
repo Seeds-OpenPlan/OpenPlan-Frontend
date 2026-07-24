@@ -1,7 +1,13 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
-import { isTopmostOverlay, popOverlay, pushOverlay } from '../../utils/overlayStack'
+import {
+  getOverlayStackSnapshot,
+  isTopmostOverlay,
+  popOverlay,
+  pushOverlay,
+  subscribeOverlayStack,
+} from '../../utils/overlayStack'
 
 /*
   Bottom sheet (components.md §6, mobile shell). Same accessibility contract and
@@ -26,10 +32,15 @@ import { isTopmostOverlay, popOverlay, pushOverlay } from '../../utils/overlaySt
   padded/scrolling one — so mobile gets the same layout as desktop, not a second
   nested scroller.
 
-  `fillHeight` mirrors Dialog's own additive/opt-in flag (see that file's
-  comment for the full reasoning) — swaps the `max-h-[90vh]` cap for a
-  definite `h-[90vh]`, so two different sheets always render the SAME height
-  regardless of their own content.
+  `boxRef`/`heightPx` mirror Dialog's own additive props (see that file's
+  comment for the full reasoning) — `boxRef` forwards this sheet's own
+  rendered box out to a caller that needs to MEASURE it; `heightPx` is an
+  inline fixed-height override for a caller matching ITS OWN size to
+  something measured elsewhere.
+
+  SINGLE SCRIM mirrors Dialog's own fix too (see that file's comment and
+  utils/overlayStack.js's header) — only the bottom-most open overlay on the
+  shared stack paints a visible tint.
 */
 
 export function BottomSheet({
@@ -39,11 +50,13 @@ export function BottomSheet({
   initialFocusRef,
   returnFocusRef,
   scrollBody = true,
-  fillHeight = false,
+  boxRef,
+  heightPx,
   children,
 }) {
   const containerRef = useRef(null)
   const overlayId = useId()
+  const stackSnapshot = useSyncExternalStore(subscribeOverlayStack, getOverlayStackSnapshot)
 
   useFocusTrap(containerRef, { open, initialFocusRef, returnFocusRef })
 
@@ -83,28 +96,33 @@ export function BottomSheet({
 
   if (!open) return null
 
-  const heightClass = fillHeight ? 'h-[90vh]' : 'max-h-[90vh]'
+  // Same reasoning as Dialog.jsx's own — bottom-most (or the only one open)
+  // → visible scrim; stacked above something else → transparent.
+  const showScrim = stackSnapshot.length === 0 || stackSnapshot[0] === overlayId
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center">
-      {/* Backdrop click — topmost-only guard, same reasoning as Dialog.jsx's
-          own (cheap; in practice a lower sheet's backdrop can never receive
-          the click anyway). */}
+      {/* Backdrop click-catcher — always present, only visibly tinted when
+          bottom-most (showScrim); see Dialog.jsx's own comment for the full
+          reasoning. Dismissal itself stays topmost-only (cheap guard). */}
       <div
-        className="absolute inset-0 bg-[var(--color-overlay-scrim)]"
+        className={['absolute inset-0', showScrim ? 'bg-[var(--color-overlay-scrim)]' : 'bg-transparent'].join(' ')}
         onClick={onClose ? () => isTopmostOverlay(overlayId) && onClose() : undefined}
         aria-hidden="true"
       />
       <div
-        ref={containerRef}
+        ref={(node) => {
+          containerRef.current = node
+          if (boxRef) boxRef.current = node
+        }}
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelledById}
         tabIndex={-1}
+        style={heightPx != null ? { height: heightPx } : undefined}
         className={[
-          'relative flex w-full flex-col overflow-hidden rounded-t-sheet bg-surface shadow-modal',
+          'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-sheet bg-surface shadow-modal',
           'motion-safe:transition-transform motion-safe:duration-slow motion-safe:ease-emphasized',
-          heightClass,
         ].join(' ')}
       >
         {/* Drag handle — a real button (48px target) so it can also close via

@@ -33,18 +33,16 @@ import {
   NFR-017: every violation is restated as full TEXT in the list under the
   grid — the on-block chip/border is a supplementary pointer only, since the
   blocks themselves are far too narrow here to reliably show a real message.
+
+  GRID SIZING (owner follow-up, "미리보기 창이 커진만큼 주간계획 크기도 크게"):
+  the grid used to be capped at a fixed ~4h/300px — chosen when the panel
+  itself was small. Now that the overlay is matched to the (usually much
+  taller) edit modal's own height, the grid section is instead a FLEXIBLE
+  region (flex-[3] below, vs. the issue list's flex-1) that fills MOST of
+  whatever height the overlay actually has, with its own internal scroll for
+  however much of the visible-hours range still doesn't fit. No fixed pixel
+  cap is computed here anymore — see the layout below.
 */
-// Owner request (dev-server review): ~4 hours of BODY timeline visible at
-// once, without scrolling, on first open. PX_PER_MIN = HOUR_PX(75)/60 = 1.25,
-// so 4h = 240min × 1.25 = 300px of the block grid itself. The sticky weekday
-// header row lives INSIDE this same scroll box (see the header-row comment
-// below) and would eat into that 300px unless accounted for — its own height
-// is text-caption's line-height (0.75rem × 1.4 ≈ 16.8px) + py-1 (8px) + the
-// 1px border-b ≈ 26px, so PREVIEW_MAX_HEIGHT_PX is BODY + HEADER, not just
-// body, or a full 4h of blocks would not actually fit before scrolling starts.
-const PREVIEW_BODY_HEIGHT_PX = 300 // 4h × PX_PER_MIN (HOUR_PX=75)
-const PREVIEW_HEADER_HEIGHT_PX = 28 // sticky weekday row (~26px) + a hair of slack
-const PREVIEW_MAX_HEIGHT_PX = PREVIEW_BODY_HEIGHT_PX + PREVIEW_HEADER_HEIGHT_PX
 
 // The worst (highest-severity) issue targeting this specific block, or null.
 // Mirrors PlanBlock.jsx's own `violation` prop shape (severity/label/count)
@@ -131,25 +129,30 @@ export function TaskEditPreview({
   const orderedIssues = useMemo(() => [...issues].sort(compareBySeverity), [issues])
 
   /*
-    THREE fixed regions, not one flowing column (owner request — a dry-run
-    returning several 차단/경고 issues used to visibly RESIZE the whole
-    overlay; the outer shell (TaskEditModal's TaskEditPreviewOverlay) now
-    hands this component a DEFINITE height via `fillHeight`+`scrollBody=false`
+    THREE fixed-ratio regions, not one flowing column (owner request — a
+    dry-run returning several 차단/경고 issues used to visibly RESIZE the
+    whole overlay; the outer shell — TaskEditModal's TaskEditPreviewOverlay —
+    hands this component a DEFINITE height via `heightPx`+`scrollBody=false`
     specifically so this can build the fixed-size layout itself, same
-    "non-scrolling header + ONE real overflow-y-auto region" split
+    "non-scrolling header + real overflow-y-auto region(s)" split
     ReviewPanel.jsx's own PanelBody already uses for the identical reason):
-      1. Header (shrink-0)  — week label, caption, 차단/경고 counts, 닫기.
-      2. Grid   (shrink-0)  — the mini-week itself; keeps its OWN internal
-                              ~4h scroll (PREVIEW_MAX_HEIGHT_PX below),
-                              unrelated to the issue list's scroll.
-      3. Issues (flex-1 min-h-0 overflow-y-auto) — the ONLY region that
-                              grows/scrolls with the issue count. 0 issues
-                              and 20 issues render at the EXACT same outer
-                              size; only this region's own scrollbar differs.
+      1. Header (shrink-0)     — week label, caption, 차단/경고 counts, 닫기.
+      2. Grid   (flex-[3])     — the mini-week; the DOMINANT region (owner
+                                 follow-up — see the GRID SIZING note above),
+                                 own internal overflow-y-auto for whatever of
+                                 the visible-hours range doesn't fit.
+      3. Issues (flex-1)       — the smaller remaining region; the ONLY part
+                                 that grows/scrolls with the issue count. 0
+                                 issues and 20 issues render at the EXACT
+                                 same outer size; only ITS scrollbar differs.
+    Both 2 and 3 carry `min-h-0 overflow-y-auto` — two independent scroll
+    regions sharing the fixed space via their own flex-grow ratio, neither
+    one able to push the OUTER box past the height TaskEditPreviewOverlay
+    measured.
   */
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-col gap-3 px-6 pb-4 pt-6">
+      <div className="shrink-0 flex flex-col gap-3 px-6 pb-4 pt-6">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <p id={headingId} className="text-label font-semibold text-text">
@@ -186,7 +189,9 @@ export function TaskEditPreview({
         )}
       </div>
 
-      <div className="shrink-0 px-6 pb-4">
+      {/* Grid — the DOMINANT flexible region now (owner follow-up); see the
+          GRID SIZING note in this file's own header for why flex-[3]. */}
+      <div className="min-h-0 flex-[3] px-6 pb-3">
         {loading ? (
           <Skeleton width="100%" height="10rem" />
         ) : noSlot ? (
@@ -194,13 +199,18 @@ export function TaskEditPreview({
             이번 주에 미리보기를 배치할 자리를 찾지 못했습니다 — 가용 시간이 부족합니다
           </p>
         ) : (
-          <div className="overflow-hidden rounded-control border border-border">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-control border border-border">
             {/* The header row lives INSIDE the same scroll container as the body
                 and is pinned with `sticky` — so both share one width and the
                 scrollbar can't offset the 7 header columns from the 7 body
                 columns (previously the header sat outside the scroll box and drifted
-                by the scrollbar's width). */}
-            <div className="overflow-y-auto" style={{ maxHeight: PREVIEW_MAX_HEIGHT_PX }}>
+                by the scrollbar's width). `min-h-0 flex-1 overflow-y-auto`
+                (not a fixed `maxHeight` px cap, as before the GRID SIZING
+                follow-up) — this region now stretches to fill whatever
+                height flex-[3] above actually allocated it, and scrolls
+                internally for however much of the visible-hours range
+                still doesn't fit in that (now much larger) space. */}
+            <div className="min-h-0 flex-1 overflow-y-auto">
               <div className="sticky top-0 z-20 grid grid-cols-7 border-b border-border bg-surface-sunken text-center text-caption text-text-muted">
                 {WEEKDAY_LABELS_KO.map((label) => (
                   <span key={label} className="border-l border-border py-1 first:border-l-0">
@@ -238,6 +248,8 @@ export function TaskEditPreview({
         )}
       </div>
 
+      {/* Issues — the smaller remaining region; the ONLY part that grows/
+          scrolls with the issue count. */}
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
         {orderedIssues.length > 0 && (
           <ul className="flex flex-col gap-1.5">
