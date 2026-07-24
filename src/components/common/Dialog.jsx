@@ -43,6 +43,17 @@ import { isTopmostOverlay, popOverlay, pushOverlay } from '../../utils/overlaySt
   (`flex-1 min-h-0`), but does none of the padding/overflow itself, leaving the
   caller free to put a non-scrolling header and its own `overflow-y-auto` region
   inside without nesting two scrollers (which would mean two scrollbars).
+
+  `fillHeight` (default false, additive/opt-in — ST-F1-09 owner request):
+  normally the outer box is `max-h-[calc(100vh-2rem)]` — a CAP, so it
+  shrink-wraps shorter content and only reaches that height when content is
+  tall enough to need it. `fillHeight` swaps that for a definite
+  `h-[calc(100vh-2rem)]`, so the box is ALWAYS exactly that height regardless
+  of content — the only way to make TWO DIFFERENT dialogs (with different,
+  possibly-changing content — TaskEditModal's own edit form vs.
+  TaskEditPreviewOverlay's dry-run results) come out IDENTICALLY sized
+  without measuring either one's rendered DOM. Every other consumer leaves
+  this false and is completely unaffected (same `max-h` behavior as always).
 */
 
 export function Dialog({
@@ -53,6 +64,7 @@ export function Dialog({
   returnFocusRef,
   size = 'sm', // 'sm' = small confirm; 'lg' = content modal; 'xl' = wide content modal
   scrollBody = true,
+  fillHeight = false,
   children,
 }) {
   const containerRef = useRef(null)
@@ -110,6 +122,7 @@ export function Dialog({
   // is unaffected.
   const WIDTH_CLASSES = { sm: 'max-w-sm', lg: 'max-w-lg', xl: 'max-w-2xl' }
   const widthClass = WIDTH_CLASSES[size] ?? WIDTH_CLASSES.sm
+  const heightClass = fillHeight ? 'h-[calc(100vh-2rem)]' : 'max-h-[calc(100vh-2rem)]'
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -134,9 +147,10 @@ export function Dialog({
           // flex-col + overflow-hidden on the OUTER box, so its rounded corners
           // and shadow stay intact; the INNER div below is what actually
           // scrolls, keeping the padding it owns clear of the scrollbar gutter.
-          'relative flex max-h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-sheet bg-surface shadow-modal',
+          'relative flex w-full flex-col overflow-hidden rounded-sheet bg-surface shadow-modal',
           'motion-safe:transition-transform motion-safe:duration-slow motion-safe:ease-emphasized',
           widthClass,
+          heightClass,
         ].join(' ')}
       >
         {scrollBody ? (

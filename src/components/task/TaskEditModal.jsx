@@ -143,12 +143,35 @@ export function TaskEditModal({ taskId, onClose }) {
 
   return (
     <>
+      {/* `fillHeight` (owner request — preview overlay must match this
+          modal's exact footprint, not just its width): a definite height,
+          not a content-driven cap, is the only way TWO different dialogs
+          (this one, and TaskEditPreviewOverlay below) can be guaranteed the
+          SAME size regardless of either one's own content — see Dialog.jsx's
+          own comment on the prop. The form still scrolls internally if it
+          overflows (default scrollBody=true, unchanged) — nothing is clipped,
+          only short content now leaves trailing space instead of shrink-
+          wrapping tightly, which is the accepted trade-off for an exact
+          match (owner-confirmed). */}
       {isDesktop ? (
-        <Dialog open onClose={requestClose} labelledById={TITLE_ID} initialFocusRef={titleFieldRef} size="xl">
+        <Dialog
+          open
+          onClose={requestClose}
+          labelledById={TITLE_ID}
+          initialFocusRef={titleFieldRef}
+          size="xl"
+          fillHeight
+        >
           {body}
         </Dialog>
       ) : (
-        <BottomSheet open onClose={requestClose} labelledById={TITLE_ID} initialFocusRef={titleFieldRef}>
+        <BottomSheet
+          open
+          onClose={requestClose}
+          labelledById={TITLE_ID}
+          initialFocusRef={titleFieldRef}
+          fillHeight
+        >
           {body}
         </BottomSheet>
       )}
@@ -262,6 +285,16 @@ function DiscardConfirmDialog({ onKeepEditing, onDiscard }) {
   beneath, also a Dialog/BottomSheet, is no longer topmost while this is
   open) — see overlayStack.js's own header for the general mechanism.
 
+  FOLLOW-UP (owner request): the overlay used to be content-driven in
+  height, so a dry-run returning several 차단/경고 issues visibly RESIZED it —
+  jarring. TaskEditPreviewOverlay (below) now passes `fillHeight` (Dialog/
+  BottomSheet's own opt-in prop — see Dialog.jsx's comment) so its outer box
+  is a DEFINITE height, identical to TaskEditModal's own (same prop, same
+  value, on both), and `scrollBody={false}` so TaskEditPreview.jsx can build
+  its own fixed-header + scrolling-issue-list layout inside that fixed box —
+  0 issues and 20 issues now render at the exact same outer size; only the
+  issue list itself scrolls.
+
   WHY CONDITIONAL MOUNT, not a `hidden`/CSS-collapsed panel with the hook left
   running: useTaskEditPreview owns useWeekPlan + useAvailability + the debounced
   usePlanValidation dry-run (GET the active week, POST validation-issues on
@@ -319,55 +352,56 @@ function TaskEditPreviewOverlay({ taskId, title, estimatedMinutes, onClose }) {
   const titleId = useId()
   const closeRef = useRef(null)
 
-  const body = (
-    <div className="flex flex-col gap-3">
-      {/* sr-only: TaskEditPreview's OWN <h2> (inside TaskEditPreviewBody
-          below) already shows "미리보기 · {주차}" visibly — this exists only
-          so Dialog/BottomSheet's required aria-labelledby has a stable id to
-          point at, without a second, visually duplicate heading. */}
-      <h2 id={titleId} className="sr-only">
-        미리보기
-      </h2>
-      <div className="flex justify-end">
-        <button
-          ref={closeRef}
-          type="button"
-          onClick={onClose}
-          aria-label="닫기"
-          className="rounded-control px-2 py-1 text-label text-text-muted hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          닫기
-        </button>
-      </div>
-      <TaskEditPreviewBody taskId={taskId} title={title} estimatedMinutes={estimatedMinutes} />
-    </div>
+  // `scrollBody={false}` + `fillHeight` (owner request — fixed size that
+  // never resizes with the issue count): Dialog/BottomSheet hand back an
+  // unpadded `flex-1 min-h-0` box at a DEFINITE height instead of their
+  // default padded/content-driven one, so TaskEditPreview.jsx can build its
+  // own fixed-header + scrolling-issue-list layout inside it (see that
+  // file's own header comment) — 0 issues and 20 issues render at the exact
+  // same outer size; only the issue-list region scrolls. `fillHeight` also
+  // makes this overlay's height equal TaskEditModal's own (both dialogs use
+  // the identical `h-[calc(100vh-2rem)]` — see Dialog.jsx's own comment),
+  // and `size="xl"` matches its width — together the two modals are
+  // pixel-identical footprints, satisfying "겹쳐지게 올라오는" (a layer that
+  // sits exactly over the modal beneath it, not a differently-sized one).
+  const shellProps = {
+    open: true,
+    onClose,
+    labelledById: titleId,
+    initialFocusRef: closeRef,
+    scrollBody: false,
+    fillHeight: true,
+  }
+
+  const content = (
+    <TaskEditPreviewBody
+      taskId={taskId}
+      title={title}
+      estimatedMinutes={estimatedMinutes}
+      headingId={titleId}
+      onClose={onClose}
+      closeButtonRef={closeRef}
+    />
   )
 
-  // Same shell/size the preview always rendered at (size="xl" — the mini-week
-  // needs the room; see Dialog.jsx's own comment on why 'xl' exists at all).
-  // The mini-week's own ~4h cap (TaskEditPreview.jsx's PREVIEW_MAX_HEIGHT_PX)
-  // still scrolls internally exactly as before — only the OUTER container
-  // changed from "inline in the edit modal" to "its own overlay".
   return isDesktop ? (
-    <Dialog open onClose={onClose} labelledById={titleId} initialFocusRef={closeRef} size="xl">
-      {body}
+    <Dialog {...shellProps} size="xl">
+      {content}
     </Dialog>
   ) : (
-    <BottomSheet open onClose={onClose} labelledById={titleId} initialFocusRef={closeRef}>
-      {body}
-    </BottomSheet>
+    <BottomSheet {...shellProps}>{content}</BottomSheet>
   )
 }
 
 // Split out so useTaskEditPreview — and everything it fetches/validates —
 // only exists for as long as the overlay above is open.
-function TaskEditPreviewBody({ taskId, title, estimatedMinutes }) {
+function TaskEditPreviewBody({ taskId, title, estimatedMinutes, headingId, onClose, closeButtonRef }) {
   // `title` feeds the virtual block's own label so a violation message
   // naming it stays accurate; priority/status/category/memo don't affect any
   // validation rule (see violationMessages.js's own catalog) and are
   // intentionally NOT passed in.
   const preview = useTaskEditPreview({ taskId, title, estimatedMinutes })
-  return <TaskEditPreview {...preview} />
+  return <TaskEditPreview {...preview} headingId={headingId} onClose={onClose} closeButtonRef={closeButtonRef} />
 }
 
 function TaskEditForm({ task, titleFieldRef, onDirtyChange, onRequestClose, onDone }) {

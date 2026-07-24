@@ -122,106 +122,138 @@ export function TaskEditPreview({
   delayed,
   loading,
   noSlot,
+  headingId,
+  onClose,
+  closeButtonRef,
 }) {
   const range = useMemo(() => visibleRange('focus', availability), [availability])
   const ticks = useMemo(() => hourTicks(range), [range])
   const orderedIssues = useMemo(() => [...issues].sort(compareBySeverity), [issues])
 
-  // No own border/card chrome: this renders INSIDE the disclosure panel
-  // (TaskEditModal's TaskEditPreviewDisclosure), which already provides the
-  // single bordered "미리보기" card + its header. A second bordered card with
-  // its own "미리보기" title here read as a duplicate panel appearing below the
-  // toggle (owner review) — so the frame + the "미리보기" word live only on the
-  // disclosure now; this body just carries the week label, the caption, the
-  // counts, and the grid.
+  /*
+    THREE fixed regions, not one flowing column (owner request — a dry-run
+    returning several 차단/경고 issues used to visibly RESIZE the whole
+    overlay; the outer shell (TaskEditModal's TaskEditPreviewOverlay) now
+    hands this component a DEFINITE height via `fillHeight`+`scrollBody=false`
+    specifically so this can build the fixed-size layout itself, same
+    "non-scrolling header + ONE real overflow-y-auto region" split
+    ReviewPanel.jsx's own PanelBody already uses for the identical reason):
+      1. Header (shrink-0)  — week label, caption, 차단/경고 counts, 닫기.
+      2. Grid   (shrink-0)  — the mini-week itself; keeps its OWN internal
+                              ~4h scroll (PREVIEW_MAX_HEIGHT_PX below),
+                              unrelated to the issue list's scroll.
+      3. Issues (flex-1 min-h-0 overflow-y-auto) — the ONLY region that
+                              grows/scrolls with the issue count. 0 issues
+                              and 20 issues render at the EXACT same outer
+                              size; only this region's own scrollbar differs.
+  */
   return (
-    <section aria-label="미리보기 내용" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-label font-semibold text-text">{weekLabelKO(weekStartISO)}</p>
-          {/* Exact required caption (AC-3, PLAN-11) — never paraphrase. */}
-          <p className="text-caption text-text-muted">실제로 저장되지 않았습니다</p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Badge tone={blockingCount > 0 ? 'danger' : 'neutral'} label={`차단 ${blockingCount}건`} />
-          <Badge tone={warningCount > 0 ? 'warning' : 'neutral'} label={`경고 ${warningCount}건`} />
-        </div>
-      </div>
-
-      {/* Same "keep the last good result visible, say it might be stale"
-          contract usePlanValidation gives the real weekly plan (AC-1 of
-          ST-F1-05) — a validation failure here must not silently blank the
-          preview into looking clean. */}
-      {delayed && (
-        <p className="rounded-card border border-border bg-surface-sunken px-3 py-2 text-caption text-text-muted">
-          검증 지연 · 마지막으로 확인한 결과를 보여 주고 있습니다
-        </p>
-      )}
-
-      {loading ? (
-        <Skeleton width="100%" height="10rem" />
-      ) : noSlot ? (
-        <p className="rounded-card border border-border bg-surface-sunken px-3 py-6 text-center text-caption text-text-muted">
-          이번 주에 미리보기를 배치할 자리를 찾지 못했습니다 — 가용 시간이 부족합니다
-        </p>
-      ) : (
-        <div className="overflow-hidden rounded-control border border-border">
-          {/* The header row lives INSIDE the same scroll container as the body
-              and is pinned with `sticky` — so both share one width and the
-              scrollbar can't offset the 7 header columns from the 7 body
-              columns (previously the header sat outside the scroll box and drifted
-              by the scrollbar's width). */}
-          <div className="overflow-y-auto" style={{ maxHeight: PREVIEW_MAX_HEIGHT_PX }}>
-            <div className="sticky top-0 z-20 grid grid-cols-7 border-b border-border bg-surface-sunken text-center text-caption text-text-muted">
-              {WEEKDAY_LABELS_KO.map((label) => (
-                <span key={label} className="border-l border-border py-1 first:border-l-0">
-                  {label}
-                </span>
-              ))}
-            </div>
-            <div className="relative grid grid-cols-7" style={{ height: rangeHeightPx(range) }}>
-              {ticks.map((h) => (
-                <div
-                  key={h}
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-x-0 border-t border-border/60"
-                  style={{ top: (h * 60 - range.startMinutes) * PX_PER_MIN }}
-                />
-              ))}
-              {days.map((dayISO) => (
-                <div key={dayISO} className="relative border-l border-border first:border-l-0">
-                  {blocks
-                    .filter((b) => dateOf(b.startAt) === dayISO)
-                    .map((b) => (
-                      <MiniBlock
-                        key={b.planBlockId}
-                        block={b}
-                        range={range}
-                        isVirtual={b.planBlockId === virtualBlock?.planBlockId}
-                        violation={violationFor(issues, b.planBlockId)}
-                      />
-                    ))}
-                </div>
-              ))}
-            </div>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-col gap-3 px-6 pb-4 pt-6">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p id={headingId} className="text-label font-semibold text-text">
+              {weekLabelKO(weekStartISO)}
+            </p>
+            {/* Exact required caption (AC-3, PLAN-11) — never paraphrase. */}
+            <p className="text-caption text-text-muted">실제로 저장되지 않았습니다</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge tone={blockingCount > 0 ? 'danger' : 'neutral'} label={`차단 ${blockingCount}건`} />
+            <Badge tone={warningCount > 0 ? 'warning' : 'neutral'} label={`경고 ${warningCount}건`} />
+            {onClose && (
+              <button
+                ref={closeButtonRef}
+                type="button"
+                onClick={onClose}
+                aria-label="닫기"
+                className="rounded-control px-2 py-1 text-label text-text-muted hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              >
+                닫기
+              </button>
+            )}
           </div>
         </div>
-      )}
 
-      {orderedIssues.length > 0 && (
-        <ul className="flex flex-col gap-1.5">
-          {orderedIssues.map((issue) => {
-            const copy = violationCopy(issue)
-            return (
-              <li key={issue.id} className="flex items-start gap-2 text-caption">
-                <Badge tone={copy.severity === 'blocking' ? 'danger' : 'warning'} label={severityLabels[copy.severity]} />
-                <span className="text-text">{copy.text}</span>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </section>
+        {/* Same "keep the last good result visible, say it might be stale"
+            contract usePlanValidation gives the real weekly plan (AC-1 of
+            ST-F1-05) — a validation failure here must not silently blank the
+            preview into looking clean. */}
+        {delayed && (
+          <p className="rounded-card border border-border bg-surface-sunken px-3 py-2 text-caption text-text-muted">
+            검증 지연 · 마지막으로 확인한 결과를 보여 주고 있습니다
+          </p>
+        )}
+      </div>
+
+      <div className="shrink-0 px-6 pb-4">
+        {loading ? (
+          <Skeleton width="100%" height="10rem" />
+        ) : noSlot ? (
+          <p className="rounded-card border border-border bg-surface-sunken px-3 py-6 text-center text-caption text-text-muted">
+            이번 주에 미리보기를 배치할 자리를 찾지 못했습니다 — 가용 시간이 부족합니다
+          </p>
+        ) : (
+          <div className="overflow-hidden rounded-control border border-border">
+            {/* The header row lives INSIDE the same scroll container as the body
+                and is pinned with `sticky` — so both share one width and the
+                scrollbar can't offset the 7 header columns from the 7 body
+                columns (previously the header sat outside the scroll box and drifted
+                by the scrollbar's width). */}
+            <div className="overflow-y-auto" style={{ maxHeight: PREVIEW_MAX_HEIGHT_PX }}>
+              <div className="sticky top-0 z-20 grid grid-cols-7 border-b border-border bg-surface-sunken text-center text-caption text-text-muted">
+                {WEEKDAY_LABELS_KO.map((label) => (
+                  <span key={label} className="border-l border-border py-1 first:border-l-0">
+                    {label}
+                  </span>
+                ))}
+              </div>
+              <div className="relative grid grid-cols-7" style={{ height: rangeHeightPx(range) }}>
+                {ticks.map((h) => (
+                  <div
+                    key={h}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-0 border-t border-border/60"
+                    style={{ top: (h * 60 - range.startMinutes) * PX_PER_MIN }}
+                  />
+                ))}
+                {days.map((dayISO) => (
+                  <div key={dayISO} className="relative border-l border-border first:border-l-0">
+                    {blocks
+                      .filter((b) => dateOf(b.startAt) === dayISO)
+                      .map((b) => (
+                        <MiniBlock
+                          key={b.planBlockId}
+                          block={b}
+                          range={range}
+                          isVirtual={b.planBlockId === virtualBlock?.planBlockId}
+                          violation={violationFor(issues, b.planBlockId)}
+                        />
+                      ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        {orderedIssues.length > 0 && (
+          <ul className="flex flex-col gap-1.5">
+            {orderedIssues.map((issue) => {
+              const copy = violationCopy(issue)
+              return (
+                <li key={issue.id} className="flex items-start gap-2 text-caption">
+                  <Badge tone={copy.severity === 'blocking' ? 'danger' : 'warning'} label={severityLabels[copy.severity]} />
+                  <span className="text-text">{copy.text}</span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
   )
 }
 

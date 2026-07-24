@@ -25,6 +25,11 @@ import { isTopmostOverlay, popOverlay, pushOverlay } from '../../utils/overlaySt
   sized to the sheet's available height instead of Dialog's default
   padded/scrolling one — so mobile gets the same layout as desktop, not a second
   nested scroller.
+
+  `fillHeight` mirrors Dialog's own additive/opt-in flag (see that file's
+  comment for the full reasoning) — swaps the `max-h-[90vh]` cap for a
+  definite `h-[90vh]`, so two different sheets always render the SAME height
+  regardless of their own content.
 */
 
 export function BottomSheet({
@@ -34,6 +39,7 @@ export function BottomSheet({
   initialFocusRef,
   returnFocusRef,
   scrollBody = true,
+  fillHeight = false,
   children,
 }) {
   const containerRef = useRef(null)
@@ -77,6 +83,8 @@ export function BottomSheet({
 
   if (!open) return null
 
+  const heightClass = fillHeight ? 'h-[90vh]' : 'max-h-[90vh]'
+
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center">
       {/* Backdrop click — topmost-only guard, same reasoning as Dialog.jsx's
@@ -94,8 +102,9 @@ export function BottomSheet({
         aria-labelledby={labelledById}
         tabIndex={-1}
         className={[
-          'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-sheet bg-surface shadow-modal',
+          'relative flex w-full flex-col overflow-hidden rounded-t-sheet bg-surface shadow-modal',
           'motion-safe:transition-transform motion-safe:duration-slow motion-safe:ease-emphasized',
+          heightClass,
         ].join(' ')}
       >
         {/* Drag handle — a real button (48px target) so it can also close via
