@@ -3,9 +3,10 @@
   1:1 to an endpoint. Consumers (the TanStack Query hooks) call ONLY these — never
   apiClient directly — so the OP↔endpoint mapping lives in exactly one place.
 
-  DEV fallback: on a network error in development the call is served from the
-  in-memory mock backend so the screen is buildable before BE-1's Swagger is up.
-  In production (or against any reachable server) the real path runs untouched,
+  DEV fallback: on a network error, OR on a 404 from an endpoint the local BE
+  has not implemented yet (E-COM-004), the call is served from the in-memory
+  mock backend so the screen is buildable before BE-1's Swagger is up. In
+  production (or against any reachable server) the real path runs untouched,
   keeping the mock→real switch a base-URL change only (build-plan §3).
 */
 
@@ -13,15 +14,28 @@ import { apiClient } from '../../api/client'
 import { mockBackend } from './planFixtures'
 import { UNSPECIFIED_CONFLICT_CODE, violationSeverity } from './violationMessages'
 
-// Run the real call; in DEV, fall back to the mock ONLY for genuine network
-// failures (no server). Any real HTTP error (4xx/5xx) propagates unchanged so
-// error handling and rollback are exercised against real responses. Exported so
-// sibling OP modules (taskApi) share one definition of the mock-fallback rule.
+// Run the real call; in DEV, fall back to the mock for (a) a genuine network
+// failure (no server) or (b) a 404 with code E-COM-004 — Spring's generic
+// "no handler for this route" response, which is what the local BE returns
+// for an endpoint it hasn't implemented yet (some routes, e.g. dashboard/
+// stats/weekly-plans, are still mock-only while auth/projects/users are real).
+// Any OTHER real HTTP error (4xx/5xx) propagates unchanged so error handling
+// and rollback are exercised against real responses. Exported so sibling OP
+// modules (taskApi) share one definition of the mock-fallback rule.
+//
+// TRADE-OFF: this is a DEV-only convenience, and it is intentionally coarse —
+// on an IMPLEMENTED endpoint, a genuine "resource not found" 404 that happens
+// to also carry E-COM-004 gets masked by the mock too, instead of surfacing as
+// a real error. That's accepted because (1) prod never takes this branch, and
+// (2) for any endpoint the local BE hasn't implemented, the mock IS the
+// source of truth in dev, so hiding its 404 is the point, not a bug.
 export async function withDevFallback(realCall, mockCall) {
   try {
     return await realCall()
   } catch (error) {
-    if (import.meta.env.DEV && error?.isNetwork) return mockCall()
+    const isUnimplementedEndpoint = error?.status === 404 && error?.code === 'E-COM-004'
+    const shouldFallback = error?.isNetwork || isUnimplementedEndpoint
+    if (import.meta.env.DEV && shouldFallback) return mockCall()
     throw error
   }
 }
