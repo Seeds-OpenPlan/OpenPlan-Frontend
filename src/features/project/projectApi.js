@@ -10,10 +10,24 @@
   a LOCAL copy of the same tiny retry wrapper rather than importing
   planApi.withDevFallback — project and plan are separate feature folders
   (src/features/plan vs src/features/project) and neither owns the other.
+
+  ONE DELIBERATE EXCEPTION to that "neither owns the other" rule: getTask/
+  updateTask below also import planFixtures' own mockBackend — see their own
+  header comments. The owner explicitly asked the DEV mock to resolve a task
+  regardless of which mock store minted its id (a real backend has ONE tasks
+  table and never has this problem at all); routing by the taskId's own
+  namespace prefix (`task-*` vs `plan-task-*`, disjoint by construction — see
+  planFixtures.js's own `nextId('plan-task')` comment) is the narrowest
+  possible reach across that boundary, and only these two functions do it.
 */
 
 import { apiClient } from '../../api/client'
 import { mockBackend } from './projectFixtures'
+import { mockBackend as planMockBackend } from '../plan/planFixtures'
+
+// `plan-task-*` ids are minted only by planFixtures.js's own seed/placement
+// code (never by this store) — see that file's own comment on the prefix.
+const isPlanTaskId = (taskId) => typeof taskId === 'string' && taskId.startsWith('plan-task-')
 
 async function withDevFallback(realCall, mockCall) {
   try {
@@ -200,36 +214,31 @@ export function createTask(projectId, body) {
  * context-menu item, `navigate(\`/tasks/${block.taskId}/edit\`)`), so it needs
  * to hydrate itself from that id alone, not from an already-loaded list.
  *
- * CROSS-STORE GAP — flagged for reviewer / BE-1: this mock only searches the
- * PROJECT task store (tasksByProject), the same store updateTask/deleteTask
- * already use. A taskId that exists ONLY in the weekly-plan mock's own,
- * entirely separate seed data (planFixtures.js's placedTaskData/
- * unplacedTasks — the identical gap TaskRow.jsx's own G-2 comment documents
- * from the other direction) is not found here and 404s in DEV, same as any
- * other genuinely unknown id (NotFoundPage renders in place — the
- * established convention, not a special case for this route). The project
- * and plan mock stores were deliberately never unified (see this file's own
- * header on why they stay separate); a real backend has ONE `tasks` table,
- * so this gap is DEV-mock-only and disappears against any real/Swagger
- * server. The route entered from a project task row — this story's own
- * wiring — always resolves correctly, since that id always originates from
- * THIS store.
- *
- * SAFE 404, NOT a silent wrong-task match (fixed post-review, Thomas
- * BLOCKER): planFixtures.js's own task ids and this store's task ids are
- * DISJOINT BY CONSTRUCTION — the plan mock mints `plan-task-N`, this store
- * mints `task-N` (see planFixtures.js's own comment on its `nextId` calls).
- * Before that fix both modules independently started their `uid` counter at
- * 100 with the SAME `task` prefix, so a plan-only id could collide with an
- * unrelated project task's id and this `.find()` would return that WRONG
- * task with no error at all — the dangerous failure mode a 404 here is
- * explicitly meant to avoid. Do not reintroduce a shared prefix between the
- * two mock stores.
+ * CROSS-STORE BRIDGE (owner follow-up, dev-server walkthrough — supersedes
+ * this function's own earlier "CROSS-STORE GAP" note): a taskId reached via
+ * WeeklyPage.jsx's "태스크 편집" context menu is a PLAN-store id
+ * (`plan-task-*`, minted by planFixtures.js — never by this store), which
+ * this store's own mockBackend.getTask (searching only tasksByProject) can
+ * never resolve. The owner confirmed this used to matter in DEV ONLY — a
+ * real backend has ONE `tasks` table and a placed block's task is always
+ * real and editable there — so the mock now ROUTES by the id's own prefix
+ * instead of always searching the project store:
+ *   `task-*`      → mockBackend.getTask (unchanged — projectFixtures.js)
+ *   `plan-task-*` → planMockBackend.getTask (planFixtures.js's own bridge —
+ *                   see that function's header for the full contract)
+ * SAFE BY CONSTRUCTION, not a reintroduction of the wrong-task BLOCKER
+ * Thomas caught earlier: the two prefixes are DISJOINT (planFixtures.js's
+ * own `nextId('plan-task')` comment), so a plan id can never reach the
+ * PROJECT store's search and a project id can never reach the plan store's —
+ * routing by prefix cannot cross-match, only correctly dispatch. An id
+ * matching NEITHER store's prefix pattern (or matching one but genuinely
+ * absent from it) still 404s — the real not-found path stays reachable
+ * (TaskEditModalError renders in place, per that component's own comment).
  */
 export function getTask(taskId) {
   return withDevFallback(
     () => apiClient.get(`/tasks/${taskId}`),
-    () => mockBackend.getTask(taskId),
+    () => (isPlanTaskId(taskId) ? planMockBackend.getTask(taskId) : mockBackend.getTask(taskId)),
   ).then(normalizeTask)
 }
 
@@ -258,11 +267,16 @@ export function getCategories() {
  * `PATCH /tasks/{id}/schedule` shape `updateTaskSchedule` above already uses
  * for the other task-scoped write. Body is a partial merge (only fields the
  * form actually edited), matching `updateProject`'s own PATCH semantics.
+ *
+ * Same namespace routing as getTask above (owner follow-up) — a `plan-task-*`
+ * id's save goes to planMockBackend.updateTask instead of 404ing, including
+ * the SAME optimistic-lock 409 (E-COM-006) contract, so ConflictOverlay/
+ * "재시도" behave identically regardless of which store answers.
  */
 export function updateTask(taskId, body) {
   return withDevFallback(
     () => apiClient.patch(`/tasks/${taskId}`, body),
-    () => mockBackend.updateTask(taskId, body),
+    () => (isPlanTaskId(taskId) ? planMockBackend.updateTask(taskId, body) : mockBackend.updateTask(taskId, body)),
   )
 }
 

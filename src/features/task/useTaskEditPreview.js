@@ -19,10 +19,16 @@
   virtual block (via findFirstFreeSlot — the SAME free-slot search the
   unplaced panel's own quick-place button uses, so "where would this land"
   answers consistently everywhere it is asked), even for an already-placed
-  (IN_PROGRESS/배치됨) task. The `taskId`-exclusion filter below is kept
-  anyway, wired correctly, so a future placement-aware getTask can slot a real
-  match in without this hook's own logic changing — today it is simply a
-  no-op (a project-store taskId never matches a plan-mock block's taskId).
+  (IN_PROGRESS/배치됨) task or a plan-origin one opened from WeeklyPage
+  (owner follow-up: projectApi.getTask now RESOLVES a `plan-task-*` id's own
+  fields, but this hook still does not look up ITS PLACEMENT — the owner
+  explicitly confirmed that gap can stay tentative-only for now, "optional/
+  nice-to-have, not required"). The `taskId`-exclusion filter below is NOT a
+  no-op for that plan-origin case specifically — a plan task's real block(s)
+  DO share its exact taskId, so they are correctly excluded from `otherBlocks`
+  before the tentative slot search runs (the virtual block never "collides"
+  with the very block it stands in for); it remains a no-op only for a
+  project-store task, whose taskId never matches a plan-mock block's.
 
   A SECOND, narrower limitation worth flagging: the mock's own V3 "마감일 이후
   배치" rule (planFixtures.js computeValidationIssues) reads a placed task's

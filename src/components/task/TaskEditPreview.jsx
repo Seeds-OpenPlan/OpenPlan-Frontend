@@ -34,7 +34,17 @@ import {
   grid — the on-block chip/border is a supplementary pointer only, since the
   blocks themselves are far too narrow here to reliably show a real message.
 */
-const PREVIEW_MAX_HEIGHT_PX = 260
+// Owner request (dev-server review): ~4 hours of BODY timeline visible at
+// once, without scrolling, on first open. PX_PER_MIN = HOUR_PX(75)/60 = 1.25,
+// so 4h = 240min × 1.25 = 300px of the block grid itself. The sticky weekday
+// header row lives INSIDE this same scroll box (see the header-row comment
+// below) and would eat into that 300px unless accounted for — its own height
+// is text-caption's line-height (0.75rem × 1.4 ≈ 16.8px) + py-1 (8px) + the
+// 1px border-b ≈ 26px, so PREVIEW_MAX_HEIGHT_PX is BODY + HEADER, not just
+// body, or a full 4h of blocks would not actually fit before scrolling starts.
+const PREVIEW_BODY_HEIGHT_PX = 300 // 4h × PX_PER_MIN (HOUR_PX=75)
+const PREVIEW_HEADER_HEIGHT_PX = 28 // sticky weekday row (~26px) + a hair of slack
+const PREVIEW_MAX_HEIGHT_PX = PREVIEW_BODY_HEIGHT_PX + PREVIEW_HEADER_HEIGHT_PX
 
 // The worst (highest-severity) issue targeting this specific block, or null.
 // Mirrors PlanBlock.jsx's own `violation` prop shape (severity/label/count)
@@ -117,11 +127,18 @@ export function TaskEditPreview({
   const ticks = useMemo(() => hourTicks(range), [range])
   const orderedIssues = useMemo(() => [...issues].sort(compareBySeverity), [issues])
 
+  // No own border/card chrome: this renders INSIDE the disclosure panel
+  // (TaskEditModal's TaskEditPreviewDisclosure), which already provides the
+  // single bordered "미리보기" card + its header. A second bordered card with
+  // its own "미리보기" title here read as a duplicate panel appearing below the
+  // toggle (owner review) — so the frame + the "미리보기" word live only on the
+  // disclosure now; this body just carries the week label, the caption, the
+  // counts, and the grid.
   return (
-    <section aria-label="미리보기" className="flex flex-col gap-3 rounded-card border border-border bg-surface p-4">
+    <section aria-label="미리보기 내용" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-label font-semibold text-text">미리보기 · {weekLabelKO(weekStartISO)}</h2>
+          <p className="text-label font-semibold text-text">{weekLabelKO(weekStartISO)}</p>
           {/* Exact required caption (AC-3, PLAN-11) — never paraphrase. */}
           <p className="text-caption text-text-muted">실제로 저장되지 않았습니다</p>
         </div>

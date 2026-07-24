@@ -42,7 +42,7 @@ export function Dialog({
   labelledById,
   initialFocusRef,
   returnFocusRef,
-  size = 'sm', // 'sm' = small confirm; 'lg' = content modal
+  size = 'sm', // 'sm' = small confirm; 'lg' = content modal; 'xl' = wide content modal
   scrollBody = true,
   children,
 }) {
@@ -72,7 +72,12 @@ export function Dialog({
 
   if (!open) return null
 
-  const widthClass = size === 'lg' ? 'max-w-lg' : 'max-w-sm'
+  // ST-F1-09 (owner review, modal-not-page decision): 'xl' added for
+  // TaskEditModal — its AC-3 mini-week preview (7 columns) reads cramped in
+  // 'lg' (max-w-lg, 512px). Additive only; every existing 'sm'/'lg' consumer
+  // is unaffected.
+  const WIDTH_CLASSES = { sm: 'max-w-sm', lg: 'max-w-lg', xl: 'max-w-2xl' }
+  const widthClass = WIDTH_CLASSES[size] ?? WIDTH_CLASSES.sm
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

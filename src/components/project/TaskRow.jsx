@@ -12,19 +12,22 @@ import { TASK_STATUS_BADGE_TONE, TASK_STATUS_LABELS } from '../../features/proje
   COMPLETED = "완료" (success). Labels/tones come from projectLabels.js
   (TASK_STATUS_*), not spelled out locally — see that file's own comment.
 
-  G-1 (owner review 2026-07-24, superseded 2026-07-24 by ST-F1-09): 편집/삭제
-  are BACK — the lead's original instruction (#3, true when it was written)
-  was that a rendered "편집" link would point at SCR-TASK-EDIT, a route
+  G-1 (owner review 2026-07-24, superseded twice by ST-F1-09): 편집/삭제 are
+  BACK — the lead's original instruction (#3, true when it was written) was
+  that a rendered "편집" link would point at SCR-TASK-EDIT, a route
   ST-F1-09 hadn't built yet, so no link was better than a dead one. The owner
   then asked for edit/delete explicitly, routed through THIS screen instead
-  (편집 opened `TaskCreateForm` in place as an edit-mode overlay). NOW that
-  ST-F1-09's route exists, 편집 goes back to being a real navigation — a
-  dedicated page can show the AC-2 suggestion chip and the AC-3 preview an
-  in-place modal has no room for. "삭제" still opens `DeleteTaskDialog`
-  in place (page-local state owned by ProjectWorkspacePage — deleting a row
-  has no reason to leave the list). Neither is gated on `task.status`
-  (G-3 — a completed task stays editable; ProjectCard's own edit/delete
-  don't gate on the project's status either, so this isn't a new exception).
+  (편집 opened `TaskCreateForm` in place as an edit-mode overlay). ST-F1-09
+  then built a route (`tasks/:taskId/edit`, TaskEditPage) and 편집 briefly
+  navigated there — but a SECOND owner review (dev-server walkthrough)
+  decided against a separate page entirely: SCR-TASK-EDIT now opens as
+  `TaskEditModal` (Dialog/BottomSheet, ui-spec PROJ-18's "별도 편집 페이지"
+  deliberately overridden). 편집 is back to a plain button that opens it —
+  no navigation, no route, page-local state owned by ProjectWorkspacePage
+  (mirrors "삭제"'s own `DeleteTaskDialog`, which never changed). Neither is
+  gated on `task.status` (G-3 — a completed task stays editable; ProjectCard's
+  own edit/delete don't gate on the project's status either, so this isn't a
+  new exception).
 
   H-4 (owner review 2026-07-24): action order is 배치 → 편집 → 삭제 (changed
   from an earlier 편집 → 배치 → 삭제 — the owner wants 배치, the row's most
@@ -44,7 +47,7 @@ const PLACE_ACTION_CLASS =
 const DELETE_ACTION_CLASS =
   'inline-flex min-h-11 items-center rounded-control px-2 text-label font-medium text-danger-600 transition-colors hover:bg-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring'
 
-export function TaskRow({ task, projectId, onDelete }) {
+export function TaskRow({ task, projectId, onEdit, onDelete }) {
   const badge = {
     tone: TASK_STATUS_BADGE_TONE[task.status] ?? TASK_STATUS_BADGE_TONE.UNASSIGNED,
     label: TASK_STATUS_LABELS[task.status] ?? TASK_STATUS_LABELS.UNASSIGNED,
@@ -85,11 +88,12 @@ export function TaskRow({ task, projectId, onDelete }) {
             배치
           </Link>
         )}
-        {/* ui-spec-proj.md:153 — 편집 navigates to SCR-TASK-EDIT (ST-F1-09),
-            now that the route exists (see this file's own G-1 comment). */}
-        <Link to={`/tasks/${task.taskId}/edit`} className={ACTION_CLASS}>
+        {/* ui-spec-proj.md:153 — 편집 opens SCR-TASK-EDIT as a MODAL
+            (TaskEditModal, owner override of PROJ-18's page — see this
+            file's own G-1 comment), not a navigation. */}
+        <button type="button" onClick={() => onEdit?.(task.taskId)} className={ACTION_CLASS}>
           편집
-        </Link>
+        </button>
         {/*
           G-2 (owner review 2026-07-24): NO "배치 해제" button here for an
           IN_PROGRESS (배치됨) row — deliberately, not an oversight. §CONTRACT

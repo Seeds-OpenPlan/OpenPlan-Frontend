@@ -4,7 +4,6 @@ import HomePage from '../pages/HomePage'
 import WeeklyPage from '../pages/WeeklyPage'
 import ProjectsPage from '../pages/ProjectsPage'
 import ProjectWorkspacePage from '../pages/ProjectWorkspacePage'
-import TaskEditPage from '../pages/TaskEditPage'
 import StatisticsPage from '../pages/StatisticsPage'
 import SettingsPage from '../pages/SettingsPage'
 import NotFoundPage from '../pages/NotFoundPage'
@@ -90,7 +89,9 @@ export const router = createBrowserRouter([
       { path: 'weekly', Component: WeeklyPage },
       { path: 'projects', Component: ProjectsPage },
       { path: 'projects/:projectId', Component: ProjectWorkspacePage }, // ★ SCR-PROJ-WS (ST-F1-08)
-      { path: 'tasks/:taskId/edit', Component: TaskEditPage }, // ★ SCR-TASK-EDIT (ST-F1-09)
+      // NOTE: SCR-TASK-EDIT (ST-F1-09) is NOT a route — owner decision,
+      // post-review — it opens as TaskEditModal (a Dialog/BottomSheet),
+      // mounted by TaskRow.jsx and WeeklyPage.jsx, not routed here.
       { path: 'statistics', Component: StatisticsPage },
       { path: 'settings', Component: SettingsPage },
       { path: '403', Component: ForbiddenPage }, // ★ SCR-403

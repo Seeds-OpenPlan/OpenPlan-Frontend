@@ -198,18 +198,30 @@ export function useCreateTask() {
  * [기간 설정] button uses). No onError toast: the form's own inline
  * ErrorState + "다시 시도" carries the failure (same reasoning as
  * useCreateProject/useUpdateProject above). Also invalidates `taskKey(taskId)`
- * (added for ST-F1-09 — TaskEditPage's own detail query) so a save success
- * doesn't leave the JUST-EDITED task's cached detail stale if the user's
- * `history.back()` lands them right back on this same edit page. */
+ * (added for ST-F1-09 — TaskEditModal's own detail query) so a save success
+ * doesn't leave the JUST-EDITED task's cached detail stale if it is reopened
+ * right after.
+ *
+ * `projectId` guard (owner follow-up, ST-F1-09): a task edited via
+ * WeeklyPage's "태스크 편집" (a plan-store task — see projectApi.getTask's
+ * own namespace-routing comment) may have no REAL projectId at all (`null`,
+ * or one of planFixtures.js's own fictional seed strings like `'proj-1'`
+ * that names no project in THIS store). `invalidateQueries` with such a key
+ * is harmless on its own (nothing is ever cached under a fake/null project
+ * id, so it is just a no-op miss, never a throw) — this guard exists for
+ * clarity and to avoid firing four pointless invalidate calls, not because
+ * the unguarded version was actually unsafe. */
 export function useUpdateTask() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ taskId, body }) => updateTask(taskId, body),
     onSuccess: (_data, { projectId, taskId }) => {
-      queryClient.invalidateQueries({ queryKey: projectTasksKey(projectId) })
-      queryClient.invalidateQueries({ queryKey: projectKey(projectId) })
-      queryClient.invalidateQueries({ queryKey: structureWarningsKey(projectId) })
-      queryClient.invalidateQueries({ queryKey: projectWbsKey(projectId) })
+      if (projectId) {
+        queryClient.invalidateQueries({ queryKey: projectTasksKey(projectId) })
+        queryClient.invalidateQueries({ queryKey: projectKey(projectId) })
+        queryClient.invalidateQueries({ queryKey: structureWarningsKey(projectId) })
+        queryClient.invalidateQueries({ queryKey: projectWbsKey(projectId) })
+      }
       if (taskId) queryClient.invalidateQueries({ queryKey: taskKey(taskId) })
     },
   })

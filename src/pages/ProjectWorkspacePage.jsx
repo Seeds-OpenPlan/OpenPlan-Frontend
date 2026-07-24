@@ -9,6 +9,7 @@ import NotFoundPage from './NotFoundPage'
 import ForbiddenPage from './ForbiddenPage'
 import { TaskRow } from '../components/project/TaskRow'
 import { TaskCreateForm } from '../components/project/TaskCreateForm'
+import { TaskEditModal } from '../components/task/TaskEditModal'
 import { DeleteTaskDialog } from '../components/project/DeleteTaskDialog'
 import { TaskStructuringDraft } from '../components/project/TaskStructuringDraft'
 import { StructureWarningBanner } from '../components/project/StructureWarningBanner'
@@ -56,6 +57,10 @@ function ProjectWorkspacePage() {
   // `overlay` state already uses, rather than reintroducing a fresh flag.
   const [taskFormTarget, setTaskFormTarget] = useState(null) // null | 'create'
   const [taskFormError, setTaskFormError] = useState(false)
+  // ST-F1-09 (owner review, modal decision): 편집 opens TaskEditModal — a
+  // taskId, not a task object (the modal fetches its own detail via
+  // useTask). Page-local, mirrors deleteTaskTarget's own shape below.
+  const [taskEditTaskId, setTaskEditTaskId] = useState(null)
   const [deleteTaskTarget, setDeleteTaskTarget] = useState(null) // task | null
   const [deleteTaskError, setDeleteTaskError] = useState(false)
   const [manageOpen, setManageOpen] = useState(false)
@@ -320,6 +325,7 @@ function ProjectWorkspacePage() {
                   key={task.taskId}
                   task={task}
                   projectId={projectId}
+                  onEdit={setTaskEditTaskId}
                   onDelete={setDeleteTaskTarget}
                 />
               ))}
@@ -364,6 +370,10 @@ function ProjectWorkspacePage() {
           submitError={taskFormError}
           onRetry={() => setTaskFormError(false)}
         />
+      )}
+
+      {taskEditTaskId && (
+        <TaskEditModal taskId={taskEditTaskId} onClose={() => setTaskEditTaskId(null)} />
       )}
 
       <DeleteTaskDialog

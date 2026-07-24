@@ -15,6 +15,7 @@ import { ScheduleForm } from '../components/plan/ScheduleForm'
 import { ExecutionLogForm } from '../components/plan/ExecutionLogForm'
 import { SaveConfirmDialog } from '../components/plan/SaveConfirmDialog'
 import { ReplanOptionsModal } from '../components/plan/ReplanOptionsModal'
+import { TaskEditModal } from '../components/task/TaskEditModal'
 import { ErrorState } from '../components/common/ErrorState'
 import {
   useApplyAutoPlace,
@@ -118,6 +119,14 @@ function WeeklyPage() {
   // ST-F1-04 Phase 2: schedule form (create/edit) + execution log.
   const [scheduleForm, setScheduleForm] = useState(null) // { mode, block?, slot? } | null
   const [execLog, setExecLog] = useState(null) // { block } | null
+
+  // ST-F1-09 (owner review, modal decision): "태스크 편집" opens TaskEditModal
+  // with the BLOCK's own taskId — a plan-store id (`plan-task-*`), which
+  // projectApi.getTask can never resolve (see that function's own
+  // cross-store-gap comment). The modal itself renders a graceful in-modal
+  // "태스크를 찾을 수 없습니다" for that case — this page doesn't need to
+  // special-case it, only open/close the modal like any other one here.
+  const [taskEditTaskId, setTaskEditTaskId] = useState(null)
 
   // ST-F1-05: the block PLAN-23 asked to focus, and the warnings-only save confirm.
   const [focusRequest, setFocusRequest] = useState(null) // { planBlockId, token } | null
@@ -712,8 +721,9 @@ function WeeklyPage() {
   }
 
   // Menu items per block type (AC-1). Delete/unplace are soft — a "실행 취소" toast
-  // defers the server op (no confirm dialog). 태스크 편집/프로젝트에서 보기 navigate
-  // to screens that land in ST-F1-09/08 (route seams).
+  // defers the server op (no confirm dialog). 프로젝트에서 보기 navigates to
+  // SCR-PROJ-WS (ST-F1-08); 태스크 편집 opens TaskEditModal in place (ST-F1-09,
+  // owner override — no route, see that component's own header comment).
   //
   // plan-polish (AC-5 fix, extended by fix G): the read-only-except-완료/기록
   // shape now has TWO triggers — a past week (AC-5) and an auto-place draft
@@ -774,7 +784,7 @@ function WeeklyPage() {
       { key: 'log', label: '실제 시간 기록', onSelect: () => setExecLog({ block }) },
     ]
     if (planLocked) return items
-    items.push({ key: 'edit', label: '태스크 편집', onSelect: () => navigate(`/tasks/${block.taskId}/edit`) })
+    items.push({ key: 'edit', label: '태스크 편집', onSelect: () => setTaskEditTaskId(block.taskId) })
     if (block.projectId) {
       items.push({
         key: 'project',
@@ -1291,6 +1301,13 @@ function WeeklyPage() {
           onSubmit={submitExecLog}
           submitting={logExecution.isPending}
         />
+      )}
+
+      {/* 태스크 편집 (ST-F1-09, owner override — modal, not a route). See
+          TaskEditModal.jsx's own header for why a graceful in-modal
+          not-found is expected here, not a bug. */}
+      {taskEditTaskId && (
+        <TaskEditModal taskId={taskEditTaskId} onClose={() => setTaskEditTaskId(null)} />
       )}
 
       <ReviewPanel
