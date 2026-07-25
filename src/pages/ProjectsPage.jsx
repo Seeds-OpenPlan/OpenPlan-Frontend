@@ -248,6 +248,26 @@ function ProjectsPage() {
       .then(() => {
         setOverlay(null)
         toast({ tone: 'success', message: '저장했습니다' })
+        // MEDIUM bug fix (Thomas code review): editing a project's status
+        // AWAY from the tab it's currently expanded under (e.g. 진행중 →
+        // 보류, while the 진행중 tab is still the one on screen) used to
+        // leave `?expanded=` pointing at an id that no longer appears in
+        // ANY row on the visible tab — the row just silently vanished with
+        // no explanation, since nothing else ever re-checked "is the
+        // expanded project still on the tab I'm looking at". Collapsing it
+        // here (same `toggleExpand` idiom handleDeleteConfirm's own
+        // "can't stay expanded" case already uses) makes the disappearance
+        // an intentional, visible state change instead of a silent one —
+        // the row folds up before it drops off the current tab.
+        // `statusChanged` alone is sufficient here (if this project is
+        // BOTH currently expanded AND its status just changed, its new
+        // status can never equal the CURRENT `tab` — it was only visible
+        // on `tab` because its OLD status matched it); `body.status !== tab`
+        // is kept anyway as an explicit, defensive restatement of that same
+        // invariant rather than relying on it silently.
+        if (statusChanged && expandedId === project.projectId && body.status !== tab) {
+          toggleExpand(project.projectId)
+        }
       })
       .catch((error) => {
         if (error?.code === 'E-COM-006') {

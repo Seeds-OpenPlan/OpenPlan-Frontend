@@ -114,10 +114,45 @@ export function WbsTimeline({
   const deadlineDragRef = useRef(null) // { originX, originISO }
   const deadlineDebounceRef = useRef(null)
   const deadlineTooltipFlashRef = useRef(null)
+  // MAJOR bug fix (Thomas code review): the latest NOT-YET-SENT deadline
+  // drag/keyboard-nudge value, so the unmount cleanup below can FLUSH it
+  // instead of silently discarding it — see that cleanup's own comment.
+  const pendingDeadlineCommitRef = useRef(null) // ISO string | null
+  // Ref-indirection (same pattern as Dialog.jsx's own onCloseRef): the
+  // cleanup effect below must keep an EMPTY deps array (it should only fire
+  // on TRUE unmount, not re-run on every render — a re-run would flush a
+  // perfectly healthy in-progress debounce early), so it reads the CURRENT
+  // onCommitDeadline through a ref rather than closing over whichever
+  // render happened to be active when this effect was first set up.
+  const onCommitDeadlineRef = useRef(onCommitDeadline)
+  useEffect(() => {
+    onCommitDeadlineRef.current = onCommitDeadline
+  })
   useEffect(
     () => () => {
       clearTimeout(deadlineDebounceRef.current)
       clearTimeout(deadlineTooltipFlashRef.current)
+      // MAJOR bug fix (Thomas code review): this used to ONLY clearTimeout
+      // the pending debounced PATCH, which — when this component unmounts
+      // mid-debounce (closing the drawer, switching the accordion's status
+      // tab, collapsing this row, or expanding a DIFFERENT project row —
+      // all within the 500ms window) — canceled the write outright with no
+      // record it ever happened. A user who dragged the deadline and then
+      // immediately did any of those saw the change silently vanish.
+      // Flushing it here instead — firing the commit immediately on
+      // teardown rather than discarding it — guarantees the last dragged/
+      // nudged value is never lost. TanStack's `mutateAsync` runs through
+      // the QueryClient, not this component, so it still fires and
+      // invalidates correctly even after this component is gone; `toast`
+      // is a global singleton (mounted once in AppLayout), safe to call
+      // from a teardown path with nothing left to show it in place of.
+      if (pendingDeadlineCommitRef.current) {
+        const iso = pendingDeadlineCommitRef.current
+        pendingDeadlineCommitRef.current = null
+        onCommitDeadlineRef
+          .current(iso)
+          .catch(() => toast({ tone: 'error', message: systemMessages.error.writeTitle }))
+      }
     },
     [],
   )
@@ -193,7 +228,11 @@ export function WbsTimeline({
 
   const commitDeadline = (nextISO) => {
     clearTimeout(deadlineDebounceRef.current)
+    // Recorded so an unmount BEFORE this timer fires can flush it — see the
+    // cleanup effect above for the bug this fixes.
+    pendingDeadlineCommitRef.current = nextISO
     deadlineDebounceRef.current = setTimeout(() => {
+      pendingDeadlineCommitRef.current = null
       onCommitDeadline(nextISO)
         // F-6 "저장 실패 시 롤백이 시각적으로 드러나야 합니다(선이 원위치로)":
         // this component never optimistically wrote project.dueDate into any
@@ -606,11 +645,43 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
   const dragRef = useRef(null) // { mode, originStart, originEnd, originX }
   const debounceRef = useRef(null)
   const tooltipFlashRef = useRef(null)
+  // MAJOR bug fix (Thomas code review): the latest NOT-YET-SENT drag/nudge
+  // patch, so the unmount cleanup below can FLUSH it instead of silently
+  // discarding it — see that cleanup's own comment.
+  const pendingCommitRef = useRef(null) // { plannedStartDate, plannedEndDate } | null
+  // Ref-indirection (same pattern as Dialog.jsx's own onCloseRef, and this
+  // file's own deadline-drag fix above): keeps the cleanup effect's deps
+  // array EMPTY (fire only on true unmount) while still reading the CURRENT
+  // onCommit rather than closing over a stale one.
+  const onCommitRef = useRef(onCommit)
+  useEffect(() => {
+    onCommitRef.current = onCommit
+  })
 
   useEffect(() => () => {
     clearTimeout(debounceRef.current)
     clearTimeout(tooltipFlashRef.current)
-  }, [])
+    // MAJOR bug fix (Thomas code review): this used to ONLY clearTimeout
+    // the pending debounced PATCH — when this bar's own row unmounts
+    // mid-debounce (closing the drawer, switching tabs, collapsing this
+    // accordion row, or expanding a different one, all within the 500ms
+    // window), the write was canceled outright with no record it ever
+    // happened, silently losing a real drag/keyboard change. Flushing it
+    // here instead guarantees the last dragged/nudged value is never lost;
+    // TanStack's `mutate` (this hook's own `onCommit`) runs through the
+    // QueryClient, not this component, so it still fires/invalidates
+    // correctly even after this component is gone.
+    if (pendingCommitRef.current) {
+      const patch = pendingCommitRef.current
+      pendingCommitRef.current = null
+      onCommitRef.current(node.taskId, patch)
+    }
+    // `node.taskId` (not `node`): this bar is keyed by taskId in the parent
+    // list, so a MOUNTED instance's taskId value never actually changes
+    // (only `node`'s own object identity does, on every WBS refetch) —
+    // listing the stable primitive satisfies exhaustive-deps without ever
+    // causing this cleanup to re-run on an unrelated re-render.
+  }, [node.taskId])
 
   const start = preview?.start ?? node.plannedStartDate
   const end = preview?.end ?? node.plannedEndDate
@@ -619,10 +690,16 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
 
   const commit = (nextStart, nextEnd) => {
     clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => onCommit(node.taskId, {
-      plannedStartDate: nextStart,
-      plannedEndDate: nextEnd,
-    }), COMMIT_DEBOUNCE_MS)
+    // Recorded so an unmount BEFORE this timer fires can flush it — see the
+    // cleanup effect above for the bug this fixes.
+    pendingCommitRef.current = { plannedStartDate: nextStart, plannedEndDate: nextEnd }
+    debounceRef.current = setTimeout(() => {
+      pendingCommitRef.current = null
+      onCommit(node.taskId, {
+        plannedStartDate: nextStart,
+        plannedEndDate: nextEnd,
+      })
+    }, COMMIT_DEBOUNCE_MS)
   }
 
   // Keyboard nudges have no natural "release" event to clear the tooltip on
