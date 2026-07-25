@@ -22,6 +22,13 @@ const VARIANT_CLASSES = {
     'border border-border-strong text-text bg-surface hover:bg-surface-sunken active:bg-surface-sunken',
   danger:
     'border border-danger-600 text-danger-600 bg-surface hover:bg-danger-50 active:bg-danger-50',
+  // dashboard-redesign (오너 목업, StatusBoard CTA): white surface + brand text,
+  // same anatomy as `secondary` (border + bg-surface) but the border/text ride
+  // the brand scale instead of neutral — a tonal primary for cards whose bg is
+  // already busy enough that a solid brand-600 fill reads too heavy. Existing
+  // tokens only (brand-200/700/50), same precedent as Badge's `brand` tone.
+  outline:
+    'border border-brand-200 text-brand-700 bg-surface hover:bg-brand-50 active:bg-brand-50',
 }
 
 // sm = 32px compact (desktop toolbars); md = 40px default; lg = 48px, the mobile
