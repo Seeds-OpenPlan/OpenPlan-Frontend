@@ -6,7 +6,7 @@ import { formatDurationKO } from '../../features/plan/planTime'
 const MAX_VISIBLE = 5
 
 /*
-  S4 · 이번 주 투입 (DASH-06 — ui-spec-dash.md §DASH.4). Each row IS the "프로젝트
+  S4 · 이번 주 프로젝트 (DASH-06 — ui-spec-dash.md §DASH.4). Each row IS the "프로젝트
   열기" affordance (no separate button in the reference design) — the whole row
   is a Link, with an aria-label carrying the numbers a sighted user reads off
   the row's text/bar (NFR-017: the mini bar itself is decorative/aria-hidden).
@@ -19,7 +19,7 @@ export function ImpactList({ error = false, onRetry, projects = [] }) {
   if (error) {
     return (
       <section>
-        <h2 className="mb-2 text-title font-semibold text-text">이번 주 투입</h2>
+        <h2 className="mb-2 text-title font-semibold text-text">이번 주 프로젝트</h2>
         <ErrorState variant="section" onAction={onRetry} />
       </section>
     )
@@ -29,7 +29,7 @@ export function ImpactList({ error = false, onRetry, projects = [] }) {
 
   return (
     <div className="rounded-card border border-border bg-surface p-4">
-      <h2 className="text-title font-semibold text-text">이번 주 투입</h2>
+      <h2 className="text-title font-semibold text-text">이번 주 프로젝트</h2>
 
       {visible.length === 0 ? (
         <p className="mt-3 text-label text-text-muted">이번 주에 영향 있는 프로젝트가 없습니다.</p>
@@ -60,7 +60,8 @@ export function ImpactList({ error = false, onRetry, projects = [] }) {
                       aria-hidden="true"
                       className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-neutral-200"
                     >
-                      <div className="h-full rounded-full bg-neutral-800" style={{ width: `${share}%` }} />
+                      {/* dashboard-redesign (오너 목업): fill neutral-800 → brand-600. */}
+                      <div className="h-full rounded-full bg-brand-600" style={{ width: `${share}%` }} />
                     </div>
                   </div>
                   <span className="shrink-0 text-title font-semibold text-text tabular-nums">

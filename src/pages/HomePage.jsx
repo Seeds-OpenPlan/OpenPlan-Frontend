@@ -13,7 +13,6 @@ import { useLogExecution } from '../features/plan/usePlanData'
 import { currentWeekStartISO, weekLabelKO } from '../features/plan/planTime'
 import { useAppStore, selectCanWrite } from '../store/useAppStore'
 import { systemMessages } from '../constants/systemMessages'
-import { useIsDesktop } from '../hooks/useMediaQuery'
 
 // §DASH.0.4's own [가정]: the reference PNG's caption word ("진행 중") isn't the
 // literal copy — the spec maps the week's PLAN status straight to text instead.
@@ -22,20 +21,20 @@ import { useIsDesktop } from '../hooks/useMediaQuery'
 const PLAN_STATUS_LABELS = { DRAFT: '작성 중', CONFIRMED: '확정됨' }
 
 /*
-  ST-F1-10 orchestrator (ui-spec-dash.md §DASH r2 — 판단/실행 2축 재구성). One
+  ST-F1-10 orchestrator (ui-spec-dash.md §DASH — 판단/실행 재구성). One
   GET (OP-DASH-ASSEMBLE) assembles all sections; this page owns only the
   §DASH.7 state selection (loading/error/empty/normal) and the cross-section
   wiring (navigation targets, the execution-log popover).
 
-  r2 layout (§DASH.0.2 · §DASH.8):
-    메인열(판단, 1fr):   S1 상태 보드 → S5 먼저 볼 문제(우선 행동 강조행) → S4 이번 주 투입
-    보조열(실행, 320px): S3 오늘 할 일
-  기준 카드(BaselineCard)는 완전히 삭제됐다 — 가용시간 값은 S1 메타 라인과,
-  고정일정 충돌 건수는 S5의 고정 일정 충돌 행과 중복이었다(오너 지적, §DASH.0.1).
+  Layout (dashboard-redesign 최종, 오너 지시 — 값/상태 로직은 그대로): 단일
+  컬럼 세로 스택, 전부 full-width. 순서: S1 상태 보드(가로 배너로 내부 재구성
+  — StatusBoard.jsx 참고) → S3 오늘 할 일 → S5 먼저 확인할 내용(우선 행동
+  강조행) → S4 이번 주 프로젝트. 데스크톱/모바일 구조가 동일해(둘 다 같은
+  flex-col) 브레이크포인트별 JS 분기가 필요 없다 — 이전 라운드들의 2컬럼/
+  가로쌍/aside 실험은 전부 걷어냈다(그 경위는 DashboardLayout 주석 참고).
 */
 function DashboardPage() {
   const navigate = useNavigate()
-  const isDesktop = useIsDesktop()
   const dashboardQuery = useDashboardQuery()
   const logExecution = useLogExecution()
   const canWrite = useAppStore(selectCanWrite)
@@ -110,13 +109,13 @@ function DashboardPage() {
     return (
       <div className="flex flex-col gap-6">
         <PageHeader weekLabel={weekLabel} planStatusLabel={null} />
-        {/* Same column split as the real content below (§DASH.7 loading row) —
+        {/* Same arrangement as the real content below (§DASH.7 loading row) —
             zero layout shift once data arrives. */}
-        <TwoColumnLayout
-          isDesktop={isDesktop}
-          mobileOrder={[statusSkeleton, riskSkeleton, todaySkeleton, impactSkeleton]}
-          desktopMain={[statusSkeleton, riskSkeleton, impactSkeleton]}
-          desktopAside={[todaySkeleton]}
+        <DashboardLayout
+          statusNode={statusSkeleton}
+          todayNode={todaySkeleton}
+          riskNode={riskSkeleton}
+          impactNode={impactSkeleton}
         />
       </div>
     )
@@ -150,11 +149,9 @@ function DashboardPage() {
     justLoggedIds.has(item.id) ? { ...item, completed: true } : item,
   )
 
-  // One element per section, built once and then handed to TwoColumnLayout in
-  // whichever arrangement (flat mobile order vs. the two desktop columns) the
-  // current breakpoint needs — see that component's header for why this is a
-  // JS/render-time split rather than a single CSS grid. 우선 행동은 별도 노드가
-  // 없다 — RiskList(S5)에 데이터로만 전달되어 목록 맨 위에서 강조된다.
+  // One element per section, built once and handed to DashboardLayout below.
+  // 우선 행동은 별도 노드가 없다 — RiskList(S5)에 데이터로만 전달되어 목록
+  // 맨 위에서 강조된다.
   const statusNode = (
     <StatusBoard
       key="s1"
@@ -173,7 +170,9 @@ function DashboardPage() {
       key="s3"
       error={data.todayExecution?.error}
       onRetry={() => dashboardQuery.refetch()}
-      dateLabel={data.todayExecution?.dateLabel}
+      // dateLabel은 더 이상 TodayBoard에 넘기지 않는다(round 2, 오너 지적) —
+      // PageHeader의 주차 캡션과 중복이었다. 서버/mock 필드 자체는 그대로
+      // 두고(다른 소비처가 생길 수 있어 값은 안 건드림), 이 연결부만 끊는다.
       expectedMinutes={data.todayExecution?.expectedMinutes}
       remainingAvailableMinutes={data.todayExecution?.remainingAvailableMinutes}
       items={items}
@@ -206,13 +205,13 @@ function DashboardPage() {
     <div className="flex flex-col gap-6">
       <PageHeader weekLabel={weekLabel} planStatusLabel={planStatusLabel} />
 
-      {/* 메인열(판단): 상태 보드 → 먼저 볼 문제(우선 행동 흡수) → 이번 주 투입.
-          보조열(실행, 320px): 오늘 할 일 하나. §DASH.0.2 r2 최종 구성. */}
-      <TwoColumnLayout
-        isDesktop={isDesktop}
-        mobileOrder={[statusNode, riskNode, todayNode, impactNode]}
-        desktopMain={[statusNode, riskNode, impactNode]}
-        desktopAside={[todayNode]}
+      {/* 단일 컬럼: 상태 보드 → 오늘 할 일 → 먼저 확인할 내용(우선 행동
+          흡수) → 이번 주 프로젝트. */}
+      <DashboardLayout
+        statusNode={statusNode}
+        todayNode={todayNode}
+        riskNode={riskNode}
+        impactNode={impactNode}
       />
 
       {/* PLAN-15 실제 시간 기록 — WeeklyPage와 동일 폼을 재사용(§DASH.3). */}
@@ -230,37 +229,24 @@ function DashboardPage() {
 }
 
 /*
-  §DASH.0의 두 컬럼 배치, CSS grid 대신 이 방식을 쓰는 이유(팀리드 확인 완료 —
-  변경 금지 항목, §DASH.8):
-
-  `grid-column`만으로 나누면 두 컬럼이 grid row를 공유해서, 한쪽이 다른 쪽보다
-  훨씬 길면 짧은 쪽 다음 카드 시작 지점이 상대 컬럼 높이만큼 밀린다(실측 확인된
-  버그). 두 개의 독립된 flex 컬럼은 이 결합이 구조적으로 없다 — 각자 자기
-  박스이므로 상대 쪽 높이와 무관하게 바로 이어 붙는다.
-
-  대신 "하나의 평평한 DOM으로 모바일 낭독 순서까지 동시에 만족"은 안 되므로
-  (모바일은 두 컬럼을 인터리브한 순서가 필요), 브레이크포인트 분기를 CSS가
-  아니라 JS(useIsDesktop — 다른 반응형 분기와 같은 훅)에서 한다:
-  - 모바일: `mobileOrder` 배열을 있는 그대로 하나의 flex-col에 나열. 재배치
-    트릭이 아예 없으므로 DOM=시각=Tab 순서가 항상 같다.
-  - 데스크톱: `desktopMain`/`desktopAside`가 각각 독립된 flex-col 박스(보조열은
-    `w-80`=320px 고정, §DASH.0.2)로 나란히 선다. 여기서의 DOM/Tab 순서는
-    컬럼 단위(메인 전체 → 보조 전체)인데, 시각 순서와 일치하므로 팀리드가
-    허용한 범위다(모바일과 달리 여기선 "시각=필요한 순서"이기 때문).
-
-  각 섹션은 호출부에서 한 번만 만들어 필요한 배열에 담아 넘긴다 — `isDesktop`
-  하나가 어느 브랜치를 렌더할지 정하므로 두 트리가 동시에 마운트되는 일은 없다.
+  Dashboard-redesign 배치, 최종(오너 지시). 여기까지 오면서 상단 가로쌍(상태
+  보드+오늘 할 일 나란히, 높이까지 강제로 맞춤)과 2컬럼(메인/320px aside)을
+  차례로 시도했지만, 오너가 최종적으로 고른 건 그보다 단순한 단일 컬럼
+  세로 스택이다 — 네 섹션이 전부 같은 폭으로 하나씩 쌓인다. 데스크톱과
+  모바일이 완전히 같은 구조라 브레이크포인트 분기(JS든 CSS든) 자체가
+  필요 없다 — 이 함수는 이제 그냥 고정 순서의 flex-col 하나다.
+  전체 폭에서 상태 보드 혼자만 있으면 허전해 보이던 문제는 레이아웃이 아니라
+  StatusBoard 내부를 가로 배너로 재구성해서 풀었다(그 카드 파일 참고).
 */
-function TwoColumnLayout({ isDesktop, mobileOrder, desktopMain, desktopAside }) {
-  if (isDesktop) {
-    return (
-      <div className="flex flex-row items-start gap-6">
-        <div className="flex min-w-0 flex-1 flex-col gap-6">{desktopMain}</div>
-        <div className="flex w-80 shrink-0 flex-col gap-6">{desktopAside}</div>
-      </div>
-    )
-  }
-  return <div className="flex flex-col gap-6">{mobileOrder}</div>
+function DashboardLayout({ statusNode, todayNode, riskNode, impactNode }) {
+  return (
+    <div className="flex flex-col gap-6">
+      {statusNode}
+      {todayNode}
+      {riskNode}
+      {impactNode}
+    </div>
+  )
 }
 
 // §DASH.0.4 + product-owner 지시(변경 금지 항목): 캡션을 제목과 같은 줄,
