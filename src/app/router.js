@@ -3,7 +3,6 @@ import AppLayout from '../layouts/AppLayout'
 import HomePage from '../pages/HomePage'
 import WeeklyPage from '../pages/WeeklyPage'
 import ProjectsPage from '../pages/ProjectsPage'
-import ProjectWorkspacePage from '../pages/ProjectWorkspacePage'
 import StatisticsPage from '../pages/StatisticsPage'
 import SettingsLayout from '../pages/settings/SettingsLayout'
 import SettingsDefaultsPage from '../pages/settings/SettingsDefaultsPage'
@@ -94,7 +93,29 @@ export const router = createBrowserRouter([
       { index: true, Component: HomePage },
       { path: 'weekly', Component: WeeklyPage },
       { path: 'projects', Component: ProjectsPage },
-      { path: 'projects/:projectId', Component: ProjectWorkspacePage }, // ★ SCR-PROJ-WS (ST-F1-08)
+      /*
+        SCR-PROJ-WS (ST-F1-08) is no longer its own page (project-accordion
+        restructure, owner-approved design) — a project's task list/plan now
+        render INLINE as an accordion row on /projects itself
+        (ProjectsPage → ProjectAccordionRow's own `?expanded=` seam). This
+        route is kept, loader-only, purely so every EXISTING deep link built
+        for the old page — the dashboard's ImpactList card and
+        actionRouting.js's OP-DASH-ACTION `to`, WeeklyPage's "프로젝트로 이동"
+        context-menu item — keeps working with ZERO changes at those call
+        sites: it 302s straight to the accordion's own host, carrying over
+        whatever query string the old link already built (notably
+        actionRouting.js's own `?tab=plan`, which the accordion reads via the
+        exact same `tab` param name ProjectWorkspacePage used, so no
+        translation is needed, just a host swap).
+      */
+      {
+        path: 'projects/:projectId',
+        loader: ({ params, request }) => {
+          const url = new URL(request.url)
+          url.searchParams.set('expanded', params.projectId)
+          return redirect(`/projects?${url.searchParams.toString()}`)
+        },
+      },
       // NOTE: SCR-TASK-EDIT (ST-F1-09) is NOT a route — owner decision,
       // post-review — it opens as TaskEditModal (a Dialog/BottomSheet),
       // mounted by TaskRow.jsx and WeeklyPage.jsx, not routed here.

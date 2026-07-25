@@ -30,6 +30,18 @@ import { systemMessages } from '../../constants/systemMessages'
 const COMMIT_DEBOUNCE_MS = 500
 
 /*
+  Zoom (accordion restructure, owner spec: "WBS 기간 +/− 버튼으로 확대/축소 —
+  WbsTimeline의 하루 칸 픽셀 폭에 스케일 상태 추가"). A discrete step INDEX into
+  this fixed table, not a free float multiplier — every resulting `dayPx` is a
+  whole pixel value with no sub-pixel column drift, and the +/− buttons get a
+  natural disabled boundary at either end instead of an arbitrary min/max
+  check on a continuous number. Index 2 (1×) reproduces the exact pre-zoom
+  desktop/mobile baseline unchanged.
+*/
+const ZOOM_STEPS = [0.6, 0.8, 1, 1.25, 1.5, 1.75, 2]
+const DEFAULT_ZOOM_INDEX = 2
+
+/*
   F-5 (owner review 2026-07-23): the axis used to render "M/D 요일" as ONE
   inline string. "5/16 화" (double-digit day) is a different character count
   than "5/6 화" (single-digit day), so at a fixed column width some days'
@@ -69,9 +81,16 @@ export function WbsTimeline({
   // F-5 widened from 32/40 to 40/48; G-8 widens again — every day now shows
   // its own full label (no more thinning), so the extra room keeps that
   // from feeling cramped, and the owner explicitly accepts more horizontal
-  // scroll on long ranges as the trade-off.
-  const dayPx = isDesktop ? 48 : 56
+  // scroll on long ranges as the trade-off. That fixed 48/56 is now the
+  // ZOOM baseline (`ZOOM_STEPS` index 2 = 1×) rather than the final value —
+  // see `zoomIndex` below.
+  const baseDayPx = isDesktop ? 48 : 56
   const timelineRef = useRef(null)
+  // Declared before the early returns below (Rules of Hooks, same reasoning
+  // `deadlineDrag`'s own comment gives) even though a loading/error/empty
+  // WBS has nothing to zoom yet — every hook must run on every render
+  // regardless of which branch actually paints.
+  const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX)
 
   // F-6 (owner review 2026-07-24): the deadline line's own drag state.
   // Unlike a WBS bar's `preview` (local to ONE row's own WbsBar instance),
@@ -95,10 +114,45 @@ export function WbsTimeline({
   const deadlineDragRef = useRef(null) // { originX, originISO }
   const deadlineDebounceRef = useRef(null)
   const deadlineTooltipFlashRef = useRef(null)
+  // MAJOR bug fix (Thomas code review): the latest NOT-YET-SENT deadline
+  // drag/keyboard-nudge value, so the unmount cleanup below can FLUSH it
+  // instead of silently discarding it — see that cleanup's own comment.
+  const pendingDeadlineCommitRef = useRef(null) // ISO string | null
+  // Ref-indirection (same pattern as Dialog.jsx's own onCloseRef): the
+  // cleanup effect below must keep an EMPTY deps array (it should only fire
+  // on TRUE unmount, not re-run on every render — a re-run would flush a
+  // perfectly healthy in-progress debounce early), so it reads the CURRENT
+  // onCommitDeadline through a ref rather than closing over whichever
+  // render happened to be active when this effect was first set up.
+  const onCommitDeadlineRef = useRef(onCommitDeadline)
+  useEffect(() => {
+    onCommitDeadlineRef.current = onCommitDeadline
+  })
   useEffect(
     () => () => {
       clearTimeout(deadlineDebounceRef.current)
       clearTimeout(deadlineTooltipFlashRef.current)
+      // MAJOR bug fix (Thomas code review): this used to ONLY clearTimeout
+      // the pending debounced PATCH, which — when this component unmounts
+      // mid-debounce (closing the drawer, switching the accordion's status
+      // tab, collapsing this row, or expanding a DIFFERENT project row —
+      // all within the 500ms window) — canceled the write outright with no
+      // record it ever happened. A user who dragged the deadline and then
+      // immediately did any of those saw the change silently vanish.
+      // Flushing it here instead — firing the commit immediately on
+      // teardown rather than discarding it — guarantees the last dragged/
+      // nudged value is never lost. TanStack's `mutateAsync` runs through
+      // the QueryClient, not this component, so it still fires and
+      // invalidates correctly even after this component is gone; `toast`
+      // is a global singleton (mounted once in AppLayout), safe to call
+      // from a teardown path with nothing left to show it in place of.
+      if (pendingDeadlineCommitRef.current) {
+        const iso = pendingDeadlineCommitRef.current
+        pendingDeadlineCommitRef.current = null
+        onCommitDeadlineRef
+          .current(iso)
+          .catch(() => toast({ tone: 'error', message: systemMessages.error.writeTitle }))
+      }
     },
     [],
   )
@@ -119,12 +173,13 @@ export function WbsTimeline({
     return (
       <EmptyState
         title="태스크를 먼저 만들면 기간을 계획할 수 있습니다"
-        actionLabel="태스크 탭으로"
+        actionLabel="태스크 목록으로"
         onAction={onOpenTaskTab}
       />
     )
   }
 
+  const dayPx = Math.round(baseDayPx * ZOOM_STEPS[zoomIndex])
   const range = wbsDayRange(project, nodes)
   const todayISO = formatISODate(new Date())
   // F-6: while a drag is in progress, EVERYTHING that depends on "where is
@@ -173,7 +228,11 @@ export function WbsTimeline({
 
   const commitDeadline = (nextISO) => {
     clearTimeout(deadlineDebounceRef.current)
+    // Recorded so an unmount BEFORE this timer fires can flush it — see the
+    // cleanup effect above for the bug this fixes.
+    pendingDeadlineCommitRef.current = nextISO
     deadlineDebounceRef.current = setTimeout(() => {
+      pendingDeadlineCommitRef.current = null
       onCommitDeadline(nextISO)
         // F-6 "저장 실패 시 롤백이 시각적으로 드러나야 합니다(선이 원위치로)":
         // this component never optimistically wrote project.dueDate into any
@@ -229,9 +288,12 @@ export function WbsTimeline({
 
   return (
     <div className="flex flex-col gap-2">
-      {disabled && disabledReason && (
-        <p className="text-right text-caption text-text-muted">{disabledReason}</p>
-      )}
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-caption text-text-muted">
+          {disabled && disabledReason ? disabledReason : null}
+        </p>
+        <WbsZoomControl zoomIndex={zoomIndex} onChange={setZoomIndex} />
+      </div>
       <div className="flex">
         {/* Fixed task-name column (desktop 200px per spec; full-width stack on
             mobile falls back to a narrower label column — still fixed so the
@@ -520,6 +582,44 @@ export function WbsTimeline({
 }
 
 /*
+  +/− zoom control (see `ZOOM_STEPS`'s own header comment). Same 44px
+  circular-button shape as MinuteStepper's own −/+ pair (plan/MinuteStepper.jsx)
+  — reused for visual consistency rather than invented fresh — with the
+  current zoom read out as a percentage `aria-live` region so a screen reader
+  hears the change the same way MinuteStepper's own value announcement works,
+  not just a silent pixel-width shift.
+*/
+function WbsZoomControl({ zoomIndex, onChange }) {
+  const btn =
+    'flex h-11 w-11 items-center justify-center rounded-full border border-border text-lg text-text transition-colors hover:bg-surface-sunken disabled:opacity-40 disabled:hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring'
+  return (
+    <div className="inline-flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        aria-label="타임라인 축소"
+        onClick={() => onChange(Math.max(0, zoomIndex - 1))}
+        disabled={zoomIndex === 0}
+        className={btn}
+      >
+        −
+      </button>
+      <span className="min-w-11 text-center text-caption tabular-nums text-text-muted" aria-live="polite">
+        {Math.round(ZOOM_STEPS[zoomIndex] * 100)}%
+      </span>
+      <button
+        type="button"
+        aria-label="타임라인 확대"
+        onClick={() => onChange(Math.min(ZOOM_STEPS.length - 1, zoomIndex + 1))}
+        disabled={zoomIndex === ZOOM_STEPS.length - 1}
+        className={btn}
+      >
+        +
+      </button>
+    </div>
+  )
+}
+
+/*
   A single draggable bar. Local state (`preview`) holds an in-progress drag's
   candidate range so the bar can render its live position at 60fps without a
   round-trip through the query cache on every pointermove — onCommit (the
@@ -545,11 +645,43 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
   const dragRef = useRef(null) // { mode, originStart, originEnd, originX }
   const debounceRef = useRef(null)
   const tooltipFlashRef = useRef(null)
+  // MAJOR bug fix (Thomas code review): the latest NOT-YET-SENT drag/nudge
+  // patch, so the unmount cleanup below can FLUSH it instead of silently
+  // discarding it — see that cleanup's own comment.
+  const pendingCommitRef = useRef(null) // { plannedStartDate, plannedEndDate } | null
+  // Ref-indirection (same pattern as Dialog.jsx's own onCloseRef, and this
+  // file's own deadline-drag fix above): keeps the cleanup effect's deps
+  // array EMPTY (fire only on true unmount) while still reading the CURRENT
+  // onCommit rather than closing over a stale one.
+  const onCommitRef = useRef(onCommit)
+  useEffect(() => {
+    onCommitRef.current = onCommit
+  })
 
   useEffect(() => () => {
     clearTimeout(debounceRef.current)
     clearTimeout(tooltipFlashRef.current)
-  }, [])
+    // MAJOR bug fix (Thomas code review): this used to ONLY clearTimeout
+    // the pending debounced PATCH — when this bar's own row unmounts
+    // mid-debounce (closing the drawer, switching tabs, collapsing this
+    // accordion row, or expanding a different one, all within the 500ms
+    // window), the write was canceled outright with no record it ever
+    // happened, silently losing a real drag/keyboard change. Flushing it
+    // here instead guarantees the last dragged/nudged value is never lost;
+    // TanStack's `mutate` (this hook's own `onCommit`) runs through the
+    // QueryClient, not this component, so it still fires/invalidates
+    // correctly even after this component is gone.
+    if (pendingCommitRef.current) {
+      const patch = pendingCommitRef.current
+      pendingCommitRef.current = null
+      onCommitRef.current(node.taskId, patch)
+    }
+    // `node.taskId` (not `node`): this bar is keyed by taskId in the parent
+    // list, so a MOUNTED instance's taskId value never actually changes
+    // (only `node`'s own object identity does, on every WBS refetch) —
+    // listing the stable primitive satisfies exhaustive-deps without ever
+    // causing this cleanup to re-run on an unrelated re-render.
+  }, [node.taskId])
 
   const start = preview?.start ?? node.plannedStartDate
   const end = preview?.end ?? node.plannedEndDate
@@ -558,10 +690,16 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
 
   const commit = (nextStart, nextEnd) => {
     clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => onCommit(node.taskId, {
-      plannedStartDate: nextStart,
-      plannedEndDate: nextEnd,
-    }), COMMIT_DEBOUNCE_MS)
+    // Recorded so an unmount BEFORE this timer fires can flush it — see the
+    // cleanup effect above for the bug this fixes.
+    pendingCommitRef.current = { plannedStartDate: nextStart, plannedEndDate: nextEnd }
+    debounceRef.current = setTimeout(() => {
+      pendingCommitRef.current = null
+      onCommit(node.taskId, {
+        plannedStartDate: nextStart,
+        plannedEndDate: nextEnd,
+      })
+    }, COMMIT_DEBOUNCE_MS)
   }
 
   // Keyboard nudges have no natural "release" event to clear the tooltip on

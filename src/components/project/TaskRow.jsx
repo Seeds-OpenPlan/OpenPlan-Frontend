@@ -47,7 +47,7 @@ const PLACE_ACTION_CLASS =
 const DELETE_ACTION_CLASS =
   'inline-flex min-h-11 items-center rounded-control px-2 text-label font-medium text-danger-600 transition-colors hover:bg-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring'
 
-export function TaskRow({ task, projectId, onEdit, onDelete }) {
+export function TaskRow({ task, projectId, onEdit, onDelete, actionsHidden = false }) {
   const badge = {
     tone: TASK_STATUS_BADGE_TONE[task.status] ?? TASK_STATUS_BADGE_TONE.UNASSIGNED,
     label: TASK_STATUS_LABELS[task.status] ?? TASK_STATUS_LABELS.UNASSIGNED,
@@ -82,6 +82,13 @@ export function TaskRow({ task, projectId, onEdit, onDelete }) {
         </div>
         <p className="mt-1 text-caption text-text-muted">{meta}</p>
       </div>
+      {/* `actionsHidden` (accordion restructure, PROJ 계획 드로어): the host
+          panel sets this while its own [기간 설정] WBS drawer is open — the
+          owner's own instruction is "배치/편집/삭제 버튼 숨김" for every row,
+          not a per-button opt-out, so this hides the whole trailing group as
+          one unit rather than three separate conditionals. The row's info
+          block above stays visible either way; only the actions disappear. */}
+      {!actionsHidden && (
       <div className="flex shrink-0 items-center gap-1">
         {task.status === 'UNASSIGNED' && (
           <Link to={`/weekly?project=${projectId}&openUnplaced=1`} className={PLACE_ACTION_CLASS}>
@@ -119,6 +126,7 @@ export function TaskRow({ task, projectId, onEdit, onDelete }) {
           삭제
         </button>
       </div>
+      )}
     </li>
   )
 }

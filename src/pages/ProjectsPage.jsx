@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ProjectCard } from '../components/project/ProjectCard'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { ProjectAccordionRow } from '../components/project/ProjectAccordionRow'
 import { ProjectCreateForm } from '../components/project/ProjectCreateForm'
 import { ProjectManageForm } from '../components/project/ProjectManageForm'
 import { DeleteProjectDialog } from '../components/project/DeleteProjectDialog'
@@ -23,32 +23,34 @@ import { systemMessages } from '../constants/systemMessages'
 import { toast } from '../hooks/useToasts'
 
 /*
-  SCR-PROJ-LIST (ui-spec §PROJ.1). THREE client-side tabs over ONE
-  `useProjects()` fetch (matching usePlanData.useUnplacedTasks's own "fetch
-  once, filter client-side" choice for its project chips) — one tab per ERD
-  status value (IN_PROGRESS/PAUSED/CLOSED) exactly, no grouping.
+  SCR-PROJ-LIST (ui-spec §PROJ.1), restructured as a single-open ACCORDION
+  (owner-approved design, supersedes ST-F1-08's "card links to a separate
+  /projects/:id workspace page"). THREE client-side tabs over ONE
+  `useProjects()` fetch — unchanged from before, see the original A-2 note
+  this comment used to carry (진행중/보류/종료, one tab per ERD status value
+  exactly, no grouping).
 
-  REVISED (owner review 2026-07-23, A-2): the spec draft only names two tabs
-  (진행중/종료) and an earlier version of this page folded PAUSED into the
-  진행중 tab for lack of a third pill in the layout ASCII. The owner asked for
-  보류 as its OWN tab instead — simpler than the grouping guess anyway, since
-  it needs no judgment call about which non-CLOSED statuses count as
-  "진행중".
+  THE ACCORDION SEAM lives entirely in the URL, mirroring the pattern the old
+  ProjectWorkspacePage already used for its own `?tab=plan` toggle:
+  - `?expanded={projectId}` — which row (if any) is open. At most ONE, by
+    construction (a single string, not a Set) — expanding a different row can
+    only ever mean the previous one collapsed, there is no separate "close the
+    old one" step anywhere in this file.
+  - `?tab=plan` — REUSES the exact query-param name ProjectWorkspacePage's own
+    task/plan toggle used, deliberately: the old `/projects/:id` route (kept
+    below as a redirect-only loader, see router.js) forwards its OWN `?tab=`
+    straight through, so every existing `?tab=plan` deep link (dashboard's
+    actionRouting.js, StructureWarningBanner's "계획 탭 열기") lands on the
+    accordion's plan drawer with ZERO translation needed at the redirect site.
 
-  Four overlays are page-local state (not routes), mirroring WeeklyPage's own
-  schedule-form/exec-log pattern: exactly one of `overlay`/`deleteTarget` is
-  active at a time, each mounted CONDITIONALLY so it starts with fresh state
-  per open.
+  `/projects/:projectId` (old workspace URLs) 302s here via router.js's own
+  loader — this page never reads a route param for it at all, only `expanded`.
 */
 function ProjectsPage() {
-  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [tab, setTab] = useState('IN_PROGRESS') // 'IN_PROGRESS' | 'PAUSED' | 'CLOSED'
-  // `?create=1` seam (§PROJ.0.1) — the dashboard's empty-state onboarding link
-  // opens OVL-PROJ-CREATE directly on landing; read ONCE as this state's own
-  // lazy initializer (same "you might not need an Effect" shape WeeklyPage's
-  // `?openReplan=1` already uses), then stripped from the URL below.
+  // `?create=1` seam (§PROJ.0.1) — unchanged from before this restructure.
   const [overlay, setOverlay] = useState(() =>
     searchParams.get('create') === '1' ? { type: 'create' } : null,
   )
@@ -79,6 +81,71 @@ function ProjectsPage() {
   const duplicateProject = useDuplicateProject()
   const canWrite = useAppStore(selectCanWrite)
 
+  const expandedId = searchParams.get('expanded')
+  const panelMode = searchParams.get('tab') === 'plan' ? 'plan' : 'tasks'
+
+  /*
+    DEEP-LINK TAB RESOLUTION. `?expanded=` may name a project on a DIFFERENT
+    tab than this page's own default (`tab` starts at 'IN_PROGRESS' always —
+    same default the old page had). Every INTERNAL link that sets `expanded`
+    (this file's own toggleExpand/expandInProgress below) already keeps `tab`
+    in sync itself, so this only ever matters for an EXTERNAL entry: the
+    redirect-only `/projects/:id` route, or a hand-typed/bookmarked URL.
+
+    Resolved DURING RENDER, not inside a useEffect — this is React's own
+    "adjusting state when a prop changes" pattern (a piece of state,
+    `tabResolvedForId`, remembers which `expandedId` has already been
+    checked; a mismatch means THIS render needs to adjust `tab` before
+    paint). A `useEffect` calling `setTab` here would fire on a render AFTER
+    paint — a visible flash of the wrong tab, then a jump — and this
+    codebase's own lint config (react-hooks/set-state-in-effect) flags a
+    plain setState-in-effect like that outright, precisely because the
+    render-time adjustment below is the preferred fix. `projectsQuery.data`
+    loads async, so `tabResolvedForId` starts `undefined` (distinct from
+    `null` — no `?expanded=` present) and this block simply does nothing
+    until data actually arrives.
+  */
+  const [tabResolvedForId, setTabResolvedForId] = useState(undefined)
+  if (projectsQuery.data && tabResolvedForId !== expandedId) {
+    setTabResolvedForId(expandedId)
+    if (expandedId) {
+      const target = projectsQuery.data.find((p) => p.projectId === expandedId)
+      if (target) setTab(target.status)
+    }
+  }
+
+  /*
+    A STALE `?expanded=` id (the project was deleted, or the link was simply
+    wrong) is swept out of the URL — with no matching row to render, a
+    permanently "stuck" `?expanded=` would silently do nothing on every
+    future bare-/projects navigation, which is worse than clearing it once.
+    This one DOES stay a real effect (unlike the tab resolution above):
+    `setSearchParams` is a router navigation, not this component's own local
+    state, so there is no render-time equivalent to adjust it to — and it
+    isn't the setState-in-effect shape the lint rule flags in the first
+    place (same as the pre-existing `?create=1` cleanup effect above, which
+    calls `setSearchParams` inside an effect too). Guarded by a ref (not
+    state — a ref write here is bookkeeping for THIS effect only, never
+    something the render needs to read) so it fires at most once per stale id.
+  */
+  const staleExpandedRef = useRef(null)
+  useEffect(() => {
+    if (!projectsQuery.data || !expandedId) return
+    if (staleExpandedRef.current === expandedId) return
+    const found = projectsQuery.data.some((p) => p.projectId === expandedId)
+    if (found) return
+    staleExpandedRef.current = expandedId
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('expanded')
+        next.delete('tab')
+        return next
+      },
+      { replace: true },
+    )
+  }, [projectsQuery.data, expandedId, setSearchParams])
+
   // Depend on `projectsQuery.data` itself (not a `?? []`-derived local, which
   // is a fresh array literal — and therefore a fresh useMemo dependency — on
   // every render while the query has no data yet); the `?? []` fallback moves
@@ -107,12 +174,51 @@ function ProjectsPage() {
   const openDuplicate = (project) => setOverlay({ type: 'duplicate', project })
   const closeOverlay = () => setOverlay(null)
 
+  // Single seam every "this project should now be the open accordion row"
+  // caller below shares — always resets `tab` to the task list (a freshly
+  // opened row never starts on the plan drawer) and always lands on the
+  // IN_PROGRESS tab (every project this fires for — newly created,
+  // duplicated — starts IN_PROGRESS, per createProject/duplicateProject's
+  // own defaults).
+  const expandInProgress = (projectId) => {
+    setTab('IN_PROGRESS')
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.set('expanded', projectId)
+      next.delete('tab')
+      return next
+    })
+  }
+
+  const toggleExpand = (projectId) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (next.get('expanded') === projectId) {
+        next.delete('expanded')
+        next.delete('tab')
+      } else {
+        next.set('expanded', projectId)
+        next.delete('tab') // switching rows always returns to the task list
+      }
+      return next
+    })
+  }
+
+  const setPanelMode = (mode) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (mode === 'plan') next.set('tab', 'plan')
+      else next.delete('tab')
+      return next
+    })
+  }
+
   const handleCreateSubmit = (body) => {
     setCreateError(false)
     createProject.mutate(body, {
       onSuccess: ({ projectId }) => {
         setOverlay(null)
-        navigate(`/projects/${projectId}`)
+        expandInProgress(projectId)
       },
       onError: () => setCreateError(true),
     })
@@ -142,6 +248,26 @@ function ProjectsPage() {
       .then(() => {
         setOverlay(null)
         toast({ tone: 'success', message: '저장했습니다' })
+        // MEDIUM bug fix (Thomas code review): editing a project's status
+        // AWAY from the tab it's currently expanded under (e.g. 진행중 →
+        // 보류, while the 진행중 tab is still the one on screen) used to
+        // leave `?expanded=` pointing at an id that no longer appears in
+        // ANY row on the visible tab — the row just silently vanished with
+        // no explanation, since nothing else ever re-checked "is the
+        // expanded project still on the tab I'm looking at". Collapsing it
+        // here (same `toggleExpand` idiom handleDeleteConfirm's own
+        // "can't stay expanded" case already uses) makes the disappearance
+        // an intentional, visible state change instead of a silent one —
+        // the row folds up before it drops off the current tab.
+        // `statusChanged` alone is sufficient here (if this project is
+        // BOTH currently expanded AND its status just changed, its new
+        // status can never equal the CURRENT `tab` — it was only visible
+        // on `tab` because its OLD status matched it); `body.status !== tab`
+        // is kept anyway as an explicit, defensive restatement of that same
+        // invariant rather than relying on it silently.
+        if (statusChanged && expandedId === project.projectId && body.status !== tab) {
+          toggleExpand(project.projectId)
+        }
       })
       .catch((error) => {
         if (error?.code === 'E-COM-006') {
@@ -155,7 +281,11 @@ function ProjectsPage() {
   const handleDeleteConfirm = () => {
     setDeleteError(false)
     deleteProject.mutate(deleteTarget.projectId, {
-      onSuccess: () => setDeleteTarget(null),
+      onSuccess: () => {
+        // A deleted project can't stay the expanded row.
+        if (expandedId === deleteTarget.projectId) toggleExpand(deleteTarget.projectId)
+        setDeleteTarget(null)
+      },
       onError: () => setDeleteError(true),
     })
   }
@@ -165,7 +295,7 @@ function ProjectsPage() {
     duplicateProject.mutate(payload, {
       onSuccess: ({ projectId }) => {
         setOverlay(null)
-        navigate(`/projects/${projectId}`)
+        expandInProgress(projectId)
       },
       onError: () => setDuplicateError(true),
     })
@@ -226,10 +356,14 @@ function ProjectsPage() {
       ) : (
         <ul className="flex flex-col gap-4">
           {visible.map((project) => (
-            <ProjectCard
+            <ProjectAccordionRow
               key={project.projectId}
               project={project}
               closed={tab === 'CLOSED'}
+              expanded={expandedId === project.projectId}
+              onToggle={() => toggleExpand(project.projectId)}
+              panelMode={panelMode}
+              onPanelModeChange={setPanelMode}
               onEdit={openManage}
               onDelete={setDeleteTarget}
               onDuplicate={openDuplicate}
