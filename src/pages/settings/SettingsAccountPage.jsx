@@ -1,12 +1,15 @@
 import { useId, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
 import { Dialog } from '../../components/common/Dialog'
 import { BottomSheet } from '../../components/common/BottomSheet'
 import { Button } from '../../components/common/Button'
 import { Banner } from '../../components/common/Banner'
 import { LoadingSkeleton } from '../../components/common/LoadingSkeleton'
 import { ErrorState } from '../../components/common/ErrorState'
+import { OvlAccountDeactivate } from '../../components/auth/OvlAccountDeactivate'
+import { OvlAccountReactivate } from '../../components/auth/OvlAccountReactivate'
+import { deriveReactivationInfo } from '../../features/auth/reactivationInfo'
+import { useLogout } from '../../features/auth/useAuth'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
 import {
   useAccount,
@@ -115,10 +118,11 @@ function NameEditDialog({ currentName, onClose, onSubmit, submitting }) {
   재활성화 진입") + 오너 리뷰 3차(item 5) 로그아웃·이름 변경. [가정-확장]
   account 리소스 (settingsApi.js 헤더).
 
-  "비밀번호 변경" is shown (매치 Desktop.Settings.png's own row subtitle
-  "프로필·비밀번호 변경") but stays DISABLED with a reason: that flow belongs to
-  ST-F1-14 (인증 화면, 4주차 예정) which doesn't exist yet in this codebase —
-  a fake password form here would be dishonest completion, not real completion.
+  "비밀번호 변경"(로그인 상태에서 현재+새 비밀번호로 바꾸는 ACCT-02)은 여전히
+  DISABLED — ST-F1-14가 만든 건 AUTH-06(이메일로 받은 링크로 재설정)이라 다른
+  스토리다. 로그인이 안 될 때의 "비밀번호를 잊으셨나요?"는 이제
+  `/reset-password`로 실제로 존재하니, 이 화면의 비활성 버튼은 그 대체 경로가
+  아니라 ACCT-02 자체가 아직 없다는 뜻으로 이유 문구를 정정했다.
 
   "캘린더 연동"은 더 이상 여기 없다 — 오너 리뷰 3차(item 4)로 독립 하위 화면
   (SettingsCalendarPage)으로 다시 분리됐다(라운드 2에서 여기 섹션으로 합쳤던
@@ -129,20 +133,23 @@ function NameEditDialog({ currentName, onClose, onSubmit, submitting }) {
   sessionGuardLoader가 스텁을 통해 즉시 다시 통과시킨다). 그래서 이 버튼은
   정직하게 "지금 캐시된 세션 정보를 지우고 홈으로 보낸다"까지만 한다 — 그 이상
   가장하지 않는다(오너 지시 "mock/스텁 동작 — 세션 클리어 후 랜딩 이동"과 일치).
+  Thomas 리뷰 MAJOR: 그 정리 자체를 features/auth/useAuth.js의 `useLogout()`
+  (best-effort POST /auth/logout + 세션 캐시 정리)으로 한다 — 이 화면이
+  `queryClient.removeQueries`를 직접 부르며 그 훅을 우회하던 것을 고쳤다.
 
-  비활성화/재활성화 themselves ARE implemented end-to-end against the mock
-  (not just "진입"): ST-F1-14 owns the FULL OVL-ACCT-DEACT/REACT modals this
-  AC's real estate will eventually replace, but nothing else in this codebase
-  builds that flow yet, so this screen's own confirm dialog does the whole
-  round-trip (완결 우선 — 오너 방침) rather than leaving a dead-end button.
+  비활성화/재활성화(ACCT-04/05): 이 화면 전용 ConfirmDialog였던 것을 ST-F1-14가
+  만든 공용 OvlAccountDeactivate/OvlAccountReactivate로 교체했다(오너 지시
+  "모달·로직 재사용/정리") — SCR-AUTH-LOGIN의 비활성 계정 분기가 쓰는 것과
+  정확히 같은 컴포넌트라, 데이터 범위 문구·유예기간 카운트다운·삭제 안내
+  서브상태가 두 진입점 모두에서 항상 같은 내용을 보여준다.
 */
 function SettingsAccountPage() {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const accountQuery = useAccount()
   const updateAccount = useUpdateAccount()
   const deactivateAccount = useDeactivateAccount()
   const reactivateAccount = useReactivateAccount()
+  const logoutMutation = useLogout()
   const [confirmAction, setConfirmAction] = useState(null) // 'deactivate' | 'reactivate' | 'logout' | null
   const [nameEditOpen, setNameEditOpen] = useState(false)
 
@@ -150,14 +157,29 @@ function SettingsAccountPage() {
   if (accountQuery.isError) return <ErrorState variant="section" onAction={() => accountQuery.refetch()} />
 
   const account = accountQuery.data
+  // 유예기간 경과 여부(ACCT-06)를 이 화면의 상단 배너·버튼과 모달이 똑같이
+  // 반영하도록 한 번만 계산 — OvlAccountReactivate에는 이미 계산된 값을
+  // 그대로 넘긴다(그 컴포넌트 자체는 fetching도, day-math도 하지 않는다).
+  const reactivationInfo =
+    account.status === 'DEACTIVATED'
+      ? deriveReactivationInfo({
+          deactivatedAt: account.deactivatedAt,
+          reactivationDeadlineDays: account.reactivationDeadlineDays,
+        })
+      : null
 
   const handleLogout = () => {
-    // ['auth','session']은 router.js의 sessionGuardLoader가 쓰는 바로 그 키 —
-    // 지워야 "로그아웃"이라는 이 화면의 약속이 조금이라도 실제 효과를 갖는다.
-    queryClient.removeQueries({ queryKey: ['auth', 'session'] })
-    setConfirmAction(null)
-    toast({ tone: 'info', message: '로그아웃했습니다' })
-    navigate('/', { replace: true })
+    // useLogout()이 best-effort POST /auth/logout + ['auth','session'] 캐시
+    // 정리(router.js의 sessionGuardLoader가 쓰는 바로 그 키)를 함께 한다 —
+    // 서버 호출 성공/실패와 무관하게 onSettled에서 정리하므로 여기서도
+    // then/catch 분기 없이 그대로 이어간다.
+    logoutMutation.mutate(undefined, {
+      onSettled: () => {
+        setConfirmAction(null)
+        toast({ tone: 'info', message: '로그아웃했습니다' })
+        navigate('/', { replace: true })
+      },
+    })
   }
 
   return (
@@ -191,7 +213,7 @@ function SettingsAccountPage() {
           variant="secondary"
           size="md"
           disabled
-          disabledReason="인증 화면 구현 후 제공됩니다"
+          disabledReason="별도 스토리(ACCT-02)에서 제공됩니다"
         >
           비밀번호 변경
         </Button>
@@ -199,18 +221,28 @@ function SettingsAccountPage() {
 
       <div className="h-px bg-border" />
 
-      {account.status === 'DEACTIVATED' ? (
+      {reactivationInfo ? (
         <div className="flex flex-col gap-3">
           <Banner
-            tone="warning"
+            tone={reactivationInfo.deletionEligible ? 'danger' : 'warning'}
             sticky={false}
             icon={<span aria-hidden="true">!</span>}
-            message={`계정이 비활성화되어 있습니다 · ${account.reactivationDeadlineDays}일 이내 재활성화하지 않으면 삭제될 수 있습니다`}
+            message={
+              reactivationInfo.deletionEligible
+                ? `유예기간(${reactivationInfo.reactivationDeadlineDays}일)이 지나 계정 데이터가 삭제되었습니다`
+                : `계정이 비활성화되어 있습니다 · ${reactivationInfo.daysRemaining}일 이내 재활성화하지 않으면 삭제됩니다`
+            }
           />
           <div>
-            <Button variant="primary" size="md" onClick={() => setConfirmAction('reactivate')}>
-              계정 재활성화
-            </Button>
+            {reactivationInfo.deletionEligible ? (
+              <Button variant="primary" size="md" onClick={() => navigate('/signup')}>
+                회원가입하기
+              </Button>
+            ) : (
+              <Button variant="primary" size="md" onClick={() => setConfirmAction('reactivate')}>
+                계정 재활성화
+              </Button>
+            )}
           </div>
         </div>
       ) : (
@@ -248,31 +280,25 @@ function SettingsAccountPage() {
           title="로그아웃할까요?"
           body="현재 세션 정보를 지우고 홈으로 이동합니다."
           confirmLabel="로그아웃"
+          submitting={logoutMutation.isPending}
           onClose={() => setConfirmAction(null)}
           onConfirm={handleLogout}
         />
       )}
-      {confirmAction === 'deactivate' && (
-        <ConfirmDialog
-          title="계정을 비활성화할까요?"
-          body={`비활성화하면 계획에 접근할 수 없습니다. ${account.reactivationDeadlineDays}일 이내 다시 로그인하면 복구할 수 있습니다.`}
-          confirmLabel="비활성화"
-          confirmVariant="danger"
-          submitting={deactivateAccount.isPending}
-          onClose={() => setConfirmAction(null)}
-          onConfirm={() => deactivateAccount.mutate(undefined, { onSuccess: () => setConfirmAction(null) })}
-        />
-      )}
-      {confirmAction === 'reactivate' && (
-        <ConfirmDialog
-          title="계정을 재활성화할까요?"
-          body="다시 활성화하면 곧바로 대시보드를 이용할 수 있습니다."
-          confirmLabel="재활성화"
-          submitting={reactivateAccount.isPending}
-          onClose={() => setConfirmAction(null)}
-          onConfirm={() => reactivateAccount.mutate(undefined, { onSuccess: () => setConfirmAction(null) })}
-        />
-      )}
+      <OvlAccountDeactivate
+        open={confirmAction === 'deactivate'}
+        reactivationDeadlineDays={account.reactivationDeadlineDays}
+        submitting={deactivateAccount.isPending}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={() => deactivateAccount.mutate(undefined, { onSuccess: () => setConfirmAction(null) })}
+      />
+      <OvlAccountReactivate
+        open={confirmAction === 'reactivate'}
+        info={reactivationInfo}
+        submitting={reactivateAccount.isPending}
+        onClose={() => setConfirmAction(null)}
+        onReactivate={() => reactivateAccount.mutate(undefined, { onSuccess: () => setConfirmAction(null) })}
+      />
     </div>
   )
 }

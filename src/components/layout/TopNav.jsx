@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, Link } from 'react-router-dom'
 import { navItems } from './navItems'
 import { BellIcon, UserIcon } from './icons'
 import { BrandLogo } from '../common/BrandLogo'
@@ -47,9 +47,14 @@ function TopNav() {
 
         <div className="flex items-center gap-4 text-neutral-400">
           <BellIcon className="h-5 w-5" />
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-200 text-text-muted">
+          {/* 프로필 → 설정 계정 관리 (ACCT-01/02). */}
+          <Link
+            to="/settings/account"
+            aria-label="계정 관리"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-200 text-text-muted transition-colors hover:bg-neutral-300 hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          >
             <UserIcon className="h-5 w-5" />
-          </span>
+          </Link>
         </div>
       </div>
     </header>

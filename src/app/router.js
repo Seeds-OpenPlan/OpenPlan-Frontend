@@ -1,5 +1,12 @@
 import { createBrowserRouter, redirect } from 'react-router-dom'
 import AppLayout from '../layouts/AppLayout'
+import AuthLayout from '../layouts/AuthLayout'
+import LandingPage from '../pages/auth/LandingPage'
+import LoginPage from '../pages/auth/LoginPage'
+import SignupPage from '../pages/auth/SignupPage'
+import VerifyEmailPage from '../pages/auth/VerifyEmailPage'
+import ResetPasswordRequestPage from '../pages/auth/ResetPasswordRequestPage'
+import ResetPasswordPage from '../pages/auth/ResetPasswordPage'
 import OnboardingLayout from '../layouts/OnboardingLayout'
 import OnboardingIntroPage from '../pages/onboarding/OnboardingIntroPage'
 import OnboardingWizardPage from '../pages/onboarding/OnboardingWizardPage'
@@ -182,6 +189,36 @@ export const router = createBrowserRouter([
       },
       { path: '403', Component: ForbiddenPage }, // ★ SCR-403
       { path: '*', Component: NotFoundPage },
+    ],
+  },
+  /*
+    ST-F1-14 (인증 화면) — a SIBLING tree, not children of the '/' route
+    above, specifically so `sessionGuardLoader` never runs for these paths:
+    they must stay reachable with NO session at all (that's the whole point
+    of a login screen). Nothing about the guard itself changes (owner:
+    "가드 건드리지 마") — dev-auth's stub keeps auto-authenticating every
+    route under '/' exactly as before; these six paths are simply direct-
+    access mock screens layered in ALONGSIDE that, ready for the guard to
+    redirect into once ST-F1-14 flips its real-auth switch in week 4.
+  */
+  {
+    // No `path` — a pathless layout route (react-router v6.4+ data router
+    // convention): it contributes ZERO URL segments of its own, so each
+    // child below resolves to its own path exactly (`/login`, not
+    // `//login`), while still sharing AuthLayout as their common element.
+    Component: AuthLayout,
+    // Thomas 리뷰 MAJOR: '/' 트리는 ErrorBoundary(RootErrorBoundary)가 있는데
+    // 이 형제 트리엔 없어서, 이 6화면 중 하나가 렌더 중 런타임 예외를 던지면
+    // PTN-ERROR 폴백 없이 흰 화면(react-router 기본 에러 UI)으로 떨어졌다 —
+    // '/' 트리와 동일하게 맞춘다.
+    ErrorBoundary: RootErrorBoundary,
+    children: [
+      { path: 'landing', Component: LandingPage }, // SCR-LANDING
+      { path: 'login', Component: LoginPage }, // SCR-AUTH-LOGIN
+      { path: 'signup', Component: SignupPage }, // SCR-AUTH-SIGNUP
+      { path: 'verify-email', Component: VerifyEmailPage }, // SCR-AUTH-VERIFY
+      { path: 'reset-password', Component: ResetPasswordRequestPage }, // SCR-AUTH-RESET-REQ
+      { path: 'reset-password/confirm', Component: ResetPasswordPage }, // SCR-AUTH-RESET
     ],
   },
   /*
