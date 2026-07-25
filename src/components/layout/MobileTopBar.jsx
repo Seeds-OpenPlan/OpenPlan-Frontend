@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { BellIcon, UserIcon } from './icons'
 import { BrandLogo } from '../common/BrandLogo'
 
@@ -8,12 +9,16 @@ function MobileTopBar() {
       <div className="flex h-bar items-center justify-between px-page-x">
         {/* 로고 클릭 시 대시보드로 이동 (데스크톱 TopNav와 동일). */}
         <BrandLogo to="/" />
-        {/* 알림 + 프로필: 데스크톱 TopNav와 동일한 자리표시자 쌍(기능은 ST-F1-12/15 소관). */}
+        {/* 알림(ST-F1-15 소관) + 프로필(→ 설정 계정 관리). 데스크톱 TopNav와 동일. */}
         <div className="flex items-center gap-4 text-neutral-400">
           <BellIcon className="h-5 w-5" />
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-200 text-text-muted">
+          <Link
+            to="/settings/account"
+            aria-label="계정 관리"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-200 text-text-muted transition-colors hover:bg-neutral-300 hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          >
             <UserIcon className="h-5 w-5" />
-          </span>
+          </Link>
         </div>
       </div>
     </header>
