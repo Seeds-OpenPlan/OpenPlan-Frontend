@@ -23,7 +23,12 @@ import { apiClient } from '../../api/client'
 import { withDevFallback } from './planApi'
 import { mockBackend } from './planFixtures'
 
-/** Normalize a fixed schedule to the camelCase shape the grid reads. */
+/**
+ * Normalize a fixed schedule to the camelCase shape the grid AND the ST-F1-12
+ * settings screen both read. version/effectiveFrom/effectiveTo/source/status
+ * (ST-B2-12's fixed_schedules columns) are additive — the ST-F1-06 grid never
+ * reads them, only the settings CRUD form does.
+ */
 function normalizeFixedSchedule(f) {
   return {
     fixedScheduleId: f.fixedScheduleId ?? f.fixed_schedule_id,
@@ -36,6 +41,15 @@ function normalizeFixedSchedule(f) {
     // silently ghost all of them — an unrecognized false would be the wrong
     // failure direction (hiding a real conflict), so only an explicit false wins.
     activeThisWeek: (f.activeThisWeek ?? f.active_this_week) !== false,
+    effectiveFrom: f.effectiveFrom ?? f.effective_from ?? null,
+    effectiveTo: f.effectiveTo ?? f.effective_to ?? null,
+    source: f.source ?? 'MANUAL',
+    status: f.status ?? 'ACTIVE',
+    version: f.version ?? 1,
+    // Settings-list-only convenience (see planFixtures.getFixedSchedulesAll's
+    // own comment) — undefined on the week-scoped grid read, never a false
+    // "no conflict" claim it can't back up.
+    hasConflict: f.hasConflict ?? undefined,
   }
 }
 
@@ -79,5 +93,61 @@ export function removeFixedException(fixedScheduleId, weekStartISO) {
   return withDevFallback(
     () => apiClient.delete(`/fixed-schedules/${fixedScheduleId}/week-exceptions/${weekStartISO}`),
     () => mockBackend.removeFixedWeekException(fixedScheduleId, weekStartISO),
+  )
+}
+
+// --- ST-F1-12: 고정 일정 관리 (설정) — CRUD + 충돌 미리보기 --------------------
+
+/**
+ * OP-FIXED-LIST-ALL → GET /fixed-schedules (no weekStartDate — the settings
+ * list is week-agnostic, unlike getFixedSchedules above which the PLAN GRID
+ * scopes to the currently viewed week).
+ */
+export function getAllFixedSchedules() {
+  return withDevFallback(
+    () => apiClient.get('/fixed-schedules'),
+    () => mockBackend.getFixedSchedulesAll(),
+  ).then((r) => (r?.fixedSchedules ?? []).map(normalizeFixedSchedule))
+}
+
+/** OP-FIXED-CREATE → POST /fixed-schedules (FIX-06 고정일정 직접 추가). */
+export function createFixedSchedule(payload) {
+  return withDevFallback(
+    () => apiClient.post('/fixed-schedules', payload),
+    () => mockBackend.createFixedSchedule(payload),
+  ).then(normalizeFixedSchedule)
+}
+
+/**
+ * OP-FIXED-UPDATE → PATCH /fixed-schedules/{id} (FIX-07 편집). `patch` must
+ * carry `version` for the optimistic-lock check (E-COM-006, common invariant).
+ */
+export function updateFixedSchedule(fixedScheduleId, patch) {
+  return withDevFallback(
+    () => apiClient.patch(`/fixed-schedules/${fixedScheduleId}`, patch),
+    () => mockBackend.updateFixedSchedule(fixedScheduleId, patch),
+  ).then(normalizeFixedSchedule)
+}
+
+/** OP-FIXED-DELETE → DELETE /fixed-schedules/{id} (FIX-09 삭제). */
+export function deleteFixedSchedule(fixedScheduleId) {
+  return withDevFallback(
+    () => apiClient.delete(`/fixed-schedules/${fixedScheduleId}`),
+    () => mockBackend.deleteFixedSchedule(fixedScheduleId),
+  )
+}
+
+/**
+ * OP-FIXED-CONFLICT-PREVIEW → POST /fixed-schedules/conflict-previews
+ * (FIX-08 저장 전 충돌 미리보기, dry-run — no persistence either side, ST-B2-12
+ * AC-1). Called BEFORE create/update commits so the form can show "저장해도
+ * 되지만 이 주들에 차단이 생깁니다" without writing anything yet — saving despite
+ * a conflict is allowed (owner decision, ST-F1-12 AC-2); this call only informs
+ * that choice.
+ */
+export function previewFixedScheduleConflicts(candidate) {
+  return withDevFallback(
+    () => apiClient.post('/fixed-schedules/conflict-previews', candidate),
+    () => mockBackend.previewFixedScheduleConflicts(candidate),
   )
 }
