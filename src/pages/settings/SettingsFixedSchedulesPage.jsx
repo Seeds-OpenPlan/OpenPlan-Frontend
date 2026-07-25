@@ -22,16 +22,30 @@ import { toast } from '../../hooks/useToasts'
   that file's own header) — this page only wires the mutations and owns which
   overlay (create / edit+delete / none) is open, same "exactly one overlay,
   page-local state" shape ProjectsPage/WeeklyPage already use.
+
+  `onDraftOpenChange` (optional, additive — every real /settings/fixed-schedules
+  caller omits it, so this is a no-op there) fires whenever the create/edit
+  overlay opens or closes. ST-F1-13's onboarding wizard embeds this exact page
+  as its 고정 일정 step and needs to know when an unsubmitted create/edit form
+  is open so its own "다음" can block on it (AC2 "입력 소실 방지" — this page's
+  create/edit mutations commit immediately per submit, so there is no ongoing
+  "dirty" draft the global useAppStore flag would catch the way the
+  availability step's does; the OPEN overlay itself is the only unsaved state).
 */
-function SettingsFixedSchedulesPage() {
+function SettingsFixedSchedulesPage({ onDraftOpenChange }) {
   const navigate = useNavigate()
   const query = useAllFixedSchedules()
   const createFixedSchedule = useCreateFixedSchedule()
   const updateFixedSchedule = useUpdateFixedSchedule()
   const deleteFixedSchedule = useDeleteFixedSchedule()
 
-  const [formTarget, setFormTarget] = useState(null) // { mode:'create' } | { mode:'edit', item } | null
+  const [formTarget, setFormTargetState] = useState(null) // { mode:'create' } | { mode:'edit', item } | null
   const [conflict, setConflict] = useState(null) // { latest } | null — this form's own E-COM-006
+
+  const setFormTarget = (next) => {
+    setFormTargetState(next)
+    onDraftOpenChange?.(next !== null)
+  }
 
   if (query.isLoading) return <LoadingSkeleton preset="listRow" count={3} />
   if (query.isError) return <ErrorState variant="section" onAction={() => query.refetch()} />

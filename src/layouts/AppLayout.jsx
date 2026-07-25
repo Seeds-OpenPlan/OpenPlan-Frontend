@@ -7,6 +7,7 @@ import { UnsavedGuard } from '../components/common/UnsavedGuard'
 import { Toaster } from '../components/common/Toaster'
 import { SessionExpiredOverlay } from '../components/auth/SessionExpiredOverlay'
 import { useSessionStore } from '../features/auth/sessionStore'
+import { TutorialOverlay } from '../components/tutorial/TutorialOverlay'
 
 /*
   공통 반응형 셸: 연회색 배경 + 헤더(데스크톱/모바일) + 하단 탭 + 중앙 콘텐츠.
@@ -40,8 +41,11 @@ import { useSessionStore } from '../features/auth/sessionStore'
     `useSessionStore.getState().expire(path)` — nothing does yet this cycle
     (see sessionStore.js's own header for the future wiring point), so this
     line is inert today and turns on exactly when that lands.
+  - TutorialOverlay (ST-F1-13) hosts OVL-TUT — it self-gates on onboarding-
+    progress and renders nothing outside an active tutorial run, same
+    self-gating shape OfflineBanner already has for "not offline".
   These are placement-only; all surface logic lives in components/common
-  (and components/auth for the new overlay).
+  (components/auth for the session overlay, components/tutorial for the tutorial).
 */
 function AppLayout() {
   const devTriggerSessionExpired = useSessionStore((s) => s.expire)
@@ -61,6 +65,7 @@ function AppLayout() {
       <UnsavedGuard />
       <Toaster />
       <SessionExpiredOverlay />
+      <TutorialOverlay />
 
       {/* DEV-only QA affordance: there is no real trigger for OVL-SESSION yet
           (see comment above), so this is the only way to open it for review
