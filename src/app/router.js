@@ -1,5 +1,8 @@
 import { createBrowserRouter, redirect } from 'react-router-dom'
 import AppLayout from '../layouts/AppLayout'
+import OnboardingLayout from '../layouts/OnboardingLayout'
+import OnboardingIntroPage from '../pages/onboarding/OnboardingIntroPage'
+import OnboardingWizardPage from '../pages/onboarding/OnboardingWizardPage'
 import HomePage from '../pages/HomePage'
 import WeeklyPage from '../pages/WeeklyPage'
 import ProjectsPage from '../pages/ProjectsPage'
@@ -17,6 +20,8 @@ import RootErrorBoundary from './RootErrorBoundary'
 import HydrateFallback from './HydrateFallback'
 import { queryClient } from './queryClient'
 import { apiClient } from '../api/client'
+import { onboardingProgressKey } from '../features/onboarding/useOnboarding'
+import { getOnboardingProgress } from '../features/onboarding/onboardingApi'
 
 /*
   Session guard (SYS-BASE AC-3). Runs on protected-route entry. The imperative
@@ -35,11 +40,27 @@ const sessionQuery = {
   staleTime: 5 * 60 * 1000,
 }
 
+// ST-F1-13 addition — session-scoped onboarding gate query, same shape as
+// `sessionQuery` above (a plain object literal, not the useOnboardingProgress
+// HOOK, since a router loader runs outside React). Shares the exact query key
+// the wizard's own `useOnboardingProgress` uses, so this loader's fetch and
+// the wizard page's own read hit the SAME cache entry — no duplicate request.
+const onboardingProgressQuery = {
+  queryKey: onboardingProgressKey(),
+  queryFn: getOnboardingProgress,
+  // Same reasoning as sessionQuery's own staleTime: onboarding completion is
+  // effectively static within a session, so this loader-driven read (which
+  // fires on every distinct-pathname navigation, see shouldRevalidate below)
+  // should not refetch on every single route change. The wizard/tutorial's
+  // own useOnboardingProgress hook still gets fresh data immediately after any
+  // mutation via that hook's onSuccess cache write, regardless of this.
+  staleTime: 5 * 60 * 1000,
+}
+
 export async function sessionGuardLoader() {
   try {
     // dev-auth stub responds 200 → pass through with no login screen.
     await queryClient.ensureQueryData(sessionQuery)
-    return null
   } catch (error) {
     if (error?.status === 403) {
       throw redirect('/403')
@@ -53,6 +74,23 @@ export async function sessionGuardLoader() {
     }
     throw error
   }
+
+  // ux-flow-map §1: "onboardingCompleted=false" routes into OVL-ONB-INTRO
+  // BEFORE the 5-tab shell, instead of straight to the dashboard. Deliberately
+  // defensive (try/catch swallows anything but the redirect itself) — this
+  // gate is additive on top of an already-working session guard, and must
+  // never turn a still-settling onboarding-progress endpoint into a hard
+  // outage for the entire app.
+  try {
+    const progress = await queryClient.ensureQueryData(onboardingProgressQuery)
+    if (!progress?.onboardingCompleted) {
+      throw redirect('/onboarding')
+    }
+  } catch (error) {
+    if (error instanceof Response) throw error // the redirect() above
+  }
+
+  return null
 }
 
 /*
@@ -144,6 +182,30 @@ export const router = createBrowserRouter([
       },
       { path: '403', Component: ForbiddenPage }, // ★ SCR-403
       { path: '*', Component: NotFoundPage },
+    ],
+  },
+  /*
+    OVL-ONB-INTRO · SCR-ONB-* (ST-F1-13) — deliberately OUTSIDE the AppLayout
+    tree above: ux-flow-map's ENTRY subgraph puts these before the 5-tab SHELL,
+    and a brand-new user has no projects/plan/stats yet for that shell's tabs
+    to point at. OnboardingLayout supplies its own minimal frame instead (see
+    that file's header). Still guarded by the same session loader — an
+    unauthenticated visitor must not reach the wizard either — but WITHOUT
+    sessionGuardLoader's own onboarding-progress redirect (that check only
+    lives on the '/' tree above; these two routes are its target, so it would
+    otherwise redirect-loop into itself).
+  */
+  {
+    path: 'onboarding',
+    Component: OnboardingLayout,
+    HydrateFallback, // ★ same as the '/' tree above — no blank flash while this loader resolves
+    loader: () => queryClient.ensureQueryData(sessionQuery).catch((error) => {
+      if (error?.status === 403) throw redirect('/403')
+      if (!(import.meta.env.DEV && error?.isNetwork)) throw error
+    }),
+    children: [
+      { index: true, Component: OnboardingIntroPage },
+      { path: 'wizard', Component: OnboardingWizardPage },
     ],
   },
 ])

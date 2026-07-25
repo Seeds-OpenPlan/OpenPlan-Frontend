@@ -473,6 +473,11 @@ function PageHeader({ onCreate, canWrite, offlineReason }) {
           onClick={onCreate}
           disabled={!canWrite}
           disabledReason={!canWrite ? offlineReason : undefined}
+          // ST-F1-13 TUT-03 coachmark anchor — a plain data attribute, zero
+          // behavior change; TutorialOverlay finds it via querySelector rather
+          // than this file importing anything tutorial-specific (keeps the
+          // import direction one-way, §2.7).
+          data-tut-id="tut-create-project"
         >
           + 새 프로젝트
         </Button>

@@ -5,6 +5,7 @@ import BottomTabBar from '../components/layout/BottomTabBar'
 import { OfflineBanner } from '../components/common/OfflineBanner'
 import { UnsavedGuard } from '../components/common/UnsavedGuard'
 import { Toaster } from '../components/common/Toaster'
+import { TutorialOverlay } from '../components/tutorial/TutorialOverlay'
 
 /*
   공통 반응형 셸: 연회색 배경 + 헤더(데스크톱/모바일) + 하단 탭 + 중앙 콘텐츠.
@@ -30,7 +31,11 @@ import { Toaster } from '../components/common/Toaster'
     overlay), so the offline warning is visible on every page (SYS-07).
   - UnsavedGuard watches the single dirty flag and blocks route changes (SYS-04).
   - Toaster is the global toast host (recovery toast, later save toasts).
-  These are placement-only; all surface logic lives in components/common.
+  - TutorialOverlay (ST-F1-13) hosts OVL-TUT — it self-gates on onboarding-
+    progress and renders nothing outside an active tutorial run, same
+    self-gating shape OfflineBanner already has for "not offline".
+  These are placement-only; all surface logic lives in components/common
+  (TutorialOverlay's own logic lives in components/tutorial).
 */
 function AppLayout() {
   return (
@@ -47,6 +52,7 @@ function AppLayout() {
 
       <UnsavedGuard />
       <Toaster />
+      <TutorialOverlay />
     </div>
   )
 }

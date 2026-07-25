@@ -5,8 +5,9 @@ import { BottomSheet } from '../../components/common/BottomSheet'
 import { Button } from '../../components/common/Button'
 import { SettingsNavList } from '../../components/settings/SettingsNavList'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
-import { toast } from '../../hooks/useToasts'
 import { SETTINGS_FIRST_DETAIL_PATH } from '../../features/settings/settingsNavOrder'
+import { useUpdateOnboardingProgress } from '../../features/onboarding/useOnboarding'
+import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
 
 const TUTORIAL_TITLE_ID = 'tutorial-restart-title'
 // id every settings sub-page's own <h2> carries (SettingsAvailabilityPage,
@@ -56,6 +57,7 @@ function SettingsLayout() {
   const atHub = location.pathname === '/settings'
   const [confirmOpen, setConfirmOpen] = useState(false)
   const confirmBtnRef = useRef(null)
+  const updateOnboardingProgress = useUpdateOnboardingProgress()
 
   // item 1 — 데스크톱 전용 자동 진입. `replace: true`라 뒤로가기가 `/settings`
   // 를 다시 거치지 않고 그 이전 페이지로 곧장 돌아간다(히스토리에 빈 허브
@@ -72,9 +74,26 @@ function SettingsLayout() {
     }
   }, [isDesktop, atHub, navigate])
 
+  // TUT-09 재실행 — 확인(위 다이얼로그) 후 progress를 kickoff 상태로 되돌리고
+  // 대시보드로 이동하면, 거기 상시 마운트된 TutorialOverlay(AppLayout)가 그
+  // 갱신된 캐시를 그대로 읽어 TUT-01 킥오프부터 다시 시작한다 — 별도의
+  // "재생 시작" 신호가 따로 필요 없다(둘이 같은 onboarding-progress 캐시를
+  // 공유하는 이유가 이것).
+  //
+  // [한계] 결정문 §4.4가 원하는 "잔존 샘플 정리"는 실제로 하지 않는다 — 이전
+  // 실행에서 만든 샘플 프로젝트/태스크는 실기능(ProjectsPage 등, 다른 스토리
+  // 소유)으로 생성되어 "샘플" 표식이 없어 이 스토리 범위에서 안전하게
+  // 식별·삭제할 방법이 없다(오탐으로 사용자의 실제 프로젝트를 지울 위험).
+  // Thomas 리뷰 MAJOR fix — 예전엔 다이얼로그 문구가 "정리한 뒤 시작합니다"라고
+  // 실제로 안 하는 동작을 약속했다; 문구 자체를 onboardingCopy.tutorial.restart*
+  // 로 바꿔 이 한계에 맞게 정정했다(아래 tutorialDialogBody). 후속 스토리에서
+  // 생성 시점에 표식을 남기는 결정이 나면 여기서 그 표식으로 정리를 추가한다.
   const confirmRestart = () => {
     setConfirmOpen(false)
-    toast({ tone: 'info', message: '튜토리얼 엔진 연동 후 제공됩니다 (ST-F1-13)' })
+    updateOnboardingProgress.mutate(
+      { tutorialCompleted: false, tutorialSkipped: false, tutorialStep: 0 },
+      { onSuccess: () => navigate('/') },
+    )
   }
 
   const navList = <SettingsNavList onTutorialRestart={() => setConfirmOpen(true)} />
@@ -82,17 +101,15 @@ function SettingsLayout() {
   const tutorialDialogBody = (
     <div className="flex flex-col gap-4">
       <h2 id={TUTORIAL_TITLE_ID} className="text-title font-semibold text-text">
-        튜토리얼을 다시 시작할까요?
+        {onboardingCopy.tutorial.restartTitle}
       </h2>
-      <p className="text-body text-text-muted">
-        처음부터 다시 안내받습니다. 이전에 만든 연습용 샘플이 남아 있다면 정리한 뒤 시작합니다.
-      </p>
+      <p className="text-body text-text-muted">{onboardingCopy.tutorial.restartBody}</p>
       <div className="mt-1 flex justify-end gap-2">
         <Button type="button" variant="secondary" size="md" onClick={() => setConfirmOpen(false)}>
-          취소
+          {onboardingCopy.tutorial.restartCancel}
         </Button>
         <Button ref={confirmBtnRef} type="button" variant="primary" size="md" onClick={confirmRestart}>
-          다시 시작
+          {onboardingCopy.tutorial.restartConfirm}
         </Button>
       </div>
     </div>
