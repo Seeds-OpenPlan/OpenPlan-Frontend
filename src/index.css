@@ -194,6 +194,21 @@
   }
 }
 
+/* ProjectWbsDrawer's desktop entrance (project-accordion restructure): slides
+   in from the right edge of the accordion panel it covers, same shape as
+   banner-slide-down above but on the X axis — see ProjectWbsDrawer.jsx's own
+   header for why this is an overlay rather than a permanent split. */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(2rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
 /*
   PLAN-23 "항목 → 블록" highlight. The panel moves focus to the block; this pulse
   is the SECOND, non-focus signal that says "this one" — run exactly twice so it

@@ -25,7 +25,7 @@ const ACTION_BY_CODE = {
   'P-DEADLINE-LOAD': { label: '계획 탭 열기', kind: 'open-plan-tab' },
 }
 
-export function StructureWarningBanner({ issues, onAddTask, onOpenPlanTab }) {
+export function StructureWarningBanner({ issues, onAddTask, onOpenPlanTab, sticky = false }) {
   if (!issues || issues.length === 0) return null
 
   const ordered = [...issues].sort((a, b) => CODE_ORDER.indexOf(a.code) - CODE_ORDER.indexOf(b.code))
@@ -44,6 +44,17 @@ export function StructureWarningBanner({ issues, onAddTask, onOpenPlanTab }) {
   return (
     <Banner
       tone="warning"
+      // `sticky` (accordion restructure): this banner used to live at the top
+      // of its OWN dedicated page (ProjectWorkspacePage), where `sticky
+      // top-0` pinned it under TopNav as the page scrolled — correct there.
+      // It now renders INSIDE an accordion row's expanded panel, one of
+      // several on /projects; the nearest scrolling ancestor is the whole
+      // page, so a sticky banner here would detach from its own card and
+      // pin itself under TopNav regardless of which row it belongs to.
+      // Defaults to non-sticky (plain in-flow content) for that reason; the
+      // prop stays available rather than hardcoding false, in case a future
+      // caller reintroduces a dedicated-page host.
+      sticky={sticky}
       icon={<AlertTriangleIcon size={18} />}
       message={
         <span className="flex flex-wrap items-center gap-2">

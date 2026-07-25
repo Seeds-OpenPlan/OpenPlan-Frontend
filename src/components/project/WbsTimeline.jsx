@@ -30,6 +30,18 @@ import { systemMessages } from '../../constants/systemMessages'
 const COMMIT_DEBOUNCE_MS = 500
 
 /*
+  Zoom (accordion restructure, owner spec: "WBS 기간 +/− 버튼으로 확대/축소 —
+  WbsTimeline의 하루 칸 픽셀 폭에 스케일 상태 추가"). A discrete step INDEX into
+  this fixed table, not a free float multiplier — every resulting `dayPx` is a
+  whole pixel value with no sub-pixel column drift, and the +/− buttons get a
+  natural disabled boundary at either end instead of an arbitrary min/max
+  check on a continuous number. Index 2 (1×) reproduces the exact pre-zoom
+  desktop/mobile baseline unchanged.
+*/
+const ZOOM_STEPS = [0.6, 0.8, 1, 1.25, 1.5, 1.75, 2]
+const DEFAULT_ZOOM_INDEX = 2
+
+/*
   F-5 (owner review 2026-07-23): the axis used to render "M/D 요일" as ONE
   inline string. "5/16 화" (double-digit day) is a different character count
   than "5/6 화" (single-digit day), so at a fixed column width some days'
@@ -69,9 +81,16 @@ export function WbsTimeline({
   // F-5 widened from 32/40 to 40/48; G-8 widens again — every day now shows
   // its own full label (no more thinning), so the extra room keeps that
   // from feeling cramped, and the owner explicitly accepts more horizontal
-  // scroll on long ranges as the trade-off.
-  const dayPx = isDesktop ? 48 : 56
+  // scroll on long ranges as the trade-off. That fixed 48/56 is now the
+  // ZOOM baseline (`ZOOM_STEPS` index 2 = 1×) rather than the final value —
+  // see `zoomIndex` below.
+  const baseDayPx = isDesktop ? 48 : 56
   const timelineRef = useRef(null)
+  // Declared before the early returns below (Rules of Hooks, same reasoning
+  // `deadlineDrag`'s own comment gives) even though a loading/error/empty
+  // WBS has nothing to zoom yet — every hook must run on every render
+  // regardless of which branch actually paints.
+  const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX)
 
   // F-6 (owner review 2026-07-24): the deadline line's own drag state.
   // Unlike a WBS bar's `preview` (local to ONE row's own WbsBar instance),
@@ -119,12 +138,13 @@ export function WbsTimeline({
     return (
       <EmptyState
         title="태스크를 먼저 만들면 기간을 계획할 수 있습니다"
-        actionLabel="태스크 탭으로"
+        actionLabel="태스크 목록으로"
         onAction={onOpenTaskTab}
       />
     )
   }
 
+  const dayPx = Math.round(baseDayPx * ZOOM_STEPS[zoomIndex])
   const range = wbsDayRange(project, nodes)
   const todayISO = formatISODate(new Date())
   // F-6: while a drag is in progress, EVERYTHING that depends on "where is
@@ -229,9 +249,12 @@ export function WbsTimeline({
 
   return (
     <div className="flex flex-col gap-2">
-      {disabled && disabledReason && (
-        <p className="text-right text-caption text-text-muted">{disabledReason}</p>
-      )}
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-caption text-text-muted">
+          {disabled && disabledReason ? disabledReason : null}
+        </p>
+        <WbsZoomControl zoomIndex={zoomIndex} onChange={setZoomIndex} />
+      </div>
       <div className="flex">
         {/* Fixed task-name column (desktop 200px per spec; full-width stack on
             mobile falls back to a narrower label column — still fixed so the
@@ -515,6 +538,44 @@ export function WbsTimeline({
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/*
+  +/− zoom control (see `ZOOM_STEPS`'s own header comment). Same 44px
+  circular-button shape as MinuteStepper's own −/+ pair (plan/MinuteStepper.jsx)
+  — reused for visual consistency rather than invented fresh — with the
+  current zoom read out as a percentage `aria-live` region so a screen reader
+  hears the change the same way MinuteStepper's own value announcement works,
+  not just a silent pixel-width shift.
+*/
+function WbsZoomControl({ zoomIndex, onChange }) {
+  const btn =
+    'flex h-11 w-11 items-center justify-center rounded-full border border-border text-lg text-text transition-colors hover:bg-surface-sunken disabled:opacity-40 disabled:hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring'
+  return (
+    <div className="inline-flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        aria-label="타임라인 축소"
+        onClick={() => onChange(Math.max(0, zoomIndex - 1))}
+        disabled={zoomIndex === 0}
+        className={btn}
+      >
+        −
+      </button>
+      <span className="min-w-11 text-center text-caption tabular-nums text-text-muted" aria-live="polite">
+        {Math.round(ZOOM_STEPS[zoomIndex] * 100)}%
+      </span>
+      <button
+        type="button"
+        aria-label="타임라인 확대"
+        onClick={() => onChange(Math.min(ZOOM_STEPS.length - 1, zoomIndex + 1))}
+        disabled={zoomIndex === ZOOM_STEPS.length - 1}
+        className={btn}
+      >
+        +
+      </button>
     </div>
   )
 }
