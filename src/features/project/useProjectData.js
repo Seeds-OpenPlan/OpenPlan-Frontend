@@ -73,7 +73,9 @@ export function useCreateProject() {
   })
 }
 
-/** PATCH /projects/{id} (PROJ-06 정보 편집 절반). */
+/** PUT /projects/{id} (PROJ-06 정보 편집 절반 — real endpoint is PUT full-replace,
+ * corrected from PATCH during W2 live-connect; see updateProject's own comment
+ * in projectApi.js). */
 export function useUpdateProject() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -91,13 +93,18 @@ export function useUpdateProject() {
 /** PATCH /projects/{id}/status (PROJ-07 상태 전환).
  *
  * No onError toast here either (same reasoning as useUpdateProject just
- * above): this is called right after the info PATCH, from the SAME
+ * above): this is called right after the info PUT, from the SAME
  * OVL-PROJ-MANAGE submit chain, which surfaces either overlay's failure as
- * one inline error — a hook-level toast on top would double-report it. */
+ * one inline error — a hook-level toast on top would double-report it.
+ *
+ * `version` (W2 live-connect correction, 2026-07-26): required by the real
+ * endpoint's optimistic-lock check — see updateProjectStatus's own comment
+ * in projectApi.js and ProjectsPage.handleManageSubmit's for why the CALLER
+ * (not this hook) is responsible for picking the right version to send. */
 export function useUpdateProjectStatus() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ projectId, status }) => updateProjectStatus(projectId, status),
+    mutationFn: ({ projectId, status, version }) => updateProjectStatus(projectId, status, version),
     onSuccess: (_data, { projectId }) => {
       queryClient.invalidateQueries({ queryKey: projectsKey() })
       queryClient.invalidateQueries({ queryKey: projectKey(projectId) })
