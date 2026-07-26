@@ -83,6 +83,13 @@ export const onboardingCopy = {
   availability: {
     heading: '가용 시간이 무엇인가요',
     body: '가용 시간은 하루 24시간 중 실제로 계획에 쓸 수 있는 시간대입니다. 공통 시작·종료 시간을 정하면 첫 주간 계획의 기준이 됩니다.',
+    // 오너 결정(2026-07-26) — 이 스텝은 더 이상 "저장" 버튼이 없고 [다음]이
+    // 저장까지 겸하므로(SettingsAvailabilityPage의 embedded 모드), 저장이
+    // 막히는 사유를 [다음] 옆에 직접 안내한다. 사유는 두 가지뿐이다(각각
+    // AVAILABILITY_SAVE_ERROR.INVALID_RANGE / INVALID_CAPACITY에 대응 —
+    // Thomas 리뷰 MAJOR-1/2 fix, SettingsAvailabilityPage의 saveAll 참고):
+    invalidRangeHint: '요일별 시간을 확인해 주세요 — 종료 시간이 시작 시간보다 늦어야 합니다',
+    invalidCapacityHint: '가용 시간을 확인해 주세요 — 0시간 이상이어야 합니다',
   },
   fixed: {
     heading: '고정 일정이 무엇인가요',
