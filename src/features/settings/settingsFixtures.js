@@ -91,7 +91,15 @@ let account = {
 }
 
 // --- 알림 (NOTI-01): 5종 즉시저장 토글 --------------------------------------------
+// masterEnabled (ST-F1-15 오너 피드백 #5 — 전체 알림 켜기/끄기): 개별 5종과
+// 같은 오브젝트의 필드 하나일 뿐이라 patchNotificationSetting('masterEnabled',
+// …)이 그대로 재사용된다 — 이 마스터 스위치 하나 때문에 별도 엔드포인트/모양을
+// 만들지 않는다. 5종의 실제 값에서 "전부 켜짐"을 매번 계산해 마스터 상태로
+// 쓰지 않고 독립 필드로 저장하는 이유는 SettingsNotificationsPage.jsx 자신의
+// 헤더 주석 참고 — 계산값으로 두면 개별 토글 하나만 꺼도 마스터가 즉시
+// "꺼짐"으로 튀어 나머지 개별 토글까지 갑자기 비활성화되는 함정이 있다.
 let notificationSettings = {
+  masterEnabled: true,
   dueSoonTasks: true, // 마감 임박 태스크
   planRisk: true, // 계획 위험(과부하) 경고
   inquiryReply: true, // 문의 답변

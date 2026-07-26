@@ -1,15 +1,11 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Dialog } from '../../components/common/Dialog'
 import { BottomSheet } from '../../components/common/BottomSheet'
-import { Button } from '../../components/common/Button'
 import { SettingsNavList } from '../../components/settings/SettingsNavList'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
 import { SETTINGS_FIRST_DETAIL_PATH } from '../../features/settings/settingsNavOrder'
-import { useUpdateOnboardingProgress } from '../../features/onboarding/useOnboarding'
-import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
+import { useTutorialRestart } from '../../features/onboarding/useTutorialRestart'
 
-const TUTORIAL_TITLE_ID = 'tutorial-restart-title'
 // id every settings sub-page's own <h2> carries (SettingsAvailabilityPage,
 // SettingsDefaultsPage, ...) — the mobile BottomSheet's labelledById reads
 // straight off it (item 6). Safe as a literal, unshared string: Outlet only
@@ -55,9 +51,10 @@ function SettingsLayout() {
   const location = useLocation()
   const isDesktop = useIsDesktop()
   const atHub = location.pathname === '/settings'
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const confirmBtnRef = useRef(null)
-  const updateOnboardingProgress = useUpdateOnboardingProgress()
+  // TUT-09 재실행 확인 다이얼로그 + 재시작 로직은 useTutorialRestart로 뽑혀
+  // 있다(ST-F1-15가 FAQ 배너라는 두 번째 진입점을 추가하면서 — 그 훅 자신의
+  // 헤더 참고) — 이 레이아웃은 트리거(아래 navList)와 dialog 렌더 위치만 안다.
+  const { requestRestart, dialog: tutorialDialog } = useTutorialRestart()
 
   // item 1 — 데스크톱 전용 자동 진입. `replace: true`라 뒤로가기가 `/settings`
   // 를 다시 거치지 않고 그 이전 페이지로 곧장 돌아간다(히스토리에 빈 허브
@@ -74,67 +71,7 @@ function SettingsLayout() {
     }
   }, [isDesktop, atHub, navigate])
 
-  // TUT-09 재실행 — 확인(위 다이얼로그) 후 progress를 kickoff 상태로 되돌리고
-  // 대시보드로 이동하면, 거기 상시 마운트된 TutorialOverlay(AppLayout)가 그
-  // 갱신된 캐시를 그대로 읽어 TUT-01 킥오프부터 다시 시작한다 — 별도의
-  // "재생 시작" 신호가 따로 필요 없다(둘이 같은 onboarding-progress 캐시를
-  // 공유하는 이유가 이것).
-  //
-  // [한계] 결정문 §4.4가 원하는 "잔존 샘플 정리"는 실제로 하지 않는다 — 이전
-  // 실행에서 만든 샘플 프로젝트/태스크는 실기능(ProjectsPage 등, 다른 스토리
-  // 소유)으로 생성되어 "샘플" 표식이 없어 이 스토리 범위에서 안전하게
-  // 식별·삭제할 방법이 없다(오탐으로 사용자의 실제 프로젝트를 지울 위험).
-  // Thomas 리뷰 MAJOR fix — 예전엔 다이얼로그 문구가 "정리한 뒤 시작합니다"라고
-  // 실제로 안 하는 동작을 약속했다; 문구 자체를 onboardingCopy.tutorial.restart*
-  // 로 바꿔 이 한계에 맞게 정정했다(아래 tutorialDialogBody). 후속 스토리에서
-  // 생성 시점에 표식을 남기는 결정이 나면 여기서 그 표식으로 정리를 추가한다.
-  const confirmRestart = () => {
-    setConfirmOpen(false)
-    updateOnboardingProgress.mutate(
-      { tutorialCompleted: false, tutorialSkipped: false, tutorialStep: 0 },
-      { onSuccess: () => navigate('/') },
-    )
-  }
-
-  const navList = <SettingsNavList onTutorialRestart={() => setConfirmOpen(true)} />
-
-  const tutorialDialogBody = (
-    <div className="flex flex-col gap-4">
-      <h2 id={TUTORIAL_TITLE_ID} className="text-title font-semibold text-text">
-        {onboardingCopy.tutorial.restartTitle}
-      </h2>
-      <p className="text-body text-text-muted">{onboardingCopy.tutorial.restartBody}</p>
-      <div className="mt-1 flex justify-end gap-2">
-        <Button type="button" variant="secondary" size="md" onClick={() => setConfirmOpen(false)}>
-          {onboardingCopy.tutorial.restartCancel}
-        </Button>
-        <Button ref={confirmBtnRef} type="button" variant="primary" size="md" onClick={confirmRestart}>
-          {onboardingCopy.tutorial.restartConfirm}
-        </Button>
-      </div>
-    </div>
-  )
-  const tutorialDialog =
-    confirmOpen &&
-    (isDesktop ? (
-      <Dialog
-        open
-        onClose={() => setConfirmOpen(false)}
-        labelledById={TUTORIAL_TITLE_ID}
-        initialFocusRef={confirmBtnRef}
-      >
-        {tutorialDialogBody}
-      </Dialog>
-    ) : (
-      <BottomSheet
-        open
-        onClose={() => setConfirmOpen(false)}
-        labelledById={TUTORIAL_TITLE_ID}
-        initialFocusRef={confirmBtnRef}
-      >
-        {tutorialDialogBody}
-      </BottomSheet>
-    ))
+  const navList = <SettingsNavList onTutorialRestart={requestRestart} />
 
   if (isDesktop) {
     return (

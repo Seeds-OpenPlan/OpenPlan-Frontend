@@ -1,5 +1,6 @@
 import { Badge } from '../common/Badge'
 import { ProgressBar } from '../common/ProgressBar'
+import { AccordionRow } from '../common/AccordionRow'
 import { ChevronRightIcon } from '../plan/planIcons'
 import { ProjectExpandedPanel } from './ProjectExpandedPanel'
 
@@ -22,6 +23,13 @@ import { ProjectExpandedPanel } from './ProjectExpandedPanel'
   state); the visible title text beside it is now plain, non-interactive text
   — there is nowhere left for it to navigate ON ITS OWN, the toggle already
   covers the whole header.
+
+  SHELL (li/toggle-button/panel-mount) now lives in components/common/
+  AccordionRow.jsx — extracted for ST-F1-15's own 내 문의/공지 lists to reuse
+  (owner feedback #10/11) rather than each screen re-deriving the same
+  z-layering. This file keeps 100% of its OWN content (badges/actions/meta/
+  progress bar, all project-specific) and only hands that content to the
+  shared shell via `header`/`summary`/`panel`.
 */
 
 const ACTION_CLASS =
@@ -52,95 +60,73 @@ export function ProjectAccordionRow({
     expanded ? '접기' : '펼치기'
   }`
 
-  return (
-    <li className="rounded-card border border-border bg-surface shadow-card">
-      <div className="relative p-4">
-        {/* The toggle — see this file's own header for why this replaced the
-            old stretched <Link>. `aria-controls` names the panel below only
-            while it actually exists in the DOM (conditionally rendered,
-            same as every other overlay in this codebase); pointing it at an
-            id that doesn't exist while collapsed would be wrong every time
-            this row is CLOSED, which is the default state. */}
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={expanded ? panelId : undefined}
-          aria-label={ariaLabel}
-          onClick={onToggle}
-          className="absolute inset-0 z-0 rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+  const header = (
+    <>
+      <div className="flex min-w-0 items-center gap-2">
+        <ChevronRightIcon
+          className={[
+            'shrink-0 text-text-muted motion-safe:transition-transform motion-safe:duration-fast',
+            expanded ? 'rotate-90' : '',
+          ].join(' ')}
         />
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <ChevronRightIcon
-              className={[
-                'shrink-0 text-text-muted motion-safe:transition-transform motion-safe:duration-fast',
-                expanded ? 'rotate-90' : '',
-              ].join(' ')}
-            />
-            <div className="flex min-w-0 items-baseline gap-2">
-              <span className="static shrink-0 text-body font-semibold text-text">{name}</span>
-              <span className="shrink-0 text-caption text-text-muted">마감 {dueDate ?? '없음'}</span>
-            </div>
-          </div>
-
-          {/* Badges + actions share this line with the title (reference
-              layout, unchanged from ProjectCard). Both sit ABOVE the toggle
-              button (z-10) so they stay independently clickable — same
-              layering trick the old stretched-link version used, just with a
-              real <button> underneath instead of a pseudo-element. */}
-          <div className="relative z-10 flex shrink-0 flex-wrap items-center gap-2">
-            {!closed && (placedCount > 0 || unplacedCount > 0 || dueSoonCount > 0) && (
-              <div className="flex flex-wrap gap-1.5">
-                {placedCount > 0 && <Badge tone="brand" label={`배치됨 ${placedCount}`} />}
-                {unplacedCount > 0 && <Badge tone="danger" label={`미배치 ${unplacedCount}`} />}
-                {dueSoonCount > 0 && <Badge tone="danger" label="마감 임박" />}
-              </div>
-            )}
-            <div className="flex items-center gap-1">
-              <button type="button" onClick={() => onEdit?.(project)} className={ACTION_CLASS}>
-                편집
-              </button>
-              <button type="button" onClick={() => onDuplicate?.(project)} className={ACTION_CLASS}>
-                복제
-              </button>
-              <button type="button" onClick={() => onDelete?.(project)} className={DELETE_ACTION_CLASS}>
-                삭제
-              </button>
-            </div>
-          </div>
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="static shrink-0 text-body font-semibold text-text">{name}</span>
+          <span className="shrink-0 text-caption text-text-muted">마감 {dueDate ?? '없음'}</span>
         </div>
-
-        {/* Non-positioned flow content, safe to sit UNDER the toggle button's
-            z-0 layer (same reasoning ProjectCard's own comment gave for the
-            old stretched-link version) — clicking anywhere in this region
-            still hits the toggle and expands/collapses the row. */}
-        {closed ? (
-          <div className="relative mt-2">
-            <Badge
-              tone="neutral"
-              label={project.closedAt ? '기간이 지나 자동 종료됨' : '중지되었던 프로젝트가 종료되었습니다'}
-            />
-          </div>
-        ) : (
-          <div className="relative">
-            <p className="mt-2 text-caption text-text-muted">{meta}</p>
-            <ProgressBar
-              value={completedCount}
-              max={taskCount}
-              label={`완료 ${completedCount}/${taskCount}`}
-              className="mt-3"
-            />
-          </div>
-        )}
       </div>
 
-      {expanded && (
-        <div id={panelId} className="border-t border-border p-4 pt-3">
-          <ProjectExpandedPanel project={project} panelMode={panelMode} onPanelModeChange={onPanelModeChange} />
+      {/* Badges + actions share this line with the title (reference layout,
+          unchanged from ProjectCard). Both sit ABOVE the shared shell's toggle
+          button (z-10) so they stay independently clickable — same layering
+          trick the old stretched-link version used, just with a real
+          <button> underneath instead of a pseudo-element. */}
+      <div className="relative z-10 flex shrink-0 flex-wrap items-center gap-2">
+        {!closed && (placedCount > 0 || unplacedCount > 0 || dueSoonCount > 0) && (
+          <div className="flex flex-wrap gap-1.5">
+            {placedCount > 0 && <Badge tone="brand" label={`배치됨 ${placedCount}`} />}
+            {unplacedCount > 0 && <Badge tone="danger" label={`미배치 ${unplacedCount}`} />}
+            {dueSoonCount > 0 && <Badge tone="danger" label="마감 임박" />}
+          </div>
+        )}
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={() => onEdit?.(project)} className={ACTION_CLASS}>
+            편집
+          </button>
+          <button type="button" onClick={() => onDuplicate?.(project)} className={ACTION_CLASS}>
+            복제
+          </button>
+          <button type="button" onClick={() => onDelete?.(project)} className={DELETE_ACTION_CLASS}>
+            삭제
+          </button>
         </div>
-      )}
-    </li>
+      </div>
+    </>
+  )
+
+  const summary = closed ? (
+    <div className="mt-2">
+      <Badge
+        tone="neutral"
+        label={project.closedAt ? '기간이 지나 자동 종료됨' : '중지되었던 프로젝트가 종료되었습니다'}
+      />
+    </div>
+  ) : (
+    <>
+      <p className="mt-2 text-caption text-text-muted">{meta}</p>
+      <ProgressBar value={completedCount} max={taskCount} label={`완료 ${completedCount}/${taskCount}`} className="mt-3" />
+    </>
+  )
+
+  return (
+    <AccordionRow
+      expanded={expanded}
+      onToggle={onToggle}
+      ariaLabel={ariaLabel}
+      panelId={panelId}
+      header={header}
+      summary={summary}
+      panel={<ProjectExpandedPanel project={project} panelMode={panelMode} onPanelModeChange={onPanelModeChange} />}
+    />
   )
 }
 

@@ -21,6 +21,10 @@ import SettingsFixedSchedulesPage from '../pages/settings/SettingsFixedSchedules
 import SettingsAccountPage from '../pages/settings/SettingsAccountPage'
 import SettingsCalendarPage from '../pages/settings/SettingsCalendarPage'
 import SettingsNotificationsPage from '../pages/settings/SettingsNotificationsPage'
+import SettingsSupportPage from '../pages/settings/SettingsSupportPage'
+import SettingsNoticesPage from '../pages/settings/SettingsNoticesPage'
+import HelpDetailPage from '../pages/HelpDetailPage'
+import AnnouncementDetailPage from '../pages/AnnouncementDetailPage'
 import NotFoundPage from '../pages/NotFoundPage'
 import ForbiddenPage from '../pages/ForbiddenPage'
 import RootErrorBoundary from './RootErrorBoundary'
@@ -185,8 +189,34 @@ export const router = createBrowserRouter([
           { path: 'account', Component: SettingsAccountPage }, // ACCT-01/02
           { path: 'calendar', Component: SettingsCalendarPage }, // FIX-13~17
           { path: 'notifications', Component: SettingsNotificationsPage }, // NOTI-01
+          // ST-F1-15 owner feedback #D — "지원"/"공지" 목록은 최상위로 튕겨
+          // 나가지 않고 다른 설정 항목처럼 이 2-pane 디테일에 머문다.
+          { path: 'support', Component: SettingsSupportPage }, // HELP-01~06 (FAQ 탭 + 내 문의 탭)
+          { path: 'notices', Component: SettingsNoticesPage }, // OPS-01
         ],
       },
+      /*
+        ST-F1-15 — 알림 센터(PNL-NOTI)는 라우트가 아니라 벨(NotificationBell)이
+        여는 패널이다. 목록 화면(문의/FAQ/공지)은 owner feedback #D로 설정
+        하위(`/settings/support`·`/settings/notices`)로 옮겨갔으므로, 이 최상위
+        경로들은 그리로 REDIRECT만 한다 — `projects/:projectId`가 이미 쓰는
+        "loader만 있고 Component가 없는" 패턴 그대로(위 주석 참고).
+
+        `help/new`도 owner feedback 3차 #2로 여기 합류했다: 문의 작성의 주
+        진입은 이제 `/settings/support`가 직접 띄우는 TicketCreateForm
+        모달이라, 이 경로는 딥링크/직접 접근 대비용 자리표시자일 뿐이다.
+
+        `help/:ticketId`·`notices/:noticeId`는 그대로 독립 라우트다 — 알림
+        클릭(NOTI-04)의 routePath·직접 URL이 계속 여기로 오고,
+        `help/:ticketId`의 AC-1 소유권 방어(HelpDetailPage 자신)도 그대로
+        유지된다.
+      */
+      { path: 'faq', loader: () => redirect('/settings/support') },
+      { path: 'help', loader: () => redirect('/settings/support') },
+      { path: 'help/new', loader: () => redirect('/settings/support') },
+      { path: 'help/:ticketId', Component: HelpDetailPage }, // AC-1 FE 소유권 방어는 페이지 자신이 함
+      { path: 'notices', loader: () => redirect('/settings/notices') },
+      { path: 'notices/:noticeId', Component: AnnouncementDetailPage },
       { path: '403', Component: ForbiddenPage }, // ★ SCR-403
       { path: '*', Component: NotFoundPage },
     ],

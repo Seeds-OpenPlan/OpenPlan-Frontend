@@ -1,6 +1,7 @@
 import { NavLink, Link } from 'react-router-dom'
 import { navItems } from './navItems'
-import { BellIcon, UserIcon } from './icons'
+import { UserIcon } from './icons'
+import { NotificationBell } from './NotificationBell'
 import { BrandLogo } from '../common/BrandLogo'
 
 // 데스크톱 공통 상단 헤더 + 상단 내비게이션. md 미만에서는 숨김.
@@ -46,7 +47,9 @@ function TopNav() {
         </nav>
 
         <div className="flex items-center gap-4 text-neutral-400">
-          <BellIcon className="h-5 w-5" />
+          {/* 알림 (ST-F1-15, PNL-NOTI) — 벨+미확인 배지+패널을 전부 소유하는
+              자기완결형 컴포넌트. */}
+          <NotificationBell />
           {/* 프로필 → 설정 계정 관리 (ACCT-01/02). */}
           <Link
             to="/settings/account"

@@ -17,7 +17,7 @@
   toast), so every hook below lets the rejection propagate to the caller's own
   try/catch or mutate(..., { onError }) untouched.
 */
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   login,
   signup,
@@ -28,6 +28,37 @@ import {
   logout,
   reactivate,
 } from './authApi'
+import { apiClient } from '../../api/client'
+import { withDevFallback } from '../plan/planApi'
+
+/**
+ * Read-only access to the session — SAME queryKey/staleTime as router.js's
+ * own `sessionGuardLoader` (`sessionQuery`), so in a real/Swagger-backed env
+ * this reads the exact cache entry that loader already warmed, no second
+ * request. Unlike that loader, this hook goes through `withDevFallback`: the
+ * loader's own catch just swallows a DEV network error and lets navigation
+ * proceed with NO session cached at all (there is nothing else on that path
+ * that needs `userId`), but this hook's callers DO need a concrete value —
+ * see below — so it resolves the dev-auth fixed user (authFixtures.js
+ * "dev-user-0001") the same way every other mock-backed hook in this codebase
+ * falls back when there is no real backend running.
+ *
+ * ST-F1-15 (HELP-01~04 AC-1, NFR-030) is this hook's first consumer: a 문의
+ * 상세 page needs `data.userId` to compare against a ticket's own owner
+ * before rendering it, since a stale/tampered notification `routePath` or a
+ * hand-typed URL could otherwise leak another user's answer content.
+ */
+export function useSession() {
+  return useQuery({
+    queryKey: ['auth', 'session'],
+    queryFn: () =>
+      withDevFallback(
+        () => apiClient.get('/auth/session'),
+        () => Promise.resolve({ userId: 'dev-user-0001', status: 'ACTIVE', authed: true }),
+      ),
+    staleTime: 5 * 60 * 1000,
+  })
+}
 
 export function useLogin() {
   return useMutation({ mutationFn: ({ email, password }) => login(email, password) })
