@@ -18,6 +18,7 @@
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
 import { mockBackend } from './settingsFixtures'
+import { unwrapList } from '../../api/unwrap'
 
 // --- 가용 시간 (사용자 입력, phase 1) ------------------------------------------------
 // [가정-확장] — ST-B1-09 availabilities 계약엔 없는 필드. 실 Swagger 확정 시
@@ -82,7 +83,8 @@ export function getConnections() {
   return withDevFallback(
     () => apiClient.get('/users/me/connections'),
     () => mockBackend.getConnections(),
-  ).then((r) => r?.connections ?? [])
+    // Real: `data:[ExternalConnection]` (array). Mock: `{ connections: [...] }`.
+  ).then((r) => unwrapList(r, 'connections'))
 }
 
 /**

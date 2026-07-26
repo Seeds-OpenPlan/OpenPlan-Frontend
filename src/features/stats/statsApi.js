@@ -13,6 +13,7 @@ import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
 import { mockBackend } from './statsFixtures'
 import { TIME_BANDS } from './statsConstants'
+import { unwrapList } from '../../api/unwrap'
 
 /**
  * Returns `{ category, suggestedMinutes, sampleSize }`, or `null` when no
@@ -103,7 +104,10 @@ export function getStatsDeviations(groupBy, period) {
   return withDevFallback(
     () => apiClient.get('/stats/deviations', { params: { groupBy, period } }),
     () => mockBackend.getStatsDeviations(groupBy, period),
-  ).then((raw) => (raw?.groups ?? (Array.isArray(raw) ? raw : [])).map(normalizeDeviationGroup))
+    // Real: `DeviationReport{rows:[...]}` shape not yet adopted here — but the
+    // array-vs-`{groups}` envelope defense is the same shared concern, so it
+    // goes through the one helper instead of a hand-rolled duplicate check.
+  ).then((raw) => unwrapList(raw, 'groups').map(normalizeDeviationGroup))
 }
 
 function normalizeDeviationGroup(g) {

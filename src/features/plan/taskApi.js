@@ -13,6 +13,7 @@
 import { apiClient } from '../../api/client'
 import { withDevFallback } from './planApi'
 import { mockBackend } from './planFixtures'
+import { unwrapList } from '../../api/unwrap'
 
 /** Normalize a task to the camelCase shape the panel reads (tolerates snake_case). */
 function normalizeTask(t) {
@@ -36,7 +37,9 @@ export function getUnplacedTasks(projectId) {
   return withDevFallback(
     () => apiClient.get('/tasks', { params }),
     () => mockBackend.getUnplacedTasks(projectId),
-  ).then((r) => (r?.tasks ?? []).map(normalizeTask))
+    // Real server: GET /tasks returns the array directly (`data:[Task]`). Mock
+    // fixture: `{ tasks: [...] }`. unwrapList tolerates both (see api/unwrap.js).
+  ).then((r) => unwrapList(r, 'tasks').map(normalizeTask))
 }
 
 /**

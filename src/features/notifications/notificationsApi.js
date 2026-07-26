@@ -11,6 +11,7 @@
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
 import { mockBackend } from './notificationsFixtures'
+import { unwrapList } from '../../api/unwrap'
 
 /** Tolerates snake_case (server) or camelCase (mock) — same reasoning
  * planApi.js's normalizeBlock gives for why this one adapter absorbs the
@@ -32,7 +33,8 @@ export function getNotifications() {
   return withDevFallback(
     () => apiClient.get('/notifications'),
     () => mockBackend.getNotifications(),
-  ).then((r) => (r?.notifications ?? []).map(normalizeNotification))
+    // Real server: `data:[Notification]` (array). Mock: `{ notifications: [...] }`.
+  ).then((r) => unwrapList(r, 'notifications').map(normalizeNotification))
 }
 
 /** PATCH /notifications/{id}/read ([가정-신규], OP-NOTI-READ · NOTI-03). */

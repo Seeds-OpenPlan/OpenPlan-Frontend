@@ -11,6 +11,7 @@
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
 import { mockBackend } from './helpFixtures'
+import { unwrapList } from '../../api/unwrap'
 
 function normalizeTicket(t) {
   return {
@@ -44,7 +45,8 @@ export function getTickets() {
   return withDevFallback(
     () => apiClient.get('/support-tickets'),
     () => mockBackend.getTickets(),
-  ).then((r) => (r?.tickets ?? []).map(normalizeTicket))
+    // Real: `data:[SupportTicket]` (array). Mock: `{ tickets: [...] }`.
+  ).then((r) => unwrapList(r, 'tickets').map(normalizeTicket))
 }
 
 /** GET /support-tickets/{id} ([가정], OP-HELP-DETAIL). 소유권 검증은 호출자
@@ -73,7 +75,8 @@ export function getFaqArticles(query) {
   return withDevFallback(
     () => apiClient.get('/help-articles', { params: query ? { query } : undefined }),
     () => mockBackend.getFaqArticles(query),
-  ).then((r) => r?.articles ?? [])
+    // Real: `data:[HelpArticle]` (array). Mock: `{ articles: [...] }`.
+  ).then((r) => unwrapList(r, 'articles'))
 }
 
 // --- 공지 (OPS-01/02) ---------------------------------------------------------------
@@ -83,7 +86,8 @@ export function getAnnouncements() {
   return withDevFallback(
     () => apiClient.get('/announcements'),
     () => mockBackend.getAnnouncements(),
-  ).then((r) => (r?.announcements ?? []).map(normalizeAnnouncement))
+    // Real: `data:[Announcement]` (array). Mock: `{ announcements: [...] }`.
+  ).then((r) => unwrapList(r, 'announcements').map(normalizeAnnouncement))
 }
 
 /** GET /announcements/{id} ([가정]). */
