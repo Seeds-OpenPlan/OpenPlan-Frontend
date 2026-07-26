@@ -54,3 +54,30 @@ export function rangeSumMinutes(patterns) {
     .filter((p) => p.isActive)
     .reduce((sum, p) => sum + Math.max(0, p.endMinutes - p.startMinutes), 0)
 }
+
+/**
+ * Tagged error codes `SettingsAvailabilityPage.saveAll()` (embedded-mode save,
+ * ONB-03/04) can reject with — kept in this pure-helpers file rather than the
+ * page component itself so both that page and its caller
+ * (OnboardingAvailabilityStep) can import the SAME string constants without
+ * tripping `react-refresh/only-export-components` (a component file may only
+ * export components). `createAvailabilitySaveError` just stamps a `.code`
+ * onto a plain `Error` so callers can `err.code === AVAILABILITY_SAVE_ERROR.*`
+ * instead of matching on message text.
+ *
+ * A THIRD, UNTAGGED rejection is also possible from that same `saveAll()`:
+ * whatever a TanStack Query `mutateAsync` itself rejects with on a
+ * network/server failure. That case is deliberately left untagged — see
+ * `saveAll`'s own comment for why the caller must treat it differently from
+ * these two.
+ */
+export const AVAILABILITY_SAVE_ERROR = {
+  INVALID_RANGE: 'AVAILABILITY_INVALID_RANGE',
+  INVALID_CAPACITY: 'AVAILABILITY_INVALID_CAPACITY',
+}
+
+export function createAvailabilitySaveError(code) {
+  const err = new Error(code)
+  err.code = code
+  return err
+}

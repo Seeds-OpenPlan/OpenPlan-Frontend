@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useState } from 'react'
 import { useAvailability, useSaveAvailability } from '../../features/plan/usePlanData'
 import { WEEKDAY_KEYS, WEEKDAY_LABELS_KO, formatDurationKO, snapMinutes } from '../../features/plan/planTime'
-import { commonPattern as sharedCommonPattern, rangeSumMinutes } from '../../features/settings/availabilityHelpers'
+import {
+  commonPattern as sharedCommonPattern,
+  rangeSumMinutes,
+  AVAILABILITY_SAVE_ERROR,
+  createAvailabilitySaveError,
+} from '../../features/settings/availabilityHelpers'
 import { useWeeklyAvailableMinutes, useUpdateWeeklyAvailableMinutes } from '../../features/settings/useSettings'
 import { Toggle } from '../../components/common/Toggle'
 import { Button } from '../../components/common/Button'
@@ -43,6 +48,21 @@ import { useAppStore } from '../../store/useAppStore'
   Draft lives in local state (TanStack Query owns the SERVER copy only, per
   design-handoff §3) and is seeded ONCE when the query first resolves — a
   later background refetch must never silently overwrite an in-progress edit.
+
+  오너 결정(2026-07-26) — `embedded` prop (기본 false). The 온보딩 위저드 embeds
+  this SAME screen (OnboardingAvailabilityStep) but a wizard step should not
+  have its own separate "저장" button — the step's own [다음] must do that
+  saving. `embedded=true` hides BOTH save buttons here (the capacity card's
+  and the bottom one) while leaving the settings-screen render (embedded
+  omitted) byte-for-byte identical to before. Two things are exposed to that
+  parent:
+    - `ref.current.saveAll()` (React 19's ref-as-prop + `useImperativeHandle`,
+      no `forwardRef` needed) — see its own comment for the full contract,
+      including the THREE distinct ways it can settle (no-op / tagged reject /
+      untagged reject) that a Thomas 리뷰 MAJOR fix (2026-07-26) added after the
+      first version conflated all of them into one misleading error message.
+    - `onReadyChange(ready)` callback prop — fires once `draft` has loaded, so
+      the parent's OWN [다음] can stay disabled until there's anything to save.
 */
 
 function minutesToTimeInput(min) {
@@ -146,7 +166,17 @@ function DayRow({ pattern, expanded, onToggleExpand, onToggleActive, onChangeTim
 // — 이 카드가 자기 훅을 따로 가지면 그 dirty effect가 두 개로 나뉘어 서로
 // 다른 렌더 타이밍에 markDirty/markClean을 부를 수 있고, 그러면 "범위는
 // 수정 중인데 가용 시간 저장 직후라 dirty가 꺼진다" 같은 경합이 생긴다.
-function WeeklyAvailableTimeCard({ hours, onChangeHours, onSave, saving, dirty, loading, error, onRetry }) {
+function WeeklyAvailableTimeCard({
+  hours,
+  onChangeHours,
+  onSave,
+  saving,
+  dirty,
+  loading,
+  error,
+  onRetry,
+  hideSave,
+}) {
   if (loading) return <LoadingSkeleton preset="text" />
   if (error) return <ErrorState variant="inline" onAction={onRetry} />
 
@@ -171,9 +201,13 @@ function WeeklyAvailableTimeCard({ hours, onChangeHours, onSave, saving, dirty, 
             <span className="text-label text-text-muted">시간</span>
           </div>
         </label>
-        <Button variant="primary" size="md" onClick={onSave} loading={saving} disabled={!dirty || hours < 0}>
-          저장
-        </Button>
+        {/* embedded(온보딩) 모드에선 이 버튼 자체를 없앤다 — 저장은 위저드의
+            [다음]이 saveAll()을 통해 대신한다(부모 헤더 참고). */}
+        {!hideSave && (
+          <Button variant="primary" size="md" onClick={onSave} loading={saving} disabled={!dirty || hours < 0}>
+            저장
+          </Button>
+        )}
       </div>
     </section>
   )
@@ -186,7 +220,7 @@ function snapToHalfHour(minutes) {
   return Math.max(0, Math.round(minutes / 30) * 30)
 }
 
-function SettingsAvailabilityPage() {
+function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
   const query = useAvailability()
   const saveAvailability = useSaveAvailability()
   const capacityQuery = useWeeklyAvailableMinutes()
@@ -235,11 +269,96 @@ function SettingsAvailabilityPage() {
   // 덮어쓰는 경합을 막는다).
   const isDirty = rangeDirty || capacityDirty
 
+  // Hoisted ABOVE the loading/error early-returns below (unlike the render-only
+  // `anyDayInvalid` this file used to compute further down) because `saveAll`
+  // and the `useImperativeHandle` call that exposes it are HOOKS — every hook
+  // in a component must run on every render regardless of which branch below
+  // ends up returning early. Null-guarded (`draft !== null`) so it is safe to
+  // evaluate during the very first renders, before the query has resolved.
+  const anyDayInvalid = draft !== null && draft.some((p) => p.startMinutes >= p.endMinutes)
+  // Thomas 리뷰 MAJOR-2 fix — the (non-embedded) bottom save button's OWN
+  // `hours < 0` guard has no embedded equivalent (that button doesn't render
+  // at all in embedded mode), so a negative value used to reach `saveAll`
+  // uncaught: it just quietly failed the `>= 0` check inside the pending-list
+  // builder below and never got pushed — the day-range save still went
+  // through, capacity was silently dropped, and 다음 advanced as if everything
+  // saved. Computed here (not just inline in saveAll) so it's usable both by
+  // saveAll's reject below AND by isReady, whichever needs it first.
+  const capacityInvalid = capacityDirty && capacityHours != null && capacityHours < 0
+
   useEffect(() => {
     if (isDirty) markDirty()
     else markClean()
   }, [isDirty, markDirty, markClean])
   useEffect(() => () => markClean(), [markClean])
+
+  // Thomas 리뷰 MAJOR-1 fix — `ready` tells the embedding parent when it is
+  // safe to enable its own [다음] button at all: while `draft` hasn't loaded
+  // yet there is nothing for saveAll to act on (loading/error already renders
+  // a full-page skeleton below, per §draft===null branch — the wizard step's
+  // OWN [다음], being rendered by a DIFFERENT component, has no other way to
+  // know that). A callback prop (not a ref field) because reading `ready` off
+  // the ref would never re-render the caller when it flips — see
+  // OnboardingAvailabilityStep for how this is consumed.
+  useEffect(() => {
+    onReadyChange?.(draft !== null)
+  }, [draft, onReadyChange])
+
+  // Exposed to the embedding parent (OnboardingAvailabilityStep's [다음]) so a
+  // single call can save whichever of the two drafts actually changed and wait
+  // for both to settle — mirrors handleSave/handleSaveCapacity below but as ONE
+  // awaitable instead of two independent button `onClick`s.
+  //
+  // THREE distinct failure shapes, and the caller must be able to tell them
+  // apart (Thomas 리뷰 MAJOR-1 — the previous version threw the SAME
+  // `AVAILABILITY_INVALID_RANGE` for every rejection, including a plain
+  // network/server failure, so a transient API error surfaced as a bogus
+  // "종료 시간이 시작 시간보다 늦어야 합니다" message even though the ranges were
+  // perfectly valid):
+  //   1. `draft === null` (still loading) — NOT an error: nothing can be dirty
+  //      yet (see `ready` above), so this only fires if the caller ignores
+  //      `onReadyChange` and calls in anyway. Resolves as a no-op rather than
+  //      throwing, since there is genuinely nothing to save.
+  //   2. Invalid user input (day range end<=start, or a negative capacity) —
+  //      thrown as a TAGGED error (`AVAILABILITY_SAVE_ERROR.*`, imported from
+  //      availabilityHelpers.js — kept out of THIS file so both this page and
+  //      its caller can import the same constants without a component file
+  //      exporting a non-component, which `react-refresh/only-export-
+  //      components` rejects) so the caller can show the ONE relevant hint.
+  //   3. `mutateAsync` itself rejecting (network/server failure) — deliberately
+  //      NOT caught or re-tagged here. TanStack Query v5's `mutateAsync`
+  //      rejects the returned promise on failure REGARDLESS of an `onError`
+  //      callback being configured (onError just runs first, as a side
+  //      effect — e.g. this file's own toasts on useSaveAvailability /
+  //      useUpdateWeeklyAvailableMinutes) — it does not swallow the
+  //      rejection. That untagged rejection propagates to the caller as-is,
+  //      which must NOT show the invalid-range hint for it (the toast already
+  //      told the user what went wrong).
+  const saveAll = useCallback(async () => {
+    if (draft === null) return
+    if (anyDayInvalid) throw createAvailabilitySaveError(AVAILABILITY_SAVE_ERROR.INVALID_RANGE)
+    if (capacityInvalid) throw createAvailabilitySaveError(AVAILABILITY_SAVE_ERROR.INVALID_CAPACITY)
+
+    const pending = []
+    if (rangeDirty) pending.push(saveAvailability.mutateAsync(draft))
+    if (capacityDirty && capacityHours != null) {
+      pending.push(updateCapacity.mutateAsync(snapToHalfHour(capacityHours * 60)))
+    }
+    // Nothing changed (defaults were fine as-is) — a no-op resolve, same as
+    // "수정 없이 [다음]도 정상 진행" in this task's own verification checklist.
+    if (pending.length > 0) await Promise.all(pending)
+  }, [
+    draft,
+    anyDayInvalid,
+    capacityInvalid,
+    rangeDirty,
+    capacityDirty,
+    capacityHours,
+    saveAvailability,
+    updateCapacity,
+  ])
+
+  useImperativeHandle(ref, () => ({ saveAll }), [saveAll])
 
   if (query.isLoading || draft === null) {
     return <LoadingSkeleton preset="card" />
@@ -248,12 +367,12 @@ function SettingsAvailabilityPage() {
     return <ErrorState variant="section" onAction={() => query.refetch()} />
   }
 
-  // anyDayInvalid만으로 충분하다 — commonStart/commonEnd는 이제 draft에서
-  // 파생되고, applyCommonPattern은 valid한 쌍만 draft에 반영하므로(아래
-  // onChange), 파생된 두 값이 그 자체로 invalid한 상태로 draft에 실제
-  // 반영되는 경우는 없다. 요일별 개별 편집으로 생긴 invalid는 여기 그대로
-  // 걸린다.
-  const anyDayInvalid = draft.some((p) => p.startMinutes >= p.endMinutes)
+  // anyDayInvalid is computed further up now (hoisted above the early-returns
+  // for the `saveAll`/useImperativeHandle hooks — see that comment) — nothing
+  // else changes: commonStart/commonEnd are still derived from draft, and
+  // applyCommonPattern still only ever writes a valid pair (아래 onChange), so
+  // an invalid draft can only come from a 요일별 개별 편집, which this same
+  // flag already catches.
   const rangeSumMin = rangeSumMinutes(draft)
 
   // 공통 행 적용 — ALL 7 days take the new range (활성 여부는 각자 그대로 유지).
@@ -298,6 +417,7 @@ function SettingsAvailabilityPage() {
         loading={capacityQuery.isLoading || capacityHours === null}
         error={capacityQuery.isError}
         onRetry={() => capacityQuery.refetch()}
+        hideSave={embedded}
       />
 
       <section className="rounded-card border border-border p-4">
@@ -390,17 +510,21 @@ function SettingsAvailabilityPage() {
         </div>
       </section>
 
-      <div className="flex justify-end">
-        <Button
-          variant="primary"
-          size="md"
-          onClick={handleSave}
-          loading={saveAvailability.isPending}
-          disabled={anyDayInvalid}
-        >
-          저장
-        </Button>
-      </div>
+      {/* embedded(온보딩) 모드에선 이 버튼도 없앤다 — 저장은 위저드의 [다음]이
+          saveAll()을 통해 대신한다(파일 헤더 참고). */}
+      {!embedded && (
+        <div className="flex justify-end">
+          <Button
+            variant="primary"
+            size="md"
+            onClick={handleSave}
+            loading={saveAvailability.isPending}
+            disabled={anyDayInvalid}
+          >
+            저장
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
