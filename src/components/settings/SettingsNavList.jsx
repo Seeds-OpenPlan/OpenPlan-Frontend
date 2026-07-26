@@ -33,10 +33,11 @@ import { APP_VERSION_LABEL } from '../../constants/appVersion'
   [가정-보완] in the PR: the AC (§ST-F1-12 AC-3) requires the 4-라디오 screen to
   exist somewhere reachable, and the hub is the only entry point ui-spec
   defines for §SET's sub-screens, so a row was added rather than leaving the
-  screen unreachable. "지원"/"공지" ARE in the PNG but their screens are a
-  LATER story (ST-F1-15/HELP·OPS) — they render as inert rows here (a toast
-  instead of a broken navigation) rather than being silently dropped, so the
-  hub still matches the reference visually.
+  screen unreachable. "지원"/"공지" ARE in the PNG and, as of ST-F1-15, route
+  to real screens (/settings/support, /settings/notices — owner feedback #D
+  moved these INTO the settings 2-pane detail instead of the top-level
+  /help·/notices this row originally pointed at) instead of the stub toast
+  every other row used to fall back to while HELP/OPS didn't exist yet.
 
   행 순서(오너 리뷰 3차, item 3 — 오너 지정): 기본값 → 가용시간 → 고정일정 →
   계정관리 → 캘린더연동 → 알림. 첫 행(기본값)의 경로는
@@ -199,8 +200,13 @@ export function SettingsNavList({ onTutorialRestart }) {
           subtitle="처음부터 다시 안내받기"
           onClick={onTutorialRestart ?? stubToast}
         />
-        <Row icon={ChatIcon} title="지원" subtitle="문의·피드백 보내기" onClick={stubToast} />
-        <Row icon={MegaphoneIcon} title="공지" subtitle="업데이트·공지사항" onClick={stubToast} />
+        {/* ST-F1-15 — 더 이상 스텁이 아니다. owner feedback #D: 다른 설정
+            항목처럼 설정 안에 머물며 우측 디테일 pane에 뜬다(예전엔 최상위
+            /faq·/notices로 튕겨 나갔음 — 그 경로들은 이제 여기로 redirect만
+            한다, router.js 참고). "지원"은 그 안에서도 FAQ 탭이 기본(오너
+            피드백 #7 — "궁금한 걸 먼저 찾아보고, 없으면 문의"). */}
+        <Row to="/settings/support" icon={ChatIcon} title="지원" subtitle="문의·피드백 보내기" />
+        <Row to="/settings/notices" icon={MegaphoneIcon} title="공지" subtitle="업데이트·공지사항" />
       </Section>
 
       {/* 오너 리뷰 2차 (E) — 참조 PNG 하단의 "OpenPlan v1.0.0" 푸터. 실제
