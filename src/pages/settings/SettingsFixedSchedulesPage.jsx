@@ -168,7 +168,24 @@ function SettingsFixedSchedulesPage({ onDraftOpenChange }) {
             closeForm()
             query.refetch()
           }}
-          onConflictRetry={() => setConflict(null)}
+          onConflictRetry={() => {
+            // "내 변경 재시도" (ConflictOverlay's own header, option ②) means
+            // ADOPT the latest version and let the user manually re-save — not
+            // just close the overlay. Without bumping formTarget.item.version
+            // here, the next submitEdit still sends the STALE version this
+            // conflict was already raised against, so the retry immediately
+            // 409s again (an infinite loop the user can't escape by clicking
+            // "재시도"). Only `version` is copied from `latest` — title/weekday/
+            // time stay whatever the user already typed, since the whole point
+            // of "retry" (vs. "accept latest") is keeping the user's own edits.
+            if (conflict?.latest?.version != null) {
+              setFormTarget({
+                ...formTarget,
+                item: { ...formTarget.item, version: conflict.latest.version },
+              })
+            }
+            setConflict(null)
+          }}
           onNavigateToWeek={goToWeeklyPlan}
         />
       )}

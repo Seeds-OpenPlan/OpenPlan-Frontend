@@ -241,7 +241,10 @@ function ProjectsPage() {
     // updateProject's own comment in projectApi.js). This form never lets the
     // user touch `priority`, so it has to be re-sent as-is here or a real PUT
     // would silently null it out; `version` is the PUT's required
-    // optimistic-lock input (400 without it, confirmed live).
+    // optimistic-lock input (400 without it, confirmed live) AND the
+    // E-COM-006 check's input — it used to be omitted entirely, which is the
+    // OTHER half of the retry-loop bug below: even after "adopting" a newer
+    // version there was nowhere for it to go on the next submit.
     const afterInfo = infoChanged
       ? updateProject.mutateAsync({
           projectId: project.projectId,
@@ -437,7 +440,22 @@ function ProjectsPage() {
             setManageConflict(null)
             setOverlay(null)
           }}
-          onConflictRetry={() => setManageConflict(null)}
+          onConflictRetry={() => {
+            // Same fix as SettingsFixedSchedulesPage's own onConflictRetry
+            // (identical bug, see that file's comment for the full
+            // reasoning): "재시도" must ADOPT the latest version, or the next
+            // submit resends the version this conflict was already raised
+            // against and 409s again immediately. Only `version` moves from
+            // `latest` onto `overlay.project` — name/description/dueDate/status
+            // stay whatever the user already typed in the still-open form.
+            if (manageConflict?.latest?.version != null) {
+              setOverlay({
+                ...overlay,
+                project: { ...overlay.project, version: manageConflict.latest.version },
+              })
+            }
+            setManageConflict(null)
+          }}
         />
       )}
 

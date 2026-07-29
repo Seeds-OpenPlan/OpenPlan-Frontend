@@ -40,6 +40,7 @@ import { addFixedException, getFixedSchedules, removeFixedException } from './fi
 import { generateReplanOption, selectReplanOption } from './replanApi'
 import { GENERATED_STRATEGY_TYPES } from './replanStrategies'
 import { addWeeksISO } from './planTime'
+import { dashboardKey } from '../dashboard/useDashboard'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
 
@@ -589,11 +590,24 @@ export function useRemoveBlockWithUndo() {
 
 // --- ST-F1-04 Phase 2: execution log · schedule create/edit -----------------
 
-/** POST /tasks/{id}/execution-records — PLAN-15 실제 시간 기록 (write-only). */
+/**
+ * POST /tasks/{id}/execution-records — PLAN-15 실제 시간 기록 (write-only).
+ * Shared by both WeeklyPage and HomePage (dashboard) — either caller logging
+ * an execution record changes numbers the dashboard's own aggregates read
+ * (S1/S3 in ui-spec-dash.md), so this invalidates `dashboardKey()` regardless
+ * of which screen fired the mutation, matching this codebase's write-then-
+ * invalidate convention (every other mutation above does the same for its
+ * own reads). Without this, the dashboard GET keeps serving its cached
+ * (now-stale) aggregate for up to its own staleTime after a log succeeds.
+ */
 export function useLogExecution() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ taskId, body }) => postExecutionRecord(taskId, body),
-    onSuccess: () => toast({ tone: 'success', message: '통계에 반영되었습니다' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dashboardKey() })
+      toast({ tone: 'success', message: '통계에 반영되었습니다' })
+    },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
 }

@@ -26,8 +26,14 @@ import { mockBackend } from './planFixtures'
 /**
  * Normalize a fixed schedule to the camelCase shape the grid AND the ST-F1-12
  * settings screen both read. version/effectiveFrom/effectiveTo/source/status
- * (ST-B2-12's fixed_schedules columns) are additive — the ST-F1-06 grid never
- * reads them, only the settings CRUD form does.
+ * (ST-B2-12's fixed_schedules columns) are additive — of these, only `version`
+ * is actually consumed anywhere in this codebase today (the optimistic-lock
+ * check on update). `effectiveFrom`/`effectiveTo`/`source`/`status` are kept
+ * normalized here so the shape round-trips cleanly (the mock backend already
+ * threads them through create/update), but NO current screen reads or writes
+ * them — neither the ST-F1-06 grid nor FixedScheduleForm (ST-F1-12's own CRUD
+ * form only edits title/weekday/start/end minutes). They're reserved fields,
+ * unused/on hold until a future story actually surfaces them in the UI.
  */
 function normalizeFixedSchedule(f) {
   return {
