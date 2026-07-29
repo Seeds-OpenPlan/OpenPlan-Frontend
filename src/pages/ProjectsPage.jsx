@@ -239,7 +239,12 @@ function ProjectsPage() {
     const afterInfo = infoChanged
       ? updateProject.mutateAsync({
           projectId: project.projectId,
-          body: { name: body.name, description: body.description, dueDate: body.dueDate },
+          // `version` rides along for the optimistic-lock check (E-COM-006,
+          // same contract fixedScheduleApi's updateFixedSchedule documents) —
+          // this used to be omitted entirely, which is the OTHER half of the
+          // retry-loop bug below: even after "adopting" a newer version there
+          // was nowhere for it to go on the next submit.
+          body: { name: body.name, description: body.description, dueDate: body.dueDate, version: project.version },
         })
       : Promise.resolve()
 
@@ -411,7 +416,22 @@ function ProjectsPage() {
             setManageConflict(null)
             setOverlay(null)
           }}
-          onConflictRetry={() => setManageConflict(null)}
+          onConflictRetry={() => {
+            // Same fix as SettingsFixedSchedulesPage's own onConflictRetry
+            // (identical bug, see that file's comment for the full
+            // reasoning): "재시도" must ADOPT the latest version, or the next
+            // submit resends the version this conflict was already raised
+            // against and 409s again immediately. Only `version` moves from
+            // `latest` onto `overlay.project` — name/description/dueDate/status
+            // stay whatever the user already typed in the still-open form.
+            if (manageConflict?.latest?.version != null) {
+              setOverlay({
+                ...overlay,
+                project: { ...overlay.project, version: manageConflict.latest.version },
+              })
+            }
+            setManageConflict(null)
+          }}
         />
       )}
 

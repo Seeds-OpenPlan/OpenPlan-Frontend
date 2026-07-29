@@ -69,12 +69,23 @@ export function useAllFixedSchedules() {
   })
 }
 
+// Both keys below are invalidated together on every mutation: `fixedSchedulesAllKey`
+// (['fixedSchedulesAll']) is this settings screen's own week-agnostic list, while
+// `['fixedSchedules']` is a PREFIX match on the plan-grid's per-week query key
+// (usePlanData.js's `fixedSchedulesKey`, `['fixedSchedules', weekStartISO]`).
+// TanStack Query's default `invalidateQueries` matching is prefix-based, so this
+// one call marks every cached week stale regardless of which week is open — a
+// CRUD here used to only invalidate the settings-list key, leaving the grid
+// showing a stale fixed schedule for up to its own 5-minute staleTime.
+const gridFixedSchedulesKeyPrefix = () => ['fixedSchedules']
+
 export function useCreateFixedSchedule() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: createFixedSchedule,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
+      queryClient.invalidateQueries({ queryKey: gridFixedSchedulesKeyPrefix() })
       toast({ tone: 'success', message: '고정 일정을 추가했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
@@ -87,6 +98,7 @@ export function useUpdateFixedSchedule() {
     mutationFn: ({ fixedScheduleId, patch }) => updateFixedSchedule(fixedScheduleId, patch),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
+      queryClient.invalidateQueries({ queryKey: gridFixedSchedulesKeyPrefix() })
       toast({ tone: 'success', message: '저장했습니다' })
     },
     // NOTE: E-COM-006 (version conflict) is surfaced to the caller via the
@@ -106,6 +118,7 @@ export function useDeleteFixedSchedule() {
     mutationFn: (fixedScheduleId) => deleteFixedSchedule(fixedScheduleId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
+      queryClient.invalidateQueries({ queryKey: gridFixedSchedulesKeyPrefix() })
       toast({ tone: 'success', message: '고정 일정을 삭제했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),

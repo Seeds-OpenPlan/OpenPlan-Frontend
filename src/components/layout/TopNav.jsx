@@ -21,7 +21,7 @@ function TopNav() {
               to={to}
               end={end}
               className={({ isActive }) =>
-                `group flex items-center rounded-full px-3 py-2 text-sm font-medium transition-colors ${
+                `group flex items-center rounded-full px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                   isActive
                     ? 'bg-brand-50 text-brand-600'
                     : 'text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600'
@@ -31,11 +31,16 @@ function TopNav() {
               {({ isActive }) => (
                 <>
                   <Icon className="h-5 w-5 shrink-0" />
+                  {/* Label expands on hover (mouse) AND on keyboard focus
+                      (group-focus-visible) — before this it only expanded on
+                      group-hover, so Tab-ing through the inactive tabs left
+                      their labels collapsed with no way to read which tab is
+                      focused short of the focus ring alone. */}
                   <span
                     className={`overflow-hidden whitespace-nowrap transition-all duration-200 ease-out motion-reduce:transition-none ${
                       isActive
                         ? 'ml-2 max-w-[6rem] opacity-100'
-                        : 'ml-0 max-w-0 opacity-0 group-hover:ml-2 group-hover:max-w-[6rem] group-hover:opacity-100'
+                        : 'ml-0 max-w-0 opacity-0 group-hover:ml-2 group-hover:max-w-[6rem] group-hover:opacity-100 group-focus-visible:ml-2 group-focus-visible:max-w-[6rem] group-focus-visible:opacity-100'
                     }`}
                   >
                     {label}

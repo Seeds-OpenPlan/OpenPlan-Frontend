@@ -110,9 +110,14 @@ export function dateOf(iso) {
 export function composeTimestamp(dayISO, minutes) {
   const d = parseISODate(dayISO)
   d.setMinutes(minutes)
-  // Local-time ISO without forcing UTC (server stores timestamptz; the offset is
-  // preserved by toISOString only if we intend UTC — here we keep a stable local
-  // wall-clock representation the mock and grid both read back consistently).
+  // `d` is built and mutated entirely in LOCAL time (parseISODate + setMinutes
+  // above never touch UTC fields), but toISOString() always serializes to UTC
+  // ('Z') regardless — there is no "local ISO" string format. That's fine here:
+  // the string still encodes the same instant, and minutesOfDay/dateOf read it
+  // back with `new Date(iso).getHours()/.getMinutes()`, which are local-time
+  // accessors. As long as this round-trip runs in one consistent timezone (the
+  // mock and grid both do, in the browser), the local wall-clock value we set
+  // above comes back unchanged even though it passed through a UTC string.
   return d.toISOString()
 }
 
