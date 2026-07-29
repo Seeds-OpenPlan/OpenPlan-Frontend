@@ -412,7 +412,10 @@ export function useSetBlockComplete() {
             }
           : wk,
       )
-      patchTaskStatus(taskId, complete ? 'COMPLETED' : 'IN_PROGRESS')
+      // No `version` argument: this toggle acts on a plan block, which carries
+      // no task version — patchTaskStatus reads the task for it (see its own
+      // header for why the lookup lives there and not here).
+      patchTaskStatus(taskId, complete)
         .catch(() => {
           queryClient.setQueryData(weekKey, prevWeek)
           toast({ tone: 'error', message: systemMessages.error.writeTitle })

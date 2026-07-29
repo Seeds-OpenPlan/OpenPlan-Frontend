@@ -49,6 +49,8 @@
 | 페이지네이션 | projects/tasks/notifications/tickets/announcements 모두 `Page/Size` 파라미터(openapi:773 등) | 프론트는 전량 로드 가정. 기본 페이지 크기로 잘릴 수 있음 — 협의 |
 | 낙관적 락 `version` | project/task/schedule/fixed update가 `version` 필수(openapi:1031,1257,1687,1815) | 각 update body에 version 실림 확인. schedule은 **누락**(아래) |
 | 에러 코드 | 프론트 planApi는 `E-COM-004`(미구현 404) 폴백에 의존(planApi.js:36). ErrorResponse는 `E-[A-Z]+-[0-9]{3}`(openapi:2070) | 실서버 구현 후엔 mock 폴백이 실오류를 가리지 않도록 정리(로드맵 "mock 폴백 정리"와 동일) |
+| 우선순위 3단계 | BE 확인(2026-07-29): `1=높음 · 2=보통 · 3=낮음`, **4·5는 400** | ✅ 모든 폼은 이미 1~3만 제공. 위험은 **되돌려 보내는 값**(프로젝트 정보 PUT의 priority 재전송·프로젝트 복제·일정 편집 프리필)이라, 읽기 경계(normalize\*)에서 범위 밖 값을 가장 가까운 유효 등급으로 접는다 — `planPlacement.clampPriority` |
+| openapi vs 실서버 | `PATCH /tasks/{id}/status`가 실제로는 openapi와 다른 body를 받는다(§3.2) | 이 문서의 "실 계약" 열은 openapi 기준. **BE가 실서버로 확인해 준 항목은 실서버가 정본**이며 그렇게 표기한다 |
 
 ---
 
@@ -70,11 +72,12 @@
 ### 3.2 taskApi.js (🟡 미배치·배치)
 | 프론트 호출 | 실 계약 | 미스매치 | 조치 |
 |---|---|---|---|
-| GET `/tasks?status=UNASSIGNED` (js:37) | 동(:1207) → `data:[Task]` | 봉투: `r?.tasks`→벗겨진 배열. Task 필드 `categoryName/wbsRange/version` | `.then` 배열 처리 |
+| GET `/tasks?status=UNASSIGNED` (js:37) | 동(:1207) → `data:[Task]` | 봉투: `r?.tasks`→벗겨진 배열. Task 필드 `categoryName/wbsRange/version` | ✅ 처리됨 |
+| GET `/tasks?projectId=` (프로젝트 스코프) | **`projectId` 쿼리 파라미터 없음** (BE 확인 2026-07-29) | 서버가 바인딩하지 않는 필터를 보내고 있었음 → 프로젝트 스코프가 걸린 적이 없다 | ✅ 파라미터 제거 + 클라이언트 필터(`status`도 방어적으로 재확인) |
 | POST `/weekly-plans/{id}/blocks` (js:48) | 동(:1617) `PlanBlockInput{blockType,taskId,startAt,endAt}` | TASK는 `taskId` 필수, `title` 없음(조인 파생) | body를 PlanBlockInput로 |
 | POST `/weekly-plans/{id}/auto-placements {priorityType}` (js:60) | 동(:1558) body `{taskIds?}` → `PlacementProposal{proposedBlocks,unplacedTaskIds,reason}` | body(`priorityType`→`taskIds`), 응답(`placements/unplaced`→`proposedBlocks/unplacedTaskIds`) | body·응답 재매핑 |
 | POST `/weekly-plans/{id}/block-batches {placements}` (js:73) | 동(:1584) **`{operations:[{op:CREATE/MOVE/DELETE, block, planBlockId}]}` 필수** → `WeeklyPlanView` | body shape 전면 상이 | operations 배열로 재구성 |
-| PATCH `/tasks/{id}/status {status}` (js:83) | 동(:1278) enum `IN_PROGRESS/COMPLETED` | 일치 | — |
+| PATCH `/tasks/{id}/status` (js:83) | **실서버는 `{completed:boolean, version:number}`** (BE 확인 2026-07-29). openapi(:1278)의 `status` enum과 **불일치 — 실서버가 정본** | 둘 중 하나라도 빠지면 400. `version`은 태스크 조회 응답의 낙관적 잠금 카운터 | ✅ body 교체. 블록에는 태스크 version이 없어 caller가 못 줄 때는 `GET /tasks/{id}`로 읽어서 그대로 재전송 |
 | POST `/tasks/{id}/execution-records` (js:95) | POST `/tasks/{taskId}/**execution-logs**`(:1330) | **경로**(records→logs), body **`result`(COMPLETED/DELAYED/ABORTED) 필수 누락**, `actualMinutes` 5분배수 | 경로+`result` 추가 |
 
 ### 3.3 scheduleApi.js (🟡)

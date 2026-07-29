@@ -14,6 +14,7 @@ import { apiClient } from '../../api/client'
 import { withDevFallback } from './planApi'
 import { mockBackend } from './planFixtures'
 import { unwrapList } from '../../api/unwrap'
+import { clampPriority } from './planPlacement'
 
 /** Normalize a task to the camelCase shape the panel reads (tolerates snake_case). */
 function normalizeTask(t) {
@@ -23,23 +24,51 @@ function normalizeTask(t) {
     projectName: t.projectName ?? t.project_name ?? null,
     title: t.title,
     estimatedMinutes: t.estimatedMinutes ?? t.estimated_minutes ?? 60,
-    priority: t.priority ?? null,
+    // null stays null here (this panel sorts unknown priorities LAST — see
+    // byPriorityThenDue's own 99 default — rather than treating them as 보통).
+    priority: clampPriority(t.priority, null),
     dueDate: t.dueDate ?? t.due_date ?? null,
+    // The optimistic-lock counter, carried so a completion toggle driven from
+    // THIS list can send it without re-reading the task (see patchTaskStatus).
+    version: t.version ?? t.task_version ?? null,
     // Present only on auto-place leftovers (AC-3): why a task stayed unplaced.
     reason: t.reason ?? null,
   }
 }
 
-/** OP-TASK-UNPLACED → GET /tasks?status=UNASSIGNED (optionally project-filtered). */
+// tasks.status values (ERD) that mean the task is NOT in the unplaced backlog.
+const PLACED_OR_DONE = new Set(['IN_PROGRESS', 'COMPLETED'])
+
+/**
+ * OP-TASK-UNPLACED → GET /tasks?status=UNASSIGNED.
+ *
+ * PARAM CORRECTION (BE 확인, 2026-07-29): the real endpoint takes NO
+ * `projectId` query param — it was being sent as a filter the server simply
+ * has no binding for. A project-scoped call therefore filters client-side on
+ * the normalized `projectId` instead of asking the server to.
+ *
+ * `status` is likewise re-checked here rather than trusted: if the server
+ * ignores that param too (unconfirmed — BE only ruled on `projectId`), an
+ * unfiltered list would otherwise render every task in the account as
+ * "미배치". Deliberately a DENY list of the two ERD values that mean "not in
+ * the backlog" (IN_PROGRESS = 배치됨, COMPLETED = 완료), not an allow-list of
+ * 'UNASSIGNED': an enum value this FE doesn't recognize — or a payload with no
+ * status at all, which is what the DEV mock returns — then still shows up.
+ * Showing one task too many is recoverable; silently emptying the panel
+ * because the server spells a status differently is not.
+ */
 export function getUnplacedTasks(projectId) {
-  const params = { status: 'UNASSIGNED' }
-  if (projectId) params.projectId = projectId
   return withDevFallback(
-    () => apiClient.get('/tasks', { params }),
+    () => apiClient.get('/tasks', { params: { status: 'UNASSIGNED' } }),
     () => mockBackend.getUnplacedTasks(projectId),
     // Real server: GET /tasks returns the array directly (`data:[Task]`). Mock
     // fixture: `{ tasks: [...] }`. unwrapList tolerates both (see api/unwrap.js).
-  ).then((r) => unwrapList(r, 'tasks').map(normalizeTask))
+  ).then((r) =>
+    unwrapList(r, 'tasks')
+      .filter((t) => !PLACED_OR_DONE.has(t.status ?? t.task_status ?? null))
+      .map(normalizeTask)
+      .filter((t) => !projectId || t.projectId === projectId),
+  )
 }
 
 /**
@@ -80,13 +109,43 @@ export function postBlockBatch(weeklyPlanId, placements) {
 }
 
 /**
- * OP-TASK-STATUS → PATCH /tasks/{taskId}/status (PLAN-13/14 완료/미완료). `status`
- * is 'COMPLETED' or 'IN_PROGRESS'. Task-block completion mirrors onto its blocks.
+ * The task's current optimistic-lock version, read straight off GET /tasks/{id}
+ * — "태스크 불러올 때 응답에 같이 오는 숫자". Resolves to null instead of
+ * throwing when the read fails, so a DEV run against no backend still reaches
+ * patchTaskStatus's own mock fallback rather than dying on the lookup; against
+ * a real server the PATCH that follows is what surfaces the failure.
  */
-export function patchTaskStatus(taskId, status) {
+function readTaskVersion(taskId) {
+  return apiClient
+    .get(`/tasks/${taskId}`)
+    .then((t) => t?.version ?? t?.task_version ?? null)
+    .catch(() => null)
+}
+
+/**
+ * OP-TASK-STATUS → PATCH /tasks/{taskId}/status (PLAN-13/14 완료/미완료).
+ * Task-block completion mirrors onto its blocks.
+ *
+ * BODY CORRECTION (BE 확인, 2026-07-29): the real endpoint reads
+ * `{ completed: boolean, version: number }` — NOT the `{ status: 'COMPLETED' }`
+ * enum this used to send, which 400s. `version` is the task's optimistic-lock
+ * counter, the same number every task read hands back.
+ *
+ * The weekly grid's toggle doesn't have that number: it acts on a plan BLOCK,
+ * and a block payload carries no task version (planApi.normalizeBlock). So when
+ * the caller can't supply one, the task is read first and the version THAT read
+ * returned is what gets sent — the "받은 뒤에 그대로 같이 보내라" contract, just
+ * resolved here instead of at every call site. Callers already holding a fresh
+ * task (the unplaced list, which now carries `version`) pass it and skip the GET.
+ */
+export async function patchTaskStatus(taskId, completed, version) {
+  const lockVersion = version ?? (await readTaskVersion(taskId))
   return withDevFallback(
-    () => apiClient.patch(`/tasks/${taskId}/status`, { status }),
-    () => mockBackend.setTaskStatus(taskId, status),
+    () => apiClient.patch(`/tasks/${taskId}/status`, { completed, version: lockVersion }),
+    // The mock store still models completion as the task/block STATUS enum
+    // (it mirrors the flag onto every block of the task, which is what the
+    // grid re-reads) — the boolean is translated back for it here.
+    () => mockBackend.setTaskStatus(taskId, completed ? 'COMPLETED' : 'IN_PROGRESS'),
   )
 }
 

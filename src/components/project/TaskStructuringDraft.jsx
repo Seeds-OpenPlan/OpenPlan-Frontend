@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { EmptyState } from '../common/EmptyState'
 import { Button } from '../common/Button'
 import { MinuteStepper } from '../plan/MinuteStepper'
-import { priorityLabelKO } from '../../features/plan/planPlacement'
+import { clampPriority, priorityLabelKO } from '../../features/plan/planPlacement'
 import { useCreateStructuringDraft, useApplyStructuringDraft } from '../../features/project/useProjectData'
 import { toast } from '../../hooks/useToasts'
 
@@ -27,7 +27,14 @@ export function TaskStructuringDraft({ projectId, project, onCreateTaskDirect, d
         onSuccess: (result) => {
           setDraft({
             draftId: result.draftId,
-            tasks: (result.tasks ?? []).map((t) => ({ ...t, checked: true })),
+            // The draft's priorities come from the STRUCTURING engine, not from
+            // a form, so they're the one place a value outside 1~3 could reach
+            // the row's select — which would render it with nothing selected.
+            tasks: (result.tasks ?? []).map((t) => ({
+              ...t,
+              priority: clampPriority(t.priority),
+              checked: true,
+            })),
           })
         },
         onError: (error) => {

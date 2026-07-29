@@ -12,6 +12,30 @@ import {
   snapMinutes,
 } from './planTime'
 
+/*
+  PRIORITY IS A THREE-STEP SCALE — 1=높음 · 2=보통 · 3=낮음 (BE 확인, 2026-07-29:
+  4나 5를 보내면 400). Every FORM in this codebase already offers exactly those
+  three, so the risk isn't user input — it's ECHOED input: the project 정보 PUT
+  re-sends the CURRENT `priority` the form never shows (ProjectsPage), 프로젝트
+  복제 copies each source task's priority verbatim, and 일정 편집 prefills from
+  the block the server sent. Any out-of-range number the server (or older data)
+  hands us would ride straight back out on those paths and 400.
+
+  So it is folded into range at the READ boundary — every adapter that turns a
+  server payload into the shape the UI holds runs it through here — which makes
+  every echo path safe by construction rather than by remembering to guard each
+  write. Out-of-range folds to the NEAREST valid step (a legacy 4/5 is "even
+  lower than 낮음", so 3) rather than to the default, which would silently
+  promote it to 보통. Blank/absent falls back to `fallback` (보통 for records
+  that must carry one; callers that legitimately hold "unknown" pass null).
+*/
+export function clampPriority(value, fallback = 2) {
+  if (value == null || value === '') return fallback
+  const n = Math.round(Number(value))
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(3, Math.max(1, n))
+}
+
 // Priority is an integer on the task (1 = highest). Always paired with this text
 // label at the call site so priority is never conveyed by an icon/number alone
 // (NFR-017). Unknown/blank priorities read as "보통".

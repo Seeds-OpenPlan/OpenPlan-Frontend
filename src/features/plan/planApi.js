@@ -12,6 +12,7 @@
 
 import { apiClient } from '../../api/client'
 import { mockBackend } from './planFixtures'
+import { clampPriority } from './planPlacement'
 import { UNSPECIFIED_CONFLICT_CODE, violationSeverity } from './violationMessages'
 
 // Run the real call; in DEV, fall back to the mock for (a) a genuine network
@@ -59,7 +60,9 @@ function normalizeBlock(b) {
     // SCHEDULE-block extras (PLAN-17 편집 프리필); null on TASK blocks.
     memo: b.memo ?? null,
     estimatedMinutes: b.estimatedMinutes ?? b.estimated_minutes ?? null,
-    priority: b.priority ?? null,
+    // Folded to the 1~3 the server accepts: this value prefills 일정 편집's own
+    // 우선순위 select and is re-sent on save (see clampPriority's header).
+    priority: clampPriority(b.priority, null),
     // TASK-block project link (PLAN-12 프로젝트에서 보기); null when unknown.
     projectId: b.projectId ?? b.project_id ?? null,
     projectName: b.projectName ?? b.project_name ?? null,

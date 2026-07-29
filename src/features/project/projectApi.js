@@ -24,6 +24,7 @@
 import { apiClient } from '../../api/client'
 import { mockBackend } from './projectFixtures'
 import { mockBackend as planMockBackend } from '../plan/planFixtures'
+import { clampPriority } from '../plan/planPlacement'
 
 // `plan-task-*` ids are minted only by planFixtures.js's own seed/placement
 // code (never by this store) — see that file's own comment on the prefix.
@@ -64,7 +65,9 @@ function normalizeProject(p) {
     description: p.description ?? '',
     dueDate: p.dueDate ?? p.due_date ?? null,
     status: p.status ?? 'IN_PROGRESS',
-    priority: p.priority ?? 2,
+    // 1~3 only — the 정보 수정 PUT re-sends this value untouched (the form never
+    // exposes it), so an out-of-range one would 400 (see clampPriority).
+    priority: clampPriority(p.priority),
     closedAt: p.closedAt ?? p.closed_at ?? null,
     version: p.version ?? 1,
     taskCount: p.taskCount ?? p.task_count ?? 0,
@@ -87,7 +90,9 @@ function normalizeTask(t) {
     // back to this SAME hardcoded 60 until that settings surface exists —
     // one fallback number in one place, not a second copy on the edit page.
     estimatedMinutes: t.estimatedMinutes ?? t.estimated_minutes ?? 60,
-    priority: t.priority ?? 2,
+    // 1~3 only — 태스크 편집 prefills this select and 프로젝트 복제 copies it
+    // straight into a create body (see clampPriority).
+    priority: clampPriority(t.priority),
     dueDate: t.dueDate ?? t.due_date ?? null,
     status: t.status ?? 'UNASSIGNED', // UNASSIGNED · IN_PROGRESS · COMPLETED (ERD tasks.status)
     dueSoon: t.dueSoon ?? t.due_soon ?? false, // [가정] — no documented "마감 임박" flag; see §PROJ.0.2
