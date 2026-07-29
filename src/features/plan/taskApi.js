@@ -56,10 +56,20 @@ const PLACED_OR_DONE = new Set(['IN_PROGRESS', 'COMPLETED'])
  * status at all, which is what the DEV mock returns — then still shows up.
  * Showing one task too many is recoverable; silently emptying the panel
  * because the server spells a status differently is not.
+ *
+ * `size` (실서버 확인, 2026-07-29): this endpoint is PAGED — `size` defaults to
+ * 20 and caps at 100 — so sending nothing silently truncated the backlog at 20
+ * with no indication, which the client-side project filter above would then
+ * narrow further (a project's tasks could vanish entirely just for sitting
+ * past the first page). 100 is the server's own maximum, taken here as a
+ * deliberate ceiling, not a fix: the response's `meta.page` is dropped by
+ * client.js's interceptor, so nothing on this path can even SEE that a 101st
+ * task exists. Real paging needs that meta first (see the readiness doc's
+ * "meta 유실" item); until then this is the widest single page available.
  */
 export function getUnplacedTasks(projectId) {
   return withDevFallback(
-    () => apiClient.get('/tasks', { params: { status: 'UNASSIGNED' } }),
+    () => apiClient.get('/tasks', { params: { status: 'UNASSIGNED', size: 100 } }),
     () => mockBackend.getUnplacedTasks(projectId),
     // Real server: GET /tasks returns the array directly (`data:[Task]`). Mock
     // fixture: `{ tasks: [...] }`. unwrapList tolerates both (see api/unwrap.js).
