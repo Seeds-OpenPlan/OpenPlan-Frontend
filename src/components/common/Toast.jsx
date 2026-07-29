@@ -20,12 +20,26 @@ export function Toast({ tone = 'success', message, duration = 4000, action, onDi
   const timerRef = useRef(null)
   const { icon: Icon, text, iconColor } = TONE[tone] ?? TONE.success
 
+  // Toaster (the only caller) passes a fresh `onDismiss` arrow function on
+  // every render — including a re-render triggered by an unrelated toast
+  // being pushed/dismissed elsewhere in the shared queue. A ref, read inside
+  // the timer callback rather than closed over directly, keeps the
+  // auto-dismiss effect's own deps down to `[paused, duration]` (same
+  // onCloseRef pattern as Dialog.jsx/BottomSheet.jsx). Without this split,
+  // that sibling re-render would change the effect's deps, forcing a
+  // cleanup+restart that resets THIS toast's timer back to full `duration`
+  // instead of letting it keep counting down its remaining time.
+  const onDismissRef = useRef(onDismiss)
+  useEffect(() => {
+    onDismissRef.current = onDismiss
+  })
+
   // Auto-dismiss timer, paused while hovered/focused.
   useEffect(() => {
     if (paused || !duration) return
-    timerRef.current = setTimeout(() => onDismiss?.(), duration)
+    timerRef.current = setTimeout(() => onDismissRef.current?.(), duration)
     return () => clearTimeout(timerRef.current)
-  }, [paused, duration, onDismiss])
+  }, [paused, duration])
 
   return (
     <div

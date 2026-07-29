@@ -214,10 +214,9 @@ export const mockBackend = {
 
 // AC-4 이력 0 빈 상태 — 실 서버의 204(§07 API 명세서 "조회 기간 내 통계 없음")를
 // statsApi.js가 그대로 "no history" 로 해석하는 경로와 동일한 모양(=payload
-// 자체가 없음)을 재현해 둔다. DashboardEmptyState의 mockDashboardEmpty와 같은
-// 이유로 지금 사이클엔 실제 UI 스위치가 없어 어디서도 호출되지 않지만, 계약을
-// 고정해 두면 그 스위치가 생기는 즉시(혹은 실 서버가 204를 보내는 즉시) 바로
-// 맞아떨어진다.
+// 자체가 없음)을 재현해 둔다. 지금 사이클엔 이 빈 상태를 흉내낼 실제 UI
+// 스위치가 없어 어디서도 호출되지 않지만, 계약을 고정해 두면 그 스위치가
+// 생기는 즉시(혹은 실 서버가 204를 보내는 즉시) 바로 맞아떨어진다.
 export async function getStatsSummariesEmpty() {
   await delay()
   return null

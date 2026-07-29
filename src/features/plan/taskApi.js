@@ -162,8 +162,20 @@ export async function patchTaskStatus(taskId, completed, version) {
 /**
  * OP-TASK-EXEC → POST /tasks/{taskId}/execution-records (PLAN-15 실제 시간 기록).
  * Body: { startedAt, endedAt, actualMinutes, memo }. Returns { executionRecordId }.
+ *
+ * Guards `taskId` explicitly rather than letting a missing one silently
+ * become the literal string "undefined" in the URL (`POST
+ * /tasks/undefined/execution-records`) — the mock backend below never
+ * validates its `taskId` argument at all, so this call used to succeed
+ * against the mock while a real server would 404/400 it. The caller (dashboard
+ * TodayBoard's [기록] button) is now gated on `item.taskId` existing before
+ * this ever fires, but this stays a hard guard rather than trusting every
+ * future caller to remember that.
  */
 export function postExecutionRecord(taskId, body) {
+  if (taskId == null) {
+    return Promise.reject(new Error('postExecutionRecord: taskId is required'))
+  }
   return withDevFallback(
     () => apiClient.post(`/tasks/${taskId}/execution-records`, body),
     () => mockBackend.logExecution(taskId, body),

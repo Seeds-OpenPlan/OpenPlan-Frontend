@@ -112,27 +112,43 @@ export function TodayBoard({
               </div>
               {/* 미기록 항목엔 [기록]만, 이미 기록된 항목엔 [취소]만(round-2
                   오너 정정 — 둘이 같은 행에 같이 뜨는 조합은 없다). Desktop
-                  sm / mobile lg (48px touch target — ui-spec §0.4). */}
+                  sm / mobile lg (48px touch target — ui-spec §0.4).
+
+                  [기록] only renders for a row that actually HAS a taskId
+                  (a TASK-type row) — a SCHEDULE-type row (item.type ===
+                  'SCHEDULE', e.g. "스터디" above) has no backing task at all,
+                  so there is nothing PLAN-15's execution-record endpoint could
+                  attach to. Before this, [기록] rendered active regardless of
+                  type; clicking it on a SCHEDULE row called onLog with
+                  `item.taskId === undefined`, which the mock silently accepted
+                  but a real backend would 404/400 on
+                  (`POST /tasks/undefined/execution-records`). Hidden rather
+                  than disabled: unlike the offline case below, this isn't a
+                  transient condition a disabledReason tooltip would explain
+                  away — this row structurally never gets a [기록] action. */}
               <div className="flex shrink-0 items-center gap-2">
                 {item.completed ? (
                   <Button
                     variant="secondary"
                     size={isDesktop ? 'sm' : 'lg'}
                     disabled={!canWrite}
+                    disabledReason={!canWrite ? offlineReason : undefined}
                     onClick={handleCancelStub}
                   >
                     취소
                   </Button>
                 ) : (
-                  <Button
-                    variant="secondary"
-                    size={isDesktop ? 'sm' : 'lg'}
-                    disabled={!canWrite}
-                    disabledReason={!canWrite ? offlineReason : undefined}
-                    onClick={() => onLog?.(item)}
-                  >
-                    기록
-                  </Button>
+                  item.taskId != null && (
+                    <Button
+                      variant="secondary"
+                      size={isDesktop ? 'sm' : 'lg'}
+                      disabled={!canWrite}
+                      disabledReason={!canWrite ? offlineReason : undefined}
+                      onClick={() => onLog?.(item)}
+                    >
+                      기록
+                    </Button>
+                  )
                 )}
               </div>
             </li>

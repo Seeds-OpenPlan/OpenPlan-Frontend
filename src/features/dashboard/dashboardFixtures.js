@@ -164,29 +164,4 @@ export async function mockDashboard() {
   }
 }
 
-/**
- * §DASH.6 온보딩 직후 전체 빈 상태 — 프로젝트 0 · 이번 주 계획 블록 0. 이번
- * 사이클엔 실제 UI 스위치가 없어(계정 상태를 흉내낼 개발용 토글 없음) 어느
- * 화면에서도 아직 호출되지 않지만, 계약을 fixture로 고정해 둔다(빈 계정을
- * 만드는 즉시 재사용 가능 — planFixtures.js의 seed 함수들과 같은 목적).
- */
-export async function mockDashboardEmpty() {
-  await delay()
-  return {
-    planStatus: 'DRAFT',
-    isEmpty: true,
-    weeklyStatus: {
-      status: 'OK',
-      plannedMinutes: 0,
-      availableMinutes: 2700,
-      focusWindow: '09:00–18:00',
-      adjustDays: [],
-    },
-    priorityAction: null,
-    todayExecution: null,
-    weeklyImpact: null,
-    risks: null,
-  }
-}
-
 export default mockDashboard

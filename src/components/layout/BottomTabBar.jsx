@@ -23,7 +23,7 @@ function BottomTabBar() {
               to={to}
               end={end}
               className={({ isActive }) =>
-                `flex flex-col items-center gap-1 py-2 text-xs font-medium transition-colors ${
+                `flex flex-col items-center gap-1 py-2 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                   isActive ? 'text-brand-600' : 'text-neutral-400'
                 }`
               }

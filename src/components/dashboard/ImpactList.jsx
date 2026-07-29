@@ -11,9 +11,11 @@ const MAX_VISIBLE = 5
   is a Link, with an aria-label carrying the numbers a sighted user reads off
   the row's text/bar (NFR-017: the mini bar itself is decorative/aria-hidden).
 
-  `/projects/{id}` doesn't resolve yet in THIS worktree (ST-F1-08 owns the
-  project detail route, in progress on its own branch) — the link is built to
-  spec regardless, same seam-not-yet-live situation as `?openUnplaced=1`.
+  `/projects/{id}` resolves via router.js's own redirect-only loader for
+  the old workspace URL — it 302s straight to the projects-list accordion
+  with this project's row pre-expanded (see ProjectsPage.jsx's own header for
+  the full accordion-URL contract). This link needs no special-casing on
+  that account; it's a plain route the app already owns end-to-end.
 */
 export function ImpactList({ error = false, onRetry, projects = [] }) {
   if (error) {
