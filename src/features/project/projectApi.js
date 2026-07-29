@@ -39,6 +39,24 @@ async function withDevFallback(realCall, mockCall) {
 }
 
 /*
+  Shape guard for every list-shaped endpoint below (W2 live-connect finding,
+  2026-07-26). client.js's response interceptor unwraps the real server's
+  `{data, meta}` envelope down to the bare `data` value — for THESE endpoints
+  that value is already an array (confirmed live against GET /projects).
+  The DEV mock, however, still wraps its array in a named key (`{projects:
+  [...]}`, `{tasks: [...]}`, etc.) because that key is also this mock's own
+  in-memory shape. Reading `r?.<key> ?? []` alone (the pre-W2 code) silently
+  returned an EMPTY list against the real server — no error, no console
+  warning, just a blank screen — because `r.projects` is `undefined` on an
+  array. This helper accepts both without the caller needing to know which
+  backend answered.
+*/
+function toList(r, key) {
+  if (Array.isArray(r)) return r
+  return r?.[key] ?? []
+}
+
+/*
   ASSUMPTION (§보고): the 07 spec's list/detail response samples are thin
   (`{projects: []}` / `{projectId, title, description}`) and document no
   aggregate fields at all — no taskCount/completedCount/placedCount/
@@ -132,7 +150,7 @@ export function getProjects() {
   return withDevFallback(
     () => apiClient.get('/projects'),
     () => mockBackend.getProjects(),
-  ).then((r) => (r?.projects ?? []).map(normalizeProject))
+  ).then((r) => toList(r, 'projects').map(normalizeProject))
 }
 
 /** OP-PROJ-DETAIL → GET /projects/{id}. */
@@ -151,13 +169,30 @@ export function createProject(body) {
   )
 }
 
-/** OP-PROJ-UPDATE → PATCH /projects/{id} (name/description/dueDate/priority,
- * and — per the 07 spec's own PATCH body sample — status too, though
- * §PROJ.5 sends status through the DEDICATED endpoint below when only the
- * status changed; this one is used for the info-only edit half of "관리"). */
+/**
+ * OP-PROJ-UPDATE → PUT /projects/{id} (W2 live-connect correction, 2026-07-26).
+ *
+ * DIVERGENCE NOTE (§보고): the pre-W2 code called PATCH here per the 07 spec's
+ * body sample. Live against the real server, PATCH /projects/{id} has no
+ * route at all (only PUT is mapped — see ProjectController) and — because an
+ * unmatched-method-but-matched-path request throws
+ * HttpRequestMethodNotSupportedException, which the real server's
+ * GlobalExceptionHandler has no specific handler for — it fell through to the
+ * catch-all and came back as a confusing generic 500 (E-COM-005), not a 404/405.
+ * Flagged for BE-1 as its own small bug (should 405), but the FE-side fix is
+ * simply calling the verb the server actually maps: PUT.
+ *
+ * PUT also means **full replacement**, not a partial merge — the real
+ * ProjectUpdateRequest requires all four editable fields (name/description/
+ * dueDate/priority) AND a `version` (optimistic-lock input, 400 if missing,
+ * confirmed live). `body` must carry the CURRENT priority/version even when
+ * the caller's form never lets the user touch those fields (see
+ * ProjectsPage.handleManageSubmit's own comment on why it now reads them off
+ * `project` instead of leaving them out).
+ */
 export function updateProject(projectId, body) {
   return withDevFallback(
-    () => apiClient.patch(`/projects/${projectId}`, body),
+    () => apiClient.put(`/projects/${projectId}`, body),
     () => mockBackend.updateProject(projectId, body),
   )
 }
@@ -170,12 +205,22 @@ export function updateProject(projectId, body) {
  * column is documented as `IN_PROGRESS / PAUSED / CLOSED` — "ON_HOLD" appears
  * nowhere else in either source. The ERD is treated as authoritative for the
  * ENUM VALUES themselves (the 07 sample is presumably a stray draft value),
- * so this adapter sends/expects PAUSED for "중지". Flagged for BE-1 to confirm
- * which string the real server actually accepts.
+ * so this adapter sends/expects PAUSED for "중지". Confirmed live: the real
+ * server accepts PAUSED and rejects ON_HOLD (422 unrecognized enum), so no
+ * further BE-1 confirmation is needed on this point.
+ *
+ * `version` (W2 live-connect correction, 2026-07-26): the pre-W2 code sent
+ * only `{status}`. Live, the real ProjectStatusChangeRequest requires
+ * `version` too (`@NotNull` — confirmed 400 E-COM-001 without it), the same
+ * optimistic-lock input PUT above needs. The caller must pass the project's
+ * CURRENT version — and if an info PUT just ran first in the same submit
+ * (§PROJ.5's info-then-status sequence), the version THAT call returned, not
+ * the stale pre-edit one, since the PUT already bumped it server-side (see
+ * ProjectsPage.handleManageSubmit's own comment).
  */
-export function updateProjectStatus(projectId, status) {
+export function updateProjectStatus(projectId, status, version) {
   return withDevFallback(
-    () => apiClient.patch(`/projects/${projectId}/status`, { status }),
+    () => apiClient.patch(`/projects/${projectId}/status`, { status, version }),
     () => mockBackend.updateProjectStatus(projectId, status),
   )
 }
@@ -193,7 +238,7 @@ export function getProjectTasks(projectId) {
   return withDevFallback(
     () => apiClient.get(`/projects/${projectId}/tasks`),
     () => mockBackend.getProjectTasks(projectId),
-  ).then((r) => (r?.tasks ?? []).map(normalizeTask))
+  ).then((r) => toList(r, 'tasks').map(normalizeTask))
 }
 
 /** OP-TASK-CREATE → POST /projects/{id}/tasks (PROJ-17 태스크 추가). Returns
@@ -252,7 +297,7 @@ export function getCategories() {
   return withDevFallback(
     () => apiClient.get('/categories'),
     () => mockBackend.getCategories(),
-  ).then((r) => r?.categories ?? [])
+  ).then((r) => toList(r, 'categories'))
 }
 
 /**
@@ -300,7 +345,7 @@ export function getProjectStructureWarnings(projectId) {
   return withDevFallback(
     () => apiClient.get(`/projects/${projectId}/validation-issues`),
     () => mockBackend.getStructureWarnings(projectId),
-  ).then((r) => r?.issues ?? [])
+  ).then((r) => toList(r, 'issues'))
 }
 
 /**
@@ -335,7 +380,7 @@ export function getProjectWbs(projectId) {
     () => apiClient.get(`/projects/${projectId}/wbs`),
     () => mockBackend.getProjectWbs(projectId),
   ).then((r) =>
-    (r?.nodes ?? []).map((n) => ({
+    toList(r, 'nodes').map((n) => ({
       taskId: n.taskId ?? n.task_id,
       title: n.title,
       estimatedMinutes: n.estimatedMinutes ?? n.estimated_minutes ?? 60,

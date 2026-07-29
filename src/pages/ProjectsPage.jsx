@@ -229,27 +229,51 @@ function ProjectsPage() {
     setManageConflict(null)
     const { project } = overlay
     // 정보 변경 → 상태 변경 순차 (§PROJ.5 [추론]). Only PATCH the status
-    // endpoint when it actually changed — the info PATCH's own `status` field
+    // endpoint when it actually changed — the info PUT's own `status` field
     // is accepted by the 07 spec's body sample too, but §PROJ.5 explicitly
     // routes a status-only change through the DEDICATED endpoint.
     const infoChanged =
       body.name !== project.name || body.description !== project.description || body.dueDate !== project.dueDate
     const statusChanged = body.status !== project.status
 
+    // W2 live-connect correction (2026-07-26): the real endpoint is PUT — a
+    // full-field replace, not a partial PATCH merge (confirmed live; see
+    // updateProject's own comment in projectApi.js). This form never lets the
+    // user touch `priority`, so it has to be re-sent as-is here or a real PUT
+    // would silently null it out; `version` is the PUT's required
+    // optimistic-lock input (400 without it, confirmed live) AND the
+    // E-COM-006 check's input — it used to be omitted entirely, which is the
+    // OTHER half of the retry-loop bug below: even after "adopting" a newer
+    // version there was nowhere for it to go on the next submit.
     const afterInfo = infoChanged
       ? updateProject.mutateAsync({
           projectId: project.projectId,
-          // `version` rides along for the optimistic-lock check (E-COM-006,
-          // same contract fixedScheduleApi's updateFixedSchedule documents) —
-          // this used to be omitted entirely, which is the OTHER half of the
-          // retry-loop bug below: even after "adopting" a newer version there
-          // was nowhere for it to go on the next submit.
-          body: { name: body.name, description: body.description, dueDate: body.dueDate, version: project.version },
+          body: {
+            name: body.name,
+            description: body.description,
+            dueDate: body.dueDate,
+            priority: project.priority,
+            version: project.version,
+          },
         })
-      : Promise.resolve()
+      : Promise.resolve(null)
 
     afterInfo
-      .then(() => (statusChanged ? updateProjectStatus.mutateAsync({ projectId: project.projectId, status: body.status }) : null))
+      .then((updated) =>
+        statusChanged
+          ? updateProjectStatus.mutateAsync({
+              projectId: project.projectId,
+              status: body.status,
+              // Use the version the PUT above just returned (bumped
+              // server-side by that same write) when an info PUT ran first
+              // in this submit — sending the stale pre-edit `project.version`
+              // here would 409 the real backend's optimistic lock even
+              // though THIS submit is the one that moved it. Falls back to
+              // the pre-edit version when no PUT ran (status-only edits).
+              version: updated?.version ?? project.version,
+            })
+          : null,
+      )
       .then(() => {
         setOverlay(null)
         toast({ tone: 'success', message: '저장했습니다' })
