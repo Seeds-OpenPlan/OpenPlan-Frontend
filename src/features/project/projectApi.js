@@ -78,6 +78,28 @@ function normalizeProject(p) {
   }
 }
 
+/*
+  실서버 대조 (2026-07-29, TaskUpdateRequest): 편집 PATCH가 받는 건
+  {title, memo, estimatedMinutes, priority, dueDate, categoryId, version}
+  뿐이다. 편집 폼이 함께 보내던 두 필드는 각각 이렇게 어긋났다:
+
+  - `status` — `@Null` 이라 담겨 오기만 해도 400("status는 지정할 수 없습니다").
+    상태는 전용 엔드포인트(PATCH /tasks/{id}/status)만 바꾼다. 즉 지금까지
+    태스크 편집 저장은 실서버에서 항상 실패했다. 폼의 상태 라디오는 그대로
+    두되(모의 서버에선 계속 동작한다) 실 요청에서는 빼낸다 — 실서버 상태
+    변경은 완료 토글이 담당한다.
+  - `category` — 서버 필드는 `categoryId`(UUID)인데 이 앱의 카테고리는 아직
+    GET /categories 자체가 404(미구현)라 목업 문자열이다. 문자열을 UUID 자리에
+    실어 보내면 그 자체로 400이므로, 실 카테고리 엔드포인트가 생기기 전까지는
+    보내지 않는다(모의 서버 쪽은 지금처럼 왕복한다).
+*/
+function toTaskUpdateBody(body) {
+  const request = { ...body }
+  delete request.status
+  delete request.category
+  return request
+}
+
 function normalizeTask(t) {
   return {
     taskId: t.taskId ?? t.task_id,
@@ -196,7 +218,9 @@ export function deleteProject(projectId) {
 /** OP-PROJ-TASKS → GET /projects/{id}/tasks. */
 export function getProjectTasks(projectId) {
   return withDevFallback(
-    () => apiClient.get(`/projects/${projectId}/tasks`),
+    // 서버 기본 size=20(최대 100) — 이 목록엔 페이저가 없으므로 한 페이지로
+    // 담을 수 있는 최대치를 요청한다(taskApi.getUnplacedTasks와 같은 이유·한계).
+    () => apiClient.get(`/projects/${projectId}/tasks`, { params: { size: 100 } }),
     () => mockBackend.getProjectTasks(projectId),
   ).then((r) => (r?.tasks ?? []).map(normalizeTask))
 }
@@ -280,7 +304,7 @@ export function getCategories() {
  */
 export function updateTask(taskId, body) {
   return withDevFallback(
-    () => apiClient.patch(`/tasks/${taskId}`, body),
+    () => apiClient.patch(`/tasks/${taskId}`, toTaskUpdateBody(body)),
     () => (isPlanTaskId(taskId) ? planMockBackend.updateTask(taskId, body) : mockBackend.updateTask(taskId, body)),
   )
 }

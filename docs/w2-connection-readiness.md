@@ -225,3 +225,48 @@
 10. **auth**(`WEEK4-STUB`): 4주차 전 501이라 실질 연결은 **맨 마지막**. 경로 교정은 미리 해둘 수 있으나 검증은 스텁 해제 후.
 
 **병렬 가능 묶음**: {stats·dashboard}, {support/announcements}, {settings 정적 부분}은 plan 코어와 독립. auth는 마지막(스텁).
+
+---
+
+## 6. 실서버 전면 대조 (2026-07-29) — openapi가 아니라 **돌아가는 서버** 기준
+
+§1~5는 `openapi.yaml`을 근거로 쓴 문서다. 이 절은 백엔드 `main`(56커밋 최신화 후)을
+로컬에 띄우고 FE의 모든 API 호출을 **실제로 찔러서** 대조한 결과다. 둘이 어긋나는
+경우 **실서버가 정본**이다(§2의 마지막 행 참고).
+
+### 6.1 고친 것 (실서버에 존재하는데 FE가 어긋났던 것)
+
+| 대상 | 어긋남 | 조치 |
+|---|---|---|
+| `PATCH /tasks/{id}/status` | body가 `{status:'COMPLETED'}` → **400**. 실제는 `{completed, version}`(둘 다 `@NotNull`) | body 교체. 블록엔 태스크 version이 없어, caller가 못 주면 `GET /tasks/{id}`로 읽어 그대로 전송 |
+| `GET /tasks` | `projectId` 쿼리를 서버가 바인딩하지 않음(무시, 200) | 파라미터 제거 + 클라이언트 필터 |
+| `GET /tasks`·`GET /projects/{id}/tasks`·`GET /support/tickets` | 페이지 응답, `size` 기본 20 → 목록이 조용히 잘림 | `size=100`(서버 최대) 전송. 진짜 페이징은 `meta` 유실 해소가 선행 |
+| 우선순위 | 1·2·3만 허용, 그 외 **422 E-COM-009** | 읽기 경계에서 `clampPriority`로 접음(되돌려 보내는 경로 보호) |
+| `GET/PUT /users/me/availabilities` | 응답이 `{patterns,weeklyTotalMinutes}`인데 배열로 `.map()` → **TypeError로 쿼리 실패**. 쓰기는 분(정수) 전송 → **400**(`startTime` 필수) | 봉투 해제 + 분↔`HH:mm:ss` 양방향 변환. 비활성 요일도 시간 채워 전송 |
+| 온보딩 진행 | 서버는 **단계별 done 플래그**, FE는 **커서(`currentStep`)**. 필드명이 하나도 안 겹쳐 매 로딩이 1단계로 리셋되고 온보딩이 끝나지 않음 | 양방향 매핑(플래그→"아직 안 끝난 첫 단계", 커서→직전 단계 done) |
+| 온보딩 프로필(ONB-02) | 진행 PATCH body에 `profile`을 실어 보냈으나 서버엔 그 자리가 없음 → 입력이 조용히 버려짐 | `PATCH /users/me/profile` 선행 후 단계 전진 |
+| 계정 | `/users/me/account` 경로 없음 | 조회 `GET /users/me`, 수정 `PATCH /users/me/profile` |
+| 문의·FAQ | `/support-tickets`·`/help-articles` 경로 없음(`/support/*`), 등록 body `body`→`content`, 검색 파라미터 `query`→`keyword`, 응답 `supportTicketId`/`content`/`helpArticleId` | 경로·파라미터·body 교정 + 양쪽 필드명 수용 |
+| 문의 카테고리 | FE 값 `FEATURE`·`OTHER`가 서버 enum(`BUG\|ACCOUNT\|PLAN\|ETC`)에 없어 등록이 항상 실패 | 카탈로그를 서버 enum에 맞춤(기능→계획, 기타=ETC) |
+| 태스크 편집 `PATCH /tasks/{id}` | `status`는 `@Null`이라 담기기만 해도 **400**, `category`(문자열) vs `categoryId`(UUID) | 실 요청에서 두 필드 제외(모의 서버는 그대로) |
+| 로그아웃 | `POST /auth/logout` 라우트 없음 | `DELETE /auth/session`(실구현된 두 인증 EP 중 하나) |
+
+### 6.2 서버에 아직 없는 것 (FE는 DEV mock 폴백으로 동작 — 손대지 않음)
+
+`/weekly-plans/*`·`/plan-blocks/*`·`/schedules/*`·`/fixed-schedules/*`·`/replan-*`·
+`/stats/*`·`/dashboard`·`/notifications`·`/announcements`·`/categories`·
+`/projects/{id}/wbs`·`/projects/{id}/validation-issues`·`/projects/{id}/task-structuring-drafts`·
+`/onboarding/import-*`·`/users/me/{preferences,connections,notification-settings,availability-target}`
+— 전부 `E-COM-004` 404라 `withDevFallback`이 mock으로 넘긴다. **즉 주간 계획 화면은 아직 전부 mock이다.**
+
+인증은 `GET /auth/session`·`DELETE /auth/session` 둘만 실구현이고 나머지는 501
+`E-AUTH-011`(4주차)이라 경로 교정 자체를 미뤘다 — 스텁 해제 후 검증과 함께.
+
+### 6.3 BE에 보고할 것
+
+1. **`GET /support/help-articles`에 keyword가 없으면 500** — `lower(bytea) does not exist`
+   (널 파라미터 타입 미지정). FAQ 첫 진입이 바로 이 경우라 화면이 못 뜬다. 우회 불가(빈 문자열도 동일).
+2. 깨진 JSON이 **400이 아니라 E-COM-005**로 떨어진다(`HttpMessageNotReadableException` 미처리).
+3. 우선순위 범위 위반은 문서(BE 안내)엔 400이라 했으나 실제 **422 E-COM-009**.
+4. 미배치 목록에 `projectId` 필터가 있으면 클라이언트 필터 + size 상한 조합을 걷어낼 수 있다.
+5. 주간 계획 응답의 블록에 태스크 `version`이 실리면 완료 체크의 선행 `GET /tasks/{id}`가 사라진다.
