@@ -14,21 +14,89 @@ import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
 import { onboardingMockBackend } from './onboardingFixtures'
 
-/** Tolerate snake_case from a real BE response the same way planApi.js's
- * normalizeBlock/normalizeWeek do — this endpoint's exact casing is
- * unconfirmed until Swagger, so both are accepted. */
+/*
+  PROGRESS SHAPE (실서버 대조 2026-07-29 — OnboardingProgressResponse). The two
+  sides model onboarding DIFFERENTLY, and the difference is the whole reason
+  this adapter is more than casing tolerance:
+
+    server: per-step DONE FLAGS — {introDone, profileDone, availabilityDone,
+            fixedScheduleDone, tutorialDone, calendarSyncDone,
+            tutorialSampleProjectId}
+    here:   a CURSOR — {currentStep:'PROFILE'|…|'DONE', onboardingCompleted, …}
+
+  The old adapter read none of the server's field names, so every real response
+  normalized to the defaults: `currentStep:'PROFILE'`, `onboardingCompleted:
+  false`. The wizard would have restarted from step 1 on every load and could
+  never finish, no matter how many steps the server had recorded as done.
+
+  The cursor is DERIVED as "the first step not yet done", in wizard order —
+  which is exactly what the wizard's own forward-only stepping means. Fields
+  the server has no column for (tutorialSkipped, tutorialStep) keep their local
+  defaults: `tutorialDone` alone can't say whether the tutorial was completed
+  or skipped, and the step index is a mock-only affordance. Both only affect
+  DEV mock runs; against a real server the tutorial overlay reads
+  `tutorialCompleted` and nothing else.
+*/
+const WIZARD_ORDER = [
+  ['profileDone', 'PROFILE'],
+  ['availabilityDone', 'AVAILABILITY'],
+  ['fixedScheduleDone', 'FIXED'],
+  ['calendarSyncDone', 'CALENDAR'],
+]
+
+const toSnake = (s) => s.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)
+
+function currentStepFrom(p) {
+  const found = WIZARD_ORDER.find(([flag]) => !(p[flag] ?? p[toSnake(flag)] ?? false))
+  return found ? found[1] : 'DONE'
+}
+
 function normalizeProgress(p) {
   if (!p) return p
+  const serverShaped = p.profileDone !== undefined || p.profile_done !== undefined
+  const currentStep = p.currentStep ?? p.current_step ?? (serverShaped ? currentStepFrom(p) : 'PROFILE')
   return {
-    onboardingCompleted: p.onboardingCompleted ?? p.onboarding_completed ?? false,
-    introSeen: p.introSeen ?? p.intro_seen ?? false,
-    currentStep: p.currentStep ?? p.current_step ?? 'PROFILE',
+    onboardingCompleted:
+      p.onboardingCompleted ?? p.onboarding_completed ?? (serverShaped ? currentStep === 'DONE' : false),
+    introSeen: p.introSeen ?? p.intro_seen ?? p.introDone ?? p.intro_done ?? false,
+    currentStep,
+    // 서버 진행 레코드에는 프로필 값이 없다 — 프로필 자체는 /users/me가
+    // 소유한다(ONB-02 저장도 그쪽으로 간다, updateOnboardingProgress 참고).
     profile: p.profile ?? null,
-    tutorialCompleted: p.tutorialCompleted ?? p.tutorial_completed ?? false,
+    tutorialCompleted: p.tutorialCompleted ?? p.tutorial_completed ?? p.tutorialDone ?? p.tutorial_done ?? false,
     tutorialSkipped: p.tutorialSkipped ?? p.tutorial_skipped ?? false,
     tutorialStep: p.tutorialStep ?? p.tutorial_step ?? 0,
+    tutorialSampleProjectId: p.tutorialSampleProjectId ?? p.tutorial_sample_project_id ?? null,
     version: p.version ?? 1,
   }
+}
+
+/*
+  The inverse: the wizard PATCHes a cursor ("이제 AVAILABILITY 단계다"), the
+  server takes done-flags. Moving TO a step means the step BEFORE it is
+  finished — exact here because the wizard advances exactly one step per click
+  and never rewinds `currentStep` (see OnboardingWizardPage.advanceTo). A
+  finishing patch (`onboardingCompleted`) sets every flag, so a resumed session
+  can't land back inside the wizard on one straggling false.
+*/
+const STEP_COMPLETES = {
+  AVAILABILITY: 'profileDone',
+  FIXED: 'availabilityDone',
+  CALENDAR: 'fixedScheduleDone',
+  DONE: 'calendarSyncDone',
+}
+
+function progressFlagsFrom(patch) {
+  const flags = {}
+  if (patch.introSeen !== undefined) flags.introDone = patch.introSeen
+  const completes = STEP_COMPLETES[patch.currentStep]
+  if (completes) flags[completes] = true
+  if (patch.onboardingCompleted) {
+    for (const [flag] of WIZARD_ORDER) flags[flag] = true
+  }
+  // 서버는 완료와 건너뛰기를 구분하지 않는다 — 둘 다 tutorialDone이다.
+  if (patch.tutorialCompleted !== undefined) flags.tutorialDone = patch.tutorialCompleted
+  return flags
 }
 
 /** GET /users/me/onboarding-progress. */
@@ -39,12 +107,27 @@ export function getOnboardingProgress() {
   ).then(normalizeProgress)
 }
 
-/** PATCH /users/me/onboarding-progress. Partial merge — callers send only the
- * fields that changed (e.g. `{ currentStep: 'AVAILABILITY' }` on step advance,
- * `{ profile }` on ONB-02 save). */
+/**
+ * PATCH /users/me/onboarding-progress. Callers keep sending the FE's own
+ * cursor-shaped patch (`{ currentStep: 'AVAILABILITY' }` on step advance,
+ * `{ profile }` on ONB-02 save); the translation to the server's done-flags
+ * happens here (progressFlagsFrom).
+ *
+ * ONB-02's `profile` is NOT part of that record on a real server — the profile
+ * lives on the user (PATCH /users/me/profile, the endpoint whose own summary
+ * names ONB-02). Sending it inside the progress patch, as this used to, meant
+ * the name/purpose the user typed was silently dropped by the server. So a
+ * patch carrying a profile writes it there FIRST, and only then advances the
+ * step: if the profile save fails, the wizard must not move on.
+ */
 export function updateOnboardingProgress(patch) {
   return withDevFallback(
-    () => apiClient.patch('/users/me/onboarding-progress', patch),
+    async () => {
+      if (patch.profile) await apiClient.patch('/users/me/profile', patch.profile)
+      return apiClient.patch('/users/me/onboarding-progress', progressFlagsFrom(patch))
+    },
+    // The mock store models the FE's own shape (profile included), so it keeps
+    // receiving the untranslated patch.
     () => onboardingMockBackend.patchProgress(patch),
   ).then(normalizeProgress)
 }

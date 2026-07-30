@@ -24,6 +24,7 @@
 import { apiClient } from '../../api/client'
 import { mockBackend } from './projectFixtures'
 import { mockBackend as planMockBackend } from '../plan/planFixtures'
+import { clampPriority } from '../plan/planPlacement'
 
 // `plan-task-*` ids are minted only by planFixtures.js's own seed/placement
 // code (never by this store) — see that file's own comment on the prefix.
@@ -82,7 +83,9 @@ function normalizeProject(p) {
     description: p.description ?? '',
     dueDate: p.dueDate ?? p.due_date ?? null,
     status: p.status ?? 'IN_PROGRESS',
-    priority: p.priority ?? 2,
+    // 1~3 only — the 정보 수정 PUT re-sends this value untouched (the form never
+    // exposes it), so an out-of-range one would 400 (see clampPriority).
+    priority: clampPriority(p.priority),
     closedAt: p.closedAt ?? p.closed_at ?? null,
     version: p.version ?? 1,
     taskCount: p.taskCount ?? p.task_count ?? 0,
@@ -91,6 +94,28 @@ function normalizeProject(p) {
     unplacedCount: p.unplacedCount ?? p.unplaced_count ?? 0,
     dueSoonCount: p.dueSoonCount ?? p.due_soon_count ?? 0,
   }
+}
+
+/*
+  실서버 대조 (2026-07-29, TaskUpdateRequest): 편집 PATCH가 받는 건
+  {title, memo, estimatedMinutes, priority, dueDate, categoryId, version}
+  뿐이다. 편집 폼이 함께 보내던 두 필드는 각각 이렇게 어긋났다:
+
+  - `status` — `@Null` 이라 담겨 오기만 해도 400("status는 지정할 수 없습니다").
+    상태는 전용 엔드포인트(PATCH /tasks/{id}/status)만 바꾼다. 즉 지금까지
+    태스크 편집 저장은 실서버에서 항상 실패했다. 폼의 상태 라디오는 그대로
+    두되(모의 서버에선 계속 동작한다) 실 요청에서는 빼낸다 — 실서버 상태
+    변경은 완료 토글이 담당한다.
+  - `category` — 서버 필드는 `categoryId`(UUID)인데 이 앱의 카테고리는 아직
+    GET /categories 자체가 404(미구현)라 목업 문자열이다. 문자열을 UUID 자리에
+    실어 보내면 그 자체로 400이므로, 실 카테고리 엔드포인트가 생기기 전까지는
+    보내지 않는다(모의 서버 쪽은 지금처럼 왕복한다).
+*/
+function toTaskUpdateBody(body) {
+  const request = { ...body }
+  delete request.status
+  delete request.category
+  return request
 }
 
 function normalizeTask(t) {
@@ -105,7 +130,9 @@ function normalizeTask(t) {
     // back to this SAME hardcoded 60 until that settings surface exists —
     // one fallback number in one place, not a second copy on the edit page.
     estimatedMinutes: t.estimatedMinutes ?? t.estimated_minutes ?? 60,
-    priority: t.priority ?? 2,
+    // 1~3 only — 태스크 편집 prefills this select and 프로젝트 복제 copies it
+    // straight into a create body (see clampPriority).
+    priority: clampPriority(t.priority),
     dueDate: t.dueDate ?? t.due_date ?? null,
     status: t.status ?? 'UNASSIGNED', // UNASSIGNED · IN_PROGRESS · COMPLETED (ERD tasks.status)
     dueSoon: t.dueSoon ?? t.due_soon ?? false, // [가정] — no documented "마감 임박" flag; see §PROJ.0.2
@@ -236,7 +263,9 @@ export function deleteProject(projectId) {
 /** OP-PROJ-TASKS → GET /projects/{id}/tasks. */
 export function getProjectTasks(projectId) {
   return withDevFallback(
-    () => apiClient.get(`/projects/${projectId}/tasks`),
+    // 서버 기본 size=20(최대 100) — 이 목록엔 페이저가 없으므로 한 페이지로
+    // 담을 수 있는 최대치를 요청한다(taskApi.getUnplacedTasks와 같은 이유·한계).
+    () => apiClient.get(`/projects/${projectId}/tasks`, { params: { size: 100 } }),
     () => mockBackend.getProjectTasks(projectId),
   ).then((r) => toList(r, 'tasks').map(normalizeTask))
 }
@@ -320,7 +349,7 @@ export function getCategories() {
  */
 export function updateTask(taskId, body) {
   return withDevFallback(
-    () => apiClient.patch(`/tasks/${taskId}`, body),
+    () => apiClient.patch(`/tasks/${taskId}`, toTaskUpdateBody(body)),
     () => (isPlanTaskId(taskId) ? planMockBackend.updateTask(taskId, body) : mockBackend.updateTask(taskId, body)),
   )
 }

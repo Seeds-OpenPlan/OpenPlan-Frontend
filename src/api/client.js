@@ -114,6 +114,9 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   // Success: hand the caller the unwrapped payload. `data.data` is the envelope
   // body; the `?? data` fallback tolerates non-enveloped responses defensively.
+  // TODO(W2+): this drops `data.meta` (unreadCount, pagination). Revisit once a
+  // consumer actually needs meta (notifications unread badge / paged lists) —
+  // see references/w2-connection-readiness.md §2 "meta 유실".
   (response) => response.data?.data ?? response.data,
   async (error) => {
     const appError = normalizeError(error)
@@ -127,7 +130,9 @@ apiClient.interceptors.response.use(
     //     and is delegated to the session surface (ST-F1-14). Story §2.3 N-3.
     if (appError.code === 'E-COM-002' && !config._retry && !config._skipAuthRefresh) {
       try {
-        await apiClient.post('/auth/refresh', null, { _skipAuthRefresh: true })
+        // Path per openapi single source (/auth/token-refresh, no request body —
+        // refresh token travels as the httpOnly op_rt cookie, ADR-0001).
+        await apiClient.post('/auth/token-refresh', null, { _skipAuthRefresh: true })
         // Re-issue the original request once. The success interceptor unwraps it,
         // so the caller receives the retried payload transparently.
         return apiClient({ ...config, _retry: true })

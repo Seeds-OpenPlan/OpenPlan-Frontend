@@ -18,6 +18,7 @@
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
 import { mockBackend } from './settingsFixtures'
+import { unwrapList } from '../../api/unwrap'
 
 // --- 가용 시간 (사용자 입력, phase 1) ------------------------------------------------
 // [가정-확장] — ST-B1-09 availabilities 계약엔 없는 필드. 실 Swagger 확정 시
@@ -82,7 +83,8 @@ export function getConnections() {
   return withDevFallback(
     () => apiClient.get('/users/me/connections'),
     () => mockBackend.getConnections(),
-  ).then((r) => r?.connections ?? [])
+    // Real: `data:[ExternalConnection]` (array). Mock: `{ connections: [...] }`.
+  ).then((r) => unwrapList(r, 'connections'))
 }
 
 /**
@@ -112,18 +114,27 @@ export function replaceSelectedCalendars(provider, calendarIds) {
 
 // --- 계정 (ACCT-01/02) -------------------------------------------------------------
 
-/** GET /users/me/account ([가정-확장]). */
+/*
+  PATH CORRECTION (실서버 대조 2026-07-29): 계정/프로필은 하나의 UserController
+  가 소유한다 — 조회는 GET `/users/me`, 수정은 PATCH `/users/me/profile`
+  (부분 수정). 이 파일이 [가정-확장]으로 쓰던 `/users/me/account`는 서버에
+  없는 경로였다. 응답은 {userId, email, loginType, socialProvider, name,
+  purpose, timezone, weekStartDay} 한 덩어리라 계정 화면과 프로필 화면이 같은
+  레코드를 읽는다.
+*/
+
+/** GET /users/me (ACCT-01 — 계정+프로필 한 덩어리). */
 export function getAccount() {
   return withDevFallback(
-    () => apiClient.get('/users/me/account'),
+    () => apiClient.get('/users/me'),
     () => mockBackend.getAccount(),
   )
 }
 
-/** PATCH /users/me/account ([가정-확장], 오너 리뷰 3차 item 5 — 이름 변경). */
+/** PATCH /users/me/profile (ACCT-01 이름 변경 · ONB-02 — 부분 수정). */
 export function updateAccount(patch) {
   return withDevFallback(
-    () => apiClient.patch('/users/me/account', patch),
+    () => apiClient.patch('/users/me/profile', patch),
     () => mockBackend.updateAccount(patch),
   )
 }

@@ -88,14 +88,19 @@ export function confirmPasswordReset({ token, password }) {
 }
 
 /**
- * POST /auth/logout ([가정-확장], ACCT-03). Best-effort server call — the
+ * DELETE /auth/session (실서버 대조 2026-07-29 — AuthStubController). This is
+ * one of only TWO auth endpoints the backend actually implements today (the
+ * other is GET /auth/session); everything else on this file's surface —
+ * login/signup/token-refresh/oauth — answers 501 E-AUTH-011 until 4주차, so
+ * their paths are left as-is rather than churned against a stub. `POST
+ * /auth/logout` was this file's guess and has no route at all. Best-effort — the
  * caller (SettingsAccountPage) clears the local session cache and navigates
  * regardless of this promise's outcome (dev-auth stub means there is no real
  * server session to actually invalidate yet; see that page's own comment).
  */
 export function logout() {
   return withDevFallback(
-    () => apiClient.post('/auth/logout'),
+    () => apiClient.delete('/auth/session'),
     () => authMockBackend.logout(),
   )
 }

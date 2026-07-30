@@ -12,6 +12,7 @@
 
 import { apiClient } from '../../api/client'
 import { mockBackend } from './planFixtures'
+import { clampPriority } from './planPlacement'
 import { UNSPECIFIED_CONFLICT_CODE, violationSeverity } from './violationMessages'
 
 // Run the real call; in DEV, fall back to the mock for (a) a genuine network
@@ -59,7 +60,9 @@ function normalizeBlock(b) {
     // SCHEDULE-block extras (PLAN-17 편집 프리필); null on TASK blocks.
     memo: b.memo ?? null,
     estimatedMinutes: b.estimatedMinutes ?? b.estimated_minutes ?? null,
-    priority: b.priority ?? null,
+    // Folded to the 1~3 the server accepts: this value prefills 일정 편집's own
+    // 우선순위 select and is re-sent on save (see clampPriority's header).
+    priority: clampPriority(b.priority, null),
     // TASK-block project link (PLAN-12 프로젝트에서 보기); null when unknown.
     projectId: b.projectId ?? b.project_id ?? null,
     projectName: b.projectName ?? b.project_name ?? null,
@@ -80,12 +83,63 @@ function normalizeWeek(w) {
   }
 }
 
-function normalizeAvailability(patterns) {
-  return (patterns ?? []).map((a) => ({
+/*
+  AVAILABILITY SHAPE (실서버 확인, 2026-07-29). The server speaks
+    { patterns: [{weekday:'MON', startTime:'09:00:00', endTime:'18:00:00', isActive}],
+      weeklyTotalMinutes }
+  while everything above this adapter — planGeometry's column windows, the
+  settings screen's own draft, availabilityHelpers — speaks a BARE ARRAY of
+  `{weekday, startMinutes, endMinutes, isActive}`. Two mismatches, both here:
+
+  1. the `{patterns}` envelope. The old code handed the whole object to
+     `.map()`, which is a TypeError, not an empty list — the availability query
+     REJECTED against a real server, which is why 온보딩 가용시간 단계 never
+     became ready and its [다음] did nothing.
+  2. `HH:mm:ss` vs minutes-since-midnight. Sending minutes back made the PUT
+     400 (`startTime 널이어서는 안됩니다`), and 온보딩's [다음] only advances
+     after that save resolves — so the step could not be passed at all.
+
+  `weekday` needs no translation: both sides use the same 'MON'…'SUN' keys.
+  The DEV mock still answers in the FE's own shape (a bare array of minutes),
+  so both directions accept either and only convert what's actually foreign.
+*/
+function minutesFromTime(value) {
+  if (typeof value !== 'string') return null
+  const [h, m] = value.split(':').map(Number)
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null
+  return h * 60 + m
+}
+
+function timeFromMinutes(minutes) {
+  const total = Number.isFinite(minutes) ? minutes : 0
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`
+}
+
+function normalizeAvailability(payload) {
+  const patterns = Array.isArray(payload) ? payload : (payload?.patterns ?? [])
+  return patterns.map((a) => ({
     weekday: a.weekday,
-    startMinutes: a.startMinutes ?? a.start_minutes,
-    endMinutes: a.endMinutes ?? a.end_minutes,
+    startMinutes: a.startMinutes ?? a.start_minutes ?? minutesFromTime(a.startTime ?? a.start_time),
+    endMinutes: a.endMinutes ?? a.end_minutes ?? minutesFromTime(a.endTime ?? a.end_time),
     isActive: a.isActive ?? a.is_active ?? true,
+  }))
+}
+
+// A day the user switched OFF still has to carry times: the server requires
+// startTime/endTime on all seven rows (@NotNull), and `isActive:false` is what
+// actually turns the day off. Falls back to the same 09:00-18:00 the settings
+// screen shows for an all-off week, so an off day can never serialize as null.
+const DEFAULT_START_MINUTES = 9 * 60
+const DEFAULT_END_MINUTES = 18 * 60
+
+function serializeAvailability(patterns) {
+  return (patterns ?? []).map((p) => ({
+    weekday: p.weekday,
+    startTime: timeFromMinutes(p.startMinutes ?? DEFAULT_START_MINUTES),
+    endTime: timeFromMinutes(p.endMinutes ?? DEFAULT_END_MINUTES),
+    isActive: p.isActive ?? true,
   }))
 }
 
@@ -121,10 +175,14 @@ export function patchBlock(planBlockId, patch) {
   )
 }
 
-/** 가용 저장 → PUT /users/me/availabilities (full replace). */
+/**
+ * 가용 저장 → PUT /users/me/availabilities (full replace — exactly 7 patterns).
+ * Body rows are serialized to the server's `startTime/endTime` time strings;
+ * the mock keeps receiving the FE's own minute shape (see normalizeAvailability).
+ */
 export function putAvailabilities(patterns) {
   return withDevFallback(
-    () => apiClient.put('/users/me/availabilities', { patterns }),
+    () => apiClient.put('/users/me/availabilities', { patterns: serializeAvailability(patterns) }),
     () => mockBackend.putAvailabilities(patterns),
   ).then(normalizeAvailability)
 }

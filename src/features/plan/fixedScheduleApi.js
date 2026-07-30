@@ -22,6 +22,7 @@
 import { apiClient } from '../../api/client'
 import { withDevFallback } from './planApi'
 import { mockBackend } from './planFixtures'
+import { unwrapList } from '../../api/unwrap'
 
 /**
  * Normalize a fixed schedule to the camelCase shape the grid AND the ST-F1-12
@@ -70,7 +71,8 @@ export function getFixedSchedules(weekStartISO) {
         params: { status: 'ACTIVE', weekStartDate: weekStartISO },
       }),
     () => mockBackend.getFixedSchedules(weekStartISO),
-  ).then((r) => (r?.fixedSchedules ?? []).map(normalizeFixedSchedule))
+    // Real: `data:[FixedSchedule]` (array). Mock: `{ fixedSchedules: [...] }`.
+  ).then((r) => unwrapList(r, 'fixedSchedules').map(normalizeFixedSchedule))
 }
 
 /**
@@ -113,7 +115,8 @@ export function getAllFixedSchedules() {
   return withDevFallback(
     () => apiClient.get('/fixed-schedules'),
     () => mockBackend.getFixedSchedulesAll(),
-  ).then((r) => (r?.fixedSchedules ?? []).map(normalizeFixedSchedule))
+    // Real: `data:[FixedSchedule]` (array). Mock: `{ fixedSchedules: [...] }`.
+  ).then((r) => unwrapList(r, 'fixedSchedules').map(normalizeFixedSchedule))
 }
 
 /** OP-FIXED-CREATE → POST /fixed-schedules (FIX-06 고정일정 직접 추가). */
