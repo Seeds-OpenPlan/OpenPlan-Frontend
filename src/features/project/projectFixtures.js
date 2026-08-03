@@ -6,19 +6,21 @@
   mutable so create/edit/delete/status changes persist for the session.
 */
 
+import { SEED_CATEGORY_IDS } from './taskCategorySeedIds'
+
 const MOCK_LATENCY_MS = 70
 const delay = (ms = MOCK_LATENCY_MS) => new Promise((r) => setTimeout(r, ms))
 
 let uid = 100
 const nextId = (prefix) => `${prefix}-${(uid += 1)}`
 
-// [가정—신규] (ST-F1-09 AC-1 카테고리 Select): no category endpoint/ERD column
-// exists yet — see projectApi.getCategories' own note. A small static list
-// stands in until BE-1 defines the real model (its own table vs. a task-level
-// enum is unconfirmed). Deliberately only 코딩테스트/취업준비 have a
-// correction proposal (statsFixtures.js) — 자기계발 having NONE is itself a
-// state worth keeping reachable (AC-2's chip must stay hidden for it).
-const CATEGORY_LIST = ['취업준비', '코딩테스트', '자기계발']
+// W3 — the old static CATEGORY_LIST placeholder is gone (moved to a real
+// CRUD resource, see taskCategoryFixtures.js's own header). Seed tasks below
+// now reference one of taskCategorySeedIds.js's real preset ids instead of a
+// raw string, via SEED_CATEGORY_IDS imported below. Deliberately only
+// 코딩테스트/취업준비 have a correction proposal (statsFixtures.js) —
+// 자기계발 having NONE is itself a state worth keeping reachable (AC-2's
+// chip must stay hidden for it).
 
 // A task counts as "마감 임박" within this many days of its due date (and not
 // yet completed). ASSUMPTION: no rule document fixes this number for
@@ -64,7 +66,7 @@ function seed() {
   // 태스크 탭 reads closer to real usage density instead of mostly whitespace.
   tasksByProject.set(p1, [
     mkTask(p1, '트리 순회 정리', 60, 1, iso(2), 'IN_PROGRESS'),
-    mkTask(p1, '그래프 탐색 문제풀이', 90, 1, iso(10), 'UNASSIGNED', '코딩테스트'),
+    mkTask(p1, '그래프 탐색 문제풀이', 90, 1, iso(10), 'UNASSIGNED', SEED_CATEGORY_IDS.코딩테스트),
     mkTask(p1, '해시맵 구현 복습', 45, 2, null, 'COMPLETED'),
     mkTask(p1, '스택/큐 요약 노트', 30, 3, iso(20), 'COMPLETED'),
     mkTask(p1, '동적 계획법 문제풀이', 90, 1, iso(12), 'UNASSIGNED'),
@@ -83,10 +85,10 @@ function seed() {
     version: 1,
   })
   tasksByProject.set(p2, [
-    mkTask(p2, '알고리즘 문제 풀이 세트', 60, 2, null, 'UNASSIGNED', '코딩테스트'),
+    mkTask(p2, '알고리즘 문제 풀이 세트', 60, 2, null, 'UNASSIGNED', SEED_CATEGORY_IDS.코딩테스트),
     mkTask(p2, '자료구조 복습 문제', 60, 2, iso(25), 'UNASSIGNED'),
     mkTask(p2, 'SQL 문제풀이', 45, 3, null, 'IN_PROGRESS'),
-    mkTask(p2, '시스템 설계 스터디', 90, 1, iso(28), 'COMPLETED', '자기계발'),
+    mkTask(p2, '시스템 설계 스터디', 90, 1, iso(28), 'COMPLETED', SEED_CATEGORY_IDS.자기계발),
   ])
 
   // A project with zero tasks — RB-PROJ-01's structuring-draft entry point.
@@ -141,11 +143,14 @@ function seed() {
   ])
 }
 
-// `category` defaults to null ("없음") and `version` always starts at 1 — the
-// optimistic-lock counter ST-F1-09 AC-4 bumps on every successful PATCH (see
-// mockBackend.updateTask below). Every existing call site (5-arg-plus-status)
-// keeps working unchanged; only the few seed tasks below that opt into a
-// category pass the new trailing arg.
+// `categoryId` defaults to null ("없음") and `version` always starts at 1 —
+// the optimistic-lock counter ST-F1-09 AC-4 bumps on every successful PATCH
+// (see mockBackend.updateTask below). Every existing call site
+// (5-arg-plus-status) keeps working unchanged; only the few seed tasks below
+// that opt into a category pass the new trailing arg (one of
+// taskCategorySeedIds.SEED_CATEGORY_IDS' real preset ids, W3 — this field
+// used to hold a raw category NAME string before the real /task-categories
+// resource existed; see projectApi.normalizeTask's own comment on the rename).
 //
 // `updatedAt` ([가정—신규], ST-F1-09 code review, Thomas item 5): no record in
 // this codebase carried a save timestamp before this — ConflictOverlay.jsx's
@@ -154,7 +159,7 @@ function seed() {
 // conflict. Stamped at creation here and re-stamped on every successful
 // updateTask (below) — the same "last write wins the timestamp" semantic a
 // real `tasks.updated_at` column would have.
-function mkTask(projectId, title, estimatedMinutes, priority, dueDate, status, category = null) {
+function mkTask(projectId, title, estimatedMinutes, priority, dueDate, status, categoryId = null) {
   return {
     taskId: nextId('task'),
     projectId,
@@ -164,7 +169,7 @@ function mkTask(projectId, title, estimatedMinutes, priority, dueDate, status, c
     priority,
     dueDate,
     status,
-    category,
+    categoryId,
     version: 1,
     updatedAt: new Date().toISOString(),
   }
@@ -275,7 +280,7 @@ export const mockBackend = {
       body.priority ?? 2,
       body.dueDate ?? null,
       'UNASSIGNED',
-      body.category ?? null,
+      body.categoryId ?? null,
     )
     task.memo = body.memo ?? ''
     tasksByProject.set(projectId, [task, ...(tasksByProject.get(projectId) ?? [])])
@@ -296,26 +301,21 @@ export const mockBackend = {
     throw err
   },
 
-  // GET /categories ([가정—신규], ST-F1-09 AC-1).
-  async getCategories() {
-    await delay(40)
-    return { categories: CATEGORY_LIST }
-  },
-
   // PATCH /tasks/{taskId} (G-1, owner review 2026-07-24) — no `projectId` in
   // the signature (matches updateTaskSchedule's own shape below), so this
   // scans every project's task list the same way that one does. `dueDate`
   // is checked against `undefined` rather than `?? task.dueDate` on purpose
   // — the edit form can legitimately clear a due date back to null, and `??`
   // would treat that null as "not provided" and silently keep the old value.
-  // The same `undefined`-check treatment now applies to `category` (also
-  // legitimately clearable back to "없음"/null, exactly like dueDate above).
+  // The same `undefined`-check treatment now applies to `categoryId` (also
+  // legitimately clearable back to "없음"/null, exactly like dueDate above —
+  // W3 rename from the old `category` string field, see mkTask's own comment).
   // `status` (SCR-TASK-EDIT's own 상태 field — a SEPARATE write path from the
   // plan feature's own PATCH /tasks/{id}/status toggle in
   // taskApi.js/planFixtures.js; both exist in this codebase, targeting
   // disjoint mock task stores — see this task store's own cross-store-gap
   // note on getTask above) stays a plain `??` on purpose, UNLIKE dueDate/
-  // category: the edit form's 상태 radio group has no "clear to blank" state
+  // categoryId: the edit form's 상태 라디오 group has no "clear to blank" state
   // — it is always exactly one of the three enum values — so there is no
   // legitimate falsy value for `??` to wrongly treat as "not provided".
   //
@@ -349,7 +349,7 @@ export const mockBackend = {
         priority: body.priority ?? task.priority,
         dueDate: body.dueDate !== undefined ? body.dueDate : task.dueDate,
         status: body.status ?? task.status,
-        category: body.category !== undefined ? body.category : task.category,
+        categoryId: body.categoryId !== undefined ? body.categoryId : task.categoryId,
         memo: body.memo ?? task.memo,
       })
       task.version = (task.version ?? 1) + 1

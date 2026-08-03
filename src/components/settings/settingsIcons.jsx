@@ -147,6 +147,16 @@ export function AppleGlyphIcon(props) {
   )
 }
 
+// 태스크 카테고리 관리 (W3)
+export function TagIcon(props) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M11.5 3H5a2 2 0 0 0-2 2v6.5a2 2 0 0 0 .6 1.4l8 8a2 2 0 0 0 2.8 0l6.5-6.5a2 2 0 0 0 0-2.8l-8-8A2 2 0 0 0 11.5 3Z" />
+      <circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 export function TrashIcon(props) {
   return (
     <svg {...base} {...props}>

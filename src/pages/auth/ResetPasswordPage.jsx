@@ -58,7 +58,9 @@ export function ResetPasswordPage() {
     )
   }
 
-  const tokenInvalid = confirmMutation.error?.code === 'E-AUTH-422'
+  // 실서버 E-AUTH-006 "재설정 링크 만료·사용됨"(410) — 실서버 대조 2026-08-03,
+  // 존재하지 않는 `E-AUTH-422`를 대체.
+  const tokenInvalid = confirmMutation.error?.code === 'E-AUTH-006'
 
   if (tokenInvalid) {
     return (
@@ -113,7 +115,7 @@ export function ResetPasswordPage() {
           )}
         </label>
 
-        {/* Thomas 리뷰 MAJOR: E-AUTH-422(위의 tokenInvalid 분기)가 아닌 다른
+        {/* Thomas 리뷰 MAJOR: E-AUTH-006(위의 tokenInvalid 분기)가 아닌 다른
             실패(네트워크·5xx 등)는 이전엔 아무 피드백 없이 조용히 사라졌다. */}
         {confirmMutation.isError && !tokenInvalid && (
           <ErrorState variant="inline" title="비밀번호를 저장하지 못했습니다" />

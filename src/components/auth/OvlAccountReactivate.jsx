@@ -11,7 +11,7 @@ import { useIsDesktop } from '../../hooks/useMediaQuery'
   story has NO screen of its own per ux-flow-map's coverage table, "ACCT-06
   시스템"; its only UI surface IS this overlay's expired branch). Two entry
   points share this exact component:
-    1. SCR-AUTH-LOGIN — login() rejects with E-AUTH-DEACTIVATED; `info` comes
+    1. SCR-AUTH-LOGIN — login() rejects with E-AUTH-008 (비활성화된 계정); `info` comes
        straight from that error's `details` (no account query — the user
        isn't authenticated yet).
     2. SettingsAccountPage — an already-authenticated dev-stub session whose

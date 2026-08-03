@@ -16,9 +16,12 @@ import { DEVIATION_GROUP_BYS } from '../../features/stats/statsConstants'
 
   AC-5's 카테고리 미사용 힌트 lives here too (not a separate screen section)
   because it only makes sense next to the 카테고리별 list it's commenting on —
-  `categories` is the FULL canonical list (project 기능의 useCategories, ST-F1-
-  09 AC-1과 동일 소스); any canonical category absent OR present with
-  `sampleSize: 0` in the current groupBy=category response is "미사용".
+  `categories` is the FULL canonical list of NAMES (project 기능의
+  useTaskCategories, ST-F1-09 AC-1과 동일 소스 — W3부터는 실 /task-categories
+  프리셋이라 StatisticsPage가 그 목록의 `.name`만 뽑아 넘긴다, 이 컴포넌트
+  자신은 여전히 문자열 배열만 받는다); any canonical category absent OR
+  present with `sampleSize: 0` in the current groupBy=category response is
+  "미사용".
 */
 export function DeviationPanel({ groupBy, onGroupByChange, deviations = [], categories = [] }) {
   const maxAbs = Math.max(1, ...deviations.filter((d) => d.sampleSize > 0).map((d) => Math.abs(d.deviationMinutes)))

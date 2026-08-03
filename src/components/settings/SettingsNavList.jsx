@@ -3,6 +3,7 @@ import {
   ClockIcon,
   CalendarIcon,
   SlidersIcon,
+  TagIcon,
   UserCircleIcon,
   BellIcon,
   ChatIcon,
@@ -13,6 +14,7 @@ import {
 import { useAvailability } from '../../features/plan/usePlanData'
 import { commonPatternLabel } from '../../features/settings/availabilityHelpers'
 import { useAllFixedSchedules, useConnections } from '../../features/settings/useSettings'
+import { useTaskCategories } from '../../features/project/useProjectData'
 import { toast } from '../../hooks/useToasts'
 import { Skeleton } from '../common/Skeleton'
 import { APP_VERSION_LABEL } from '../../constants/appVersion'
@@ -65,6 +67,14 @@ function useFixedScheduleBadge() {
   if (query.isLoading) return { loading: true }
   const conflictCount = (query.data ?? []).filter((f) => f.hasConflict).length
   return { loading: false, conflictCount }
+}
+
+// W3 신규 행 — 등록된 프리셋 개수만 요약(가용시간/고정일정 행처럼 세부 상태를
+// 가르는 값이 아니라 단순 개수라, "충돌 N건" 같은 tone 분기 없이 항상 muted).
+function useTaskCategoryBadge() {
+  const query = useTaskCategories()
+  if (query.isLoading) return { loading: true }
+  return { loading: false, count: (query.data ?? []).length }
 }
 
 // 허브 행 하나가 Google/Apple 두 독립 연결을 대표해야 하므로, "적어도 하나
@@ -130,6 +140,7 @@ function Section({ title, children }) {
 export function SettingsNavList({ onTutorialRestart }) {
   const availability = useAvailabilityBadge()
   const fixedBadge = useFixedScheduleBadge()
+  const taskCategoryBadge = useTaskCategoryBadge()
   const calendarBadge = useCalendarConnectionBadge()
 
   return (
@@ -167,6 +178,22 @@ export function SettingsNavList({ onTutorialRestart }) {
               <TrailingText tone="warning">충돌 {fixedBadge.conflictCount}건</TrailingText>
             ) : (
               <TrailingText>충돌 없음</TrailingText>
+            )
+          }
+        />
+        {/* W3 신규 행 — 참조 PNG/오너 지정 6행 순서에는 없던 항목(그 순서
+            자체는 재배열하지 않는다). 고정일정 바로 뒤에 덧붙인 이유는 이
+            페이지 자신의 헤더 PLACEMENT 주석 참고. */}
+        <Row
+          to="/settings/task-categories"
+          icon={TagIcon}
+          title="태스크 카테고리"
+          subtitle="태스크 분류 프리셋 관리"
+          trailing={
+            taskCategoryBadge.loading ? (
+              <Skeleton width="3rem" height="0.875rem" />
+            ) : (
+              <TrailingText>{taskCategoryBadge.count}개</TrailingText>
             )
           }
         />

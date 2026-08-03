@@ -5,8 +5,8 @@ const DAY_MS = 24 * 60 * 60 * 1000
  * different callers need the exact same formula to agree on when "expired"
  * flips true:
  *   - authFixtures.js's own `login()` mock — computes this straight from a
- *     user record for the E-AUTH-DEACTIVATED error `details` (no account
- *     resource fetch happens pre-login).
+ *     user record for the E-AUTH-008 (비활성화된 계정) error `details` (no
+ *     account resource fetch happens pre-login).
  *   - OvlAccountReactivate's SettingsAccountPage caller — derives the same
  *     shape from useAccount()'s already-fetched `deactivatedAt`/
  *     `reactivationDeadlineDays` fields.

@@ -16,7 +16,7 @@ import { systemMessages } from '../../constants/systemMessages'
 import {
   projectTasksKey,
   taskKey,
-  useCategories,
+  useTaskCategories,
   useTask,
   useUpdateTask,
 } from '../../features/project/useProjectData'
@@ -438,7 +438,14 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
   const [priority, setPriority] = useState(task.priority)
   const [dueDate, setDueDate] = useState(task.dueDate ?? '')
   const [status, setStatus] = useState(task.status)
-  const [category, setCategory] = useState(task.category ?? '')
+  // W3 (실 /task-categories CRUD 대조): 이 상태는 이제 표시용 이름이 아니라
+  // 실제 categoryId(UUID)를 담는다 — 빈 문자열 '' = "없음" 옵션(서버에는 null
+  // 로 나간다). 표시명이 필요한 두 자리(제안 칩 문구·useCorrectionProposal의
+  // 그룹 키)는 아래 selectedCategoryName에서 프리셋 목록을 조회해 별도로
+  // 뽑는다 — 그 스탯 엔드포인트 자신은 categoryId가 아니라 이름으로 그룹화하는
+  // [가정—확장]이라 이 필드를 직접 넘길 수 없다(statsApi.getCorrectionProposal
+  // 자신의 헤더 참고).
+  const [categoryId, setCategoryId] = useState(task.categoryId ?? '')
   const [memo, setMemo] = useState(task.memo ?? '')
   const [submitError, setSubmitError] = useState(false)
   const [conflict, setConflict] = useState(null) // { latest } | null
@@ -451,8 +458,12 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
   // rather than repeating that gap a third time.
   const [versionOverride, setVersionOverride] = useState(null)
 
-  const categoriesQuery = useCategories()
-  const proposalQuery = useCorrectionProposal(category || null)
+  const categoriesQuery = useTaskCategories()
+  // 제안 칩(AC-2)·useCorrectionProposal은 이름으로 그룹화하는 별개의
+  // [가정—확장] 스탯 엔드포인트라 categoryId가 아니라 표시명이 필요하다 — 지금
+  // 선택된 id를 프리셋 목록에서 찾아 이름만 뽑아 넘긴다.
+  const selectedCategoryName = categoriesQuery.data?.find((c) => c.taskCategoryId === categoryId)?.name ?? null
+  const proposalQuery = useCorrectionProposal(selectedCategoryName)
   const updateTask = useUpdateTask()
 
   const trimmedTitle = title.trim()
@@ -470,7 +481,7 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
     priority !== task.priority ||
     (dueDate || null) !== task.dueDate ||
     status !== task.status ||
-    (category || null) !== (task.category ?? null) ||
+    (categoryId || null) !== (task.categoryId ?? null) ||
     memo.trim() !== (task.memo ?? '')
 
   useEffect(() => {
@@ -511,7 +522,7 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
           priority,
           dueDate: dueDate || null,
           status,
-          category: category || null,
+          categoryId: categoryId || null,
           memo: memo.trim(),
           // AC-4: the optimistic-lock token every write here now carries.
           version: versionOverride ?? task.version,
@@ -554,13 +565,14 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
           {/* AC-2 제안 칩 — only when a proposal exists for the SELECTED
               category, and NEVER applied until this button is actually
               clicked (no auto-apply on category change / proposal arrival). */}
-          {category && proposalQuery.data && (
+          {selectedCategoryName && proposalQuery.data && (
             <button
               type="button"
               onClick={() => setEstimatedMinutes(proposalQuery.data.suggestedMinutes)}
               className="inline-flex w-fit items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-3 py-1.5 text-caption font-medium text-brand-700 transition-colors hover:bg-brand-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
-              최근 {category} 편차 반영: {formatDurationKO(proposalQuery.data.suggestedMinutes)} — 적용하려면 선택
+              최근 {selectedCategoryName} 편차 반영: {formatDurationKO(proposalQuery.data.suggestedMinutes)} — 적용하려면
+              선택
             </button>
           )}
         </div>
@@ -608,14 +620,33 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
 
         <label className="flex flex-col gap-1">
           <span className="text-caption font-medium text-text-muted">카테고리</span>
-          <select value={category} onChange={(e) => setCategory(e.target.value)} className={FIELD}>
-            <option value="">없음</option>
-            {(categoriesQuery.data ?? []).map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          {/* W3: option value는 실제 categoryId(UUID) — 표시 텍스트만 프리셋의
+              name을 이어 붙인다(카테고리 이름 자체는 이 필드가 들고 있지 않음,
+              categoryId 상태 선언 자신의 comment 참고).
+
+              Thomas 리뷰 MEDIUM fix: 프리셋 목록이 아직 안 온 동안엔 "없음"
+              옵션 하나뿐인데 select의 value는 이미 실제 UUID다 — 컨트롤드
+              select는 자신의 옵션 중 매칭되는 게 없으면 그냥 첫 옵션을
+              보여주므로, 실제로는 카테고리가 있는 태스크도 잠깐 "없음"처럼
+              보였다(state 자체는 그대로라 그대로 저장하면 안 사라지지만,
+              그 순간 사용자가 select를 건드리면 진짜로 지워진다). 목록이
+              도착하기 전엔 select를 비활성화하고 "없음"과 다른 문구
+              ("불러오는 중…")를 보여줘 "값이 없다"와 "아직 못 불러왔다"를
+              구분한다 — 로드가 끝나면 정상 옵션 목록으로 즉시 바뀐다. */}
+          {categoriesQuery.data ? (
+            <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={FIELD}>
+              <option value="">없음</option>
+              {categoriesQuery.data.map((c) => (
+                <option key={c.taskCategoryId} value={c.taskCategoryId}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select value="" disabled className={FIELD}>
+              <option value="">불러오는 중…</option>
+            </select>
+          )}
         </label>
 
         <label className="flex flex-col gap-1">
@@ -664,7 +695,7 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
           priority,
           dueDate: dueDate || null,
           status,
-          category: category || null,
+          categoryId: categoryId || null,
           memo: memo.trim(),
         }}
         returnFocusRef={titleFieldRef}

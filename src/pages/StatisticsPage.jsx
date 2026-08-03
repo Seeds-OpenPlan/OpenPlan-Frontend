@@ -8,7 +8,7 @@ import { DelayedTaskList, DelayedTaskListSkeleton } from '../components/stats/De
 import { TimeBandChart, TimeBandChartSkeleton } from '../components/stats/TimeBandChart'
 import { DeviationPanel, DeviationPanelSkeleton } from '../components/stats/DeviationPanel'
 import { useStatsSummaries, useStatsDeviations, useStatsTimePatterns } from '../features/stats/useStats'
-import { useCategories } from '../features/project/useProjectData'
+import { useTaskCategories } from '../features/project/useProjectData'
 import {
   STATS_PERIODS,
   DEFAULT_STATS_PERIOD,
@@ -29,8 +29,8 @@ import { useIsDesktop } from '../hooks/useMediaQuery'
   TRADE-OFF: error is gated on ALL THREE queries together (dashboard's RiskList
   already sets this precedent — "두 섹션 중 하나라도 실패하면 합쳐서 오류 취급" —
   when there is no good partial-content affordance, one shared error state beats
-  three independently-flickering sections). `useCategories` is deliberately NOT
-  part of that gate: it is a small, rarely-changing lookup list (see its own
+  three independently-flickering sections). `useTaskCategories` is deliberately
+  NOT part of that gate: it is a small, rarely-changing lookup list (see its own
   long staleTime) purely for AC-5's hint row, and blocking the whole page on it
   would be disproportionate to what it's for.
 
@@ -53,7 +53,7 @@ function StatisticsPage() {
   const summariesQuery = useStatsSummaries(period)
   const deviationsQuery = useStatsDeviations(groupBy, period)
   const timePatternsQuery = useStatsTimePatterns(period)
-  const categoriesQuery = useCategories()
+  const categoriesQuery = useTaskCategories()
 
   const isError = summariesQuery.isError || deviationsQuery.isError || timePatternsQuery.isError
   const isLoading = summariesQuery.isLoading || timePatternsQuery.isLoading || !summariesQuery.data
@@ -124,7 +124,15 @@ function StatisticsPage() {
 
   const deviations = deviationsQuery.data ?? []
   const timePatterns = timePatternsQuery.data ?? { bands: [], summary: '' }
-  const categories = categoriesQuery.data ?? []
+  // W3: useTaskCategories now returns the real preset OBJECTS
+  // ({taskCategoryId, name, sortOrder, createdAt}), not bare name strings —
+  // but DeviationPanel's own `categories` prop (AC-5 "카테고리 미사용" hint)
+  // compares against deviations' `label`, which the [가정—확장] stats
+  // endpoint still groups by NAME (statsApi.getCorrectionProposal's own
+  // header explains why that endpoint was never migrated to categoryId).
+  // Extracting `.name` here is the one adapter this page needs — DeviationPanel
+  // itself is unchanged.
+  const categories = (categoriesQuery.data ?? []).map((c) => c.name)
 
   const mainNodes = [
     <ProjectInvestmentList key="pil" projects={summaries.projectInvestments} />,

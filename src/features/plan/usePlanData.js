@@ -705,7 +705,11 @@ export function useToggleFixedException() {
 // often against the real server during a sustained drag.
 export const VALIDATION_DEBOUNCE_MS = 150
 
-const EMPTY_VALIDATION = { issues: [], blockingCount: 0, warningCount: 0 }
+// `savable: true` here mirrors `blockingCount: 0`'s own meaning ("nothing known
+// to block yet") — harmless on its own since `stale` (below) is what actually
+// gates a save, never this value directly; see usePlanValidation's own return
+// comment.
+const EMPTY_VALIDATION = { issues: [], blockingCount: 0, warningCount: 0, savable: true }
 
 // A result that was never computed for the block set on screen. `signature: null`
 // can never equal a real signature, which is what makes `stale` true.
@@ -854,6 +858,19 @@ export function usePlanValidation({ weeklyPlanId, blocks, enabled = true }) {
     issues: isCurrent ? state.issues : EMPTY_VALIDATION.issues,
     blockingCount: isCurrent ? state.blockingCount : 0,
     warningCount: isCurrent ? state.warningCount : 0,
+    // W3 (검증 도메인 정합, ADR-0013): the server's own "savable = 차단 0건"
+    // verdict, carried straight through from normalizeValidationPayload (which
+    // prefers the server's literal boolean when present, else derives the same
+    // thing from blockingCount — see that function's own header). Exposed here
+    // as its own field rather than folded into blockingCount because the two
+    // are conceptually different questions (a count vs. a yes/no verdict) even
+    // though ADR-0013 defines them to always agree today. NOT yet read by the
+    // save gate itself (WeeklyPage.jsx still gates on `blockingCount > 0`,
+    // which — now that ruleId/severity are correctly keyed again — is exactly
+    // equivalent) — flagged for whoever next touches that gate to switch to
+    // this field directly, since "read the server's own verdict" is the more
+    // future-proof of the two equivalent options.
+    savable: isCurrent ? state.savable : EMPTY_VALIDATION.savable,
     // "검증 지연": the last dry-run didn't answer, so what's shown may be behind.
     delayed: isCurrent ? state.delayed : false,
     hasResult: isCurrent,

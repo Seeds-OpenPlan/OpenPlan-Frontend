@@ -449,7 +449,13 @@ function normalizePlanTaskDetail(taskId, src) {
     priority: src.priority ?? 2,
     dueDate: src.dueDate ?? null,
     status,
-    category: src.category ?? null, // [가정—신규] — see projectApi.normalizeTask's own note
+    // W3 fix (Thomas 리뷰 MAJOR): 이 필드는 projectApi.normalizeTask와 같은
+    // categoryId(UUID)여야 한다 — `category`(문자열)로 남아 있던 탓에, plan
+    // 스토어 task(`plan-task-*`, WeeklyPage "태스크 편집")를 열면 실제
+    // categoryId가 있어도 TaskEditModal이 항상 "없음"으로 보였다(그 폼은
+    // categoryId만 읽는다). 두 스토어가 같은 개념을 다른 필드명으로 들고
+    // 있던 상태 자체가 버그였다 — project 스토어와 동일하게 맞춘다.
+    categoryId: src.categoryId ?? null,
     version: src.version ?? 1, // [가정—신규] — optimistic-lock counter, first write starts it
     updatedAt: src.updatedAt ?? null, // [가정—신규]
     dueSoon: isPlanTaskDueSoon(src.dueDate, status),
@@ -502,35 +508,68 @@ function ensureWeek(weekStartISO) {
 }
 
 /*
-  --- Validation rules (ST-F1-05) -------------------------------------------
+  --- Validation rules (ST-F1-05, 재정합 W3) ----------------------------------
 
   These are REAL computations over the mock's own data, not canned issues: every
   violation the panel shows can be created and cleared by moving blocks in the
   browser, which is the only way the 3-layer display and the save gate can be
-  checked by eye before BE-1's rules exist.
+  checked by eye before BE-1's endpoint exists (the rule ENGINE itself already
+  has a Java model — ValidationIssue/ValidationReport, BE PR #19/ADR-0013 — but
+  no controller serves it yet).
 
-  Coverage: V1·V2·V4·V5 always computable from the seeded data; V3 needs a task
-  with a dueDate (backlog tasks have one — placing one after its due date fires
-  it); V6 needs two blocks closer than the buffer; V7 needs WBS project ranges,
-  which this mock has no data for at all, so it is intentionally never emitted
-  (inventing a fake WBS range would make the rule untestable, not testable).
+  Coverage (rule NAMES below are the confirmed server ruleId values — see
+  planApi.js's own W3 header for the full schema and the old-vs-new renumbering
+  table): V1_OVERLAP·V2_FIXED_CONFLICT·V3_CAPACITY_EXCEEDED·V4_OUT_OF_AVAILABILITY
+  always computable from the seeded data; V6_AFTER_DUE_DATE needs a task with a
+  dueDate (backlog tasks have one — placing one after its due date fires it);
+  V7_BUFFER_SHORTAGE needs two blocks closer than the buffer; V5_OUT_OF_WBS needs
+  WBS project ranges, which this mock has no data for at all, so it is
+  intentionally never emitted (inventing a fake WBS range would make the rule
+  untestable, not testable).
 
-  The emitted shape mirrors what a server would plausibly send — code, target
-  ids, and the copy variables at the top level — and planApi.normalizeIssue
-  folds the extra keys into `params`. No violation TEXT lives here: that is
-  violationMessages.js's job alone (J1).
+  SHAPE (W3 fix — this mock used to emit a made-up `{code, targetBlockIds,
+  ...params}` envelope that was never the real contract and had DRIFTED from it
+  the moment BE-1 published RuleId/ValidationIssue; that gap is exactly what let
+  a schema regression land silently once already this cycle, see the categories
+  MAJOR Thomas caught). Every issue below now carries the REAL server fields
+  (ruleId/severity BLOCK·WARNING/planBlockId/counterpartId/taskId/weekday/reason)
+  PLUS two mock-only convenience fields planApi.normalizeIssue already tolerates
+  as optional extras: `targetBlockIds` (lets this mock highlight MULTIPLE blocks
+  — e.g. both sides of an overlap — even for a rule whose official contract only
+  promises a single planBlockId) and the copy-variable params (blockTitle,
+  timeRange, …) spread at top level, which is what lets violationMessages.js
+  render a real Korean sentence instead of just the server's own generic
+  `reason` text. A real server sends neither extra field; normalizeIssue falls
+  back to planBlockId(+counterpartId)-only targeting and the bare `reason`
+  string when they're absent — so this mock is a strict SUPERSET of the real
+  shape, never a divergent one.
 */
 
-// Minimum gap between consecutive blocks before "버퍼 부족" (V6) applies.
-// ASSUMPTION: no rule document fixes this number; 10분 is the smallest gap that
-// still reads as a deliberate break. Change here when the rule spec lands.
+// Minimum gap between consecutive blocks before "버퍼 부족" (V7_BUFFER_SHORTAGE)
+// applies. ASSUMPTION: no rule document fixes this number; 10분 is the smallest
+// gap that still reads as a deliberate break. Change here when the rule spec lands.
 const BUFFER_MIN_MINUTES = 10
 
 // The mock's OWN severity classification, deliberately not imported from
 // violationMessages: that catalog is the CLIENT's table, and a mock standing in
 // for the server must be able to disagree with it (that's exactly the case the
 // client's "catalog wins for known codes" rule has to survive).
-const MOCK_BLOCKING_CODES = new Set(['V1', 'V2'])
+const MOCK_BLOCKING_CODES = new Set(['V1_OVERLAP', 'V2_FIXED_CONFLICT'])
+
+// Full-English DayOfWeek name a real server would send for `weekday` (Jackson's
+// default enum serialization — see planApi.js's own normalizeWeekday comment for
+// why). Emitted here (rather than the FE's own 3-letter WEEKDAY_KEYS form) so
+// this mock actually EXERCISES that adapter conversion in DEV instead of
+// coincidentally matching it — the whole point of "mock 계약 모양 맞추기".
+const WEEKDAY_KEY_TO_FULL = {
+  MON: 'MONDAY',
+  TUE: 'TUESDAY',
+  WED: 'WEDNESDAY',
+  THU: 'THURSDAY',
+  FRI: 'FRIDAY',
+  SAT: 'SATURDAY',
+  SUN: 'SUNDAY',
+}
 
 const overlaps = (a, b) =>
   new Date(a.startAt) < new Date(b.endAt) && new Date(b.startAt) < new Date(a.endAt)
@@ -559,9 +598,33 @@ function computeValidationIssues(weekStartISO, blocks) {
   const days = weekDays(weekStartISO)
   const issues = []
   let seq = 0
-  const push = (code, targetBlockIds, params) => {
+  // Emits the REAL contract envelope (validationIssueId/ruleId/severity/
+  // planBlockId/counterpartId/taskId/weekday/reason) plus two mock-only
+  // convenience extras — `targetBlockIds` and the spread `params` — that a real
+  // server never sends and normalizeIssue only reads when present (see this
+  // file's own SHAPE header paragraph above).
+  const pushIssue = (
+    ruleId,
+    { planBlockId = null, counterpartId = null, taskId = null, weekday = null, targetBlockIds, params = {} } = {},
+  ) => {
     seq += 1
-    issues.push({ id: `${code}-${seq}`, code, targetBlockIds, ...params })
+    issues.push({
+      validationIssueId: null,
+      ruleId,
+      severity: MOCK_BLOCKING_CODES.has(ruleId) ? 'BLOCK' : 'WARNING',
+      planBlockId,
+      counterpartId,
+      taskId,
+      weekday,
+      // Server 문구 예시("규칙 근거 문구") 그대로 흉내 — 실제로 화면에 보이는 건
+      // 이 문자열이 아니라 violationMessages.js의 params 기반 message()다; 이건
+      // 그 message()가 비어 있을 경우에만 쓰이는 폴백 경로를 위한 자리표시자
+      // (violationCopy 자신의 comment 참고).
+      reason: `규칙 ${ruleId}에 의해 판정되었습니다`,
+      id: `${ruleId}-${seq}`,
+      ...(targetBlockIds !== undefined ? { targetBlockIds } : {}),
+      ...params,
+    })
   }
 
   // Only blocks that actually land in this week participate; everything below
@@ -571,24 +634,36 @@ function computeValidationIssues(weekStartISO, blocks) {
     .filter((b) => b.dayIndex >= 0)
     .sort((a, b) => new Date(a.startAt) - new Date(b.startAt))
 
-  // V1 일정 겹침 (차단) — every unordered pair that shares time on the same day.
+  // V1_OVERLAP 일정 겹침 (차단) — every unordered pair that shares time on the
+  // same day.
   for (let i = 0; i < inWeek.length; i += 1) {
     for (let j = i + 1; j < inWeek.length; j += 1) {
       const a = inWeek[i]
       const b = inWeek[j]
       if (a.dayIndex !== b.dayIndex || !overlaps(a, b)) continue
-      push('V1', [a.planBlockId, b.planBlockId], {
-        blockTitle: a.title,
-        otherTitle: b.title,
-        timeRange: `${WEEKDAY_LABELS_KO[a.dayIndex]} ${timeRangeOf(a)}`,
+      // ADR-0013: 대표(=planBlockId)는 "쌍 중 UUID 오름차순 첫" 블록, 상대는
+      // counterpartId. 이 mock의 id는 실제 UUID가 아니라 순차 문자열
+      // (nextId('block'))이지만, 문자열 오름차순 비교로도 "안정적으로 대표
+      // 하나를 고른다"는 계약의 실질 동작은 그대로 낸다.
+      const [first, second] = a.planBlockId < b.planBlockId ? [a.planBlockId, b.planBlockId] : [b.planBlockId, a.planBlockId]
+      pushIssue('V1_OVERLAP', {
+        planBlockId: first,
+        counterpartId: second,
+        targetBlockIds: [a.planBlockId, b.planBlockId],
+        params: {
+          blockTitle: a.title,
+          otherTitle: b.title,
+          timeRange: `${WEEKDAY_LABELS_KO[a.dayIndex]} ${timeRangeOf(a)}`,
+        },
       })
     }
   }
 
-  // V2 고정 일정 충돌 (차단) — a plan block sitting on an immovable fixed schedule.
-  // A fixed schedule deactivated for THIS week (ST-F1-06 PLAN-33) is skipped: the
-  // whole point of "이번 주만 비활성화" is that it stops blocking for that week
-  // specifically, without touching any other week's V2 result.
+  // V2_FIXED_CONFLICT 고정 일정 충돌 (차단) — a plan block sitting on an immovable
+  // fixed schedule. A fixed schedule deactivated for THIS week (ST-F1-06
+  // PLAN-33) is skipped: the whole point of "이번 주만 비활성화" is that it stops
+  // blocking for that week specifically, without touching any other week's
+  // result.
   for (const block of inWeek) {
     const weekdayKey = WEEKDAY_KEYS[block.dayIndex]
     const startMin = minutesOfDay(block.startAt)
@@ -597,27 +672,44 @@ function computeValidationIssues(weekStartISO, blocks) {
       if (fixed.weekday !== weekdayKey) continue
       if (!isFixedActiveForWeek(fixed, weekStartISO)) continue
       if (startMin >= fixed.endMinutes || endMin <= fixed.startMinutes) continue
-      push('V2', [block.planBlockId], {
-        blockTitle: block.title,
-        otherTitle: fixed.title,
-        timeRange:
-          `${WEEKDAY_LABELS_KO[block.dayIndex]} ` +
-          `${formatMinutesLabel(fixed.startMinutes)} - ${formatMinutesLabel(fixed.endMinutes)}`,
+      pushIssue('V2_FIXED_CONFLICT', {
+        planBlockId: block.planBlockId,
+        // 상대는 plan_block이 아니라 fixed_schedule id다 — targetBlockIds에는
+        // 절대 섞지 않는다(존재하지 않거나 엉뚱한 블록을 강조하게 된다;
+        // planApi.normalizeIssue 자신의 comment 참고).
+        counterpartId: fixed.fixedScheduleId,
+        targetBlockIds: [block.planBlockId],
+        params: {
+          blockTitle: block.title,
+          otherTitle: fixed.title,
+          timeRange:
+            `${WEEKDAY_LABELS_KO[block.dayIndex]} ` +
+            `${formatMinutesLabel(fixed.startMinutes)} - ${formatMinutesLabel(fixed.endMinutes)}`,
+        },
       })
     }
   }
 
-  // V5 가용 시간 밖 배치 (경고) — TASK ONLY. ONB-03 defines 가용 시간 as "태스크를
-  // 배치할 수 있는 시간" — a TASK-placement capacity, not a constraint on when a
-  // SCHEDULE (a real, already-fixed appointment/meeting) may sit. An evening
-  // SCHEDULE block outside the day's window is not a violation of anything; it
-  // is the whole reason the window doesn't cover that hour in the first place.
-  // (owner-reported: "일정은 가용시간 범위 밖에 있어도 되는데 경고가 뜨네" — V5 used to
-  // fire for both block types because this loop never checked blockType at all.)
+  // V4_OUT_OF_AVAILABILITY 가용 시간 밖 배치 (경고) — TASK ONLY. ONB-03 defines
+  // 가용 시간 as "태스크를 배치할 수 있는 시간" — a TASK-placement capacity, not a
+  // constraint on when a SCHEDULE (a real, already-fixed appointment/meeting)
+  // may sit. An evening SCHEDULE block outside the day's window is not a
+  // violation of anything; it is the whole reason the window doesn't cover
+  // that hour in the first place. (owner-reported: "일정은 가용시간 범위 밖에
+  // 있어도 되는데 경고가 뜨네" — this rule used to fire for both block types
+  // because this loop never checked blockType at all.)
+  //
+  // W3 계약 대조: 팀 리드가 확인한 실서버 스키마상 이 규칙은 planBlockId 없이
+  // weekday만 낸다 — 이전엔 이 mock이 특정 블록(`block.planBlockId`)을 강조
+  // 대상으로 냈지만, 그 동작은 여기서 사라진다(그리드 칩 하이라이트 소실 —
+  // 패널 목록의 텍스트(blockTitle/timeRange)는 params로 여전히 남아 있으므로
+  // "무엇이 문제인지" 자체는 계속 읽을 수 있다). PR #19가 실제로 머지되면
+  // 이 rule이 정말 blockId를 안 주는지 재확인 필요 — 블록 단위 규칙이 블록
+  // 참조가 없다는 게 의외라 실서버로 재검증하는 편이 안전하다.
   //
   // BE NOTE: this is the DEV mock's rule engine — computeValidationIssues here
   // is never consulted once a real server answers OP-PLAN-VALIDATE. The real
-  // V5 rule needs this SAME blockType≠SCHEDULE exclusion; flagging so the BE
+  // rule needs this SAME blockType≠SCHEDULE exclusion; flagging so the BE
   // rule-engine story picks it up.
   for (const block of inWeek) {
     if (block.blockType !== 'TASK') continue
@@ -625,15 +717,21 @@ function computeValidationIssues(weekStartISO, blocks) {
     const startMin = minutesOfDay(block.startAt)
     const endMin = minutesOfDay(block.endAt)
     if (win && startMin >= win.startMinutes && endMin <= win.endMinutes) continue
-    push('V5', [block.planBlockId], {
-      blockTitle: block.title,
-      dayLabel: `${WEEKDAY_LABELS_KO[block.dayIndex]}요일`,
-      timeRange: timeRangeOf(block),
+    pushIssue('V4_OUT_OF_AVAILABILITY', {
+      weekday: WEEKDAY_KEY_TO_FULL[WEEKDAY_KEYS[block.dayIndex]],
+      params: {
+        blockTitle: block.title,
+        dayLabel: `${WEEKDAY_LABELS_KO[block.dayIndex]}요일`,
+        timeRange: timeRangeOf(block),
+      },
     })
   }
 
-  // V4 가용 시간 초과 (경고) — one issue per day whose TASK load exceeds that
-  // day's TASK-PLACEMENT CAPACITY.
+  // V3_CAPACITY_EXCEEDED 가용 시간 초과 (경고) — one issue per day whose TASK load
+  // exceeds that day's TASK-PLACEMENT CAPACITY. Day-level by nature (a total,
+  // not any one block's own placement), so — unlike V4_OUT_OF_AVAILABILITY
+  // above — this rule never had a natural single-block target even before W3;
+  // weekday-only matches the real contract cleanly here.
   //
   // 가용 창(WINDOW, 09–18) and 가용 시간(CAPACITY, "얼마나 태스크에 쓸 수 있는가")
   // are NOT the same thing — that's the distinction this rule turns on
@@ -654,17 +752,18 @@ function computeValidationIssues(weekStartISO, blocks) {
   // window and compared against the raw window length. That made this rule
   // UNFIRABLE in practice: two non-overlapping blocks' in-window minutes can
   // never exceed the window's own length (their clipped sum is bounded by the
-  // window itself), and the only way to exceed it is to overlap, which V1
-  // (차단) already reports. Do not go back to that shape.
+  // window itself), and the only way to exceed it is to overlap, which
+  // V1_OVERLAP (차단) already reports. Do not go back to that shape.
   //
   // capacity is clamped to >= 0 (Math.max) — a SCHEDULE that fills or exceeds
   // the window on its own (an all-day commitment) leaves NEGATIVE room, not
   // negative capacity; any TASK placed that day is then, correctly, entirely
   // "초과".
   //
-  // BE NOTE: same as V5/V6 — computeValidationIssues is the DEV mock's rule
-  // engine only; the real V4 rule needs this identical 창≠용량 distinction
-  // (capacity = window minus in-window SCHEDULE time; load = full TASK time).
+  // BE NOTE: same as the rules above/below — computeValidationIssues is the
+  // DEV mock's rule engine only; the real rule needs this identical 창≠용량
+  // distinction (capacity = window minus in-window SCHEDULE time; load = full
+  // TASK time).
   for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
     const dayBlocks = inWeek.filter((b) => b.dayIndex === dayIndex)
     if (dayBlocks.length === 0) continue
@@ -681,49 +780,61 @@ function computeValidationIssues(weekStartISO, blocks) {
     // A day with NO active window (weekend, or a weekday toggled off) now
     // gets capacity 0 — a genuine behavior change from the prior version,
     // where such a day was silent. Placing a TASK there is a real 초과 (its
-    // whole duration is over a 0-capacity day) AND is separately caught by V5
-    // (TASK-only, "가용 시간 밖 배치"): the two fire TOGETHER on a windowless
-    // day, one naming the day's total, the other naming the specific
-    // placement. This mirrors a pattern the panel already tolerates elsewhere
-    // (one block can carry several simultaneous issues — see
-    // WeeklyPage.jsx's violationsByBlockId), so it is left as two honest,
+    // whole duration is over a 0-capacity day) AND is separately caught by
+    // V4_OUT_OF_AVAILABILITY (TASK-only, "가용 시간 밖 배치"): the two fire
+    // TOGETHER on a windowless day, one naming the day's total, the other
+    // naming the specific placement. This mirrors a pattern the panel already
+    // tolerates elsewhere (one block can carry several simultaneous issues —
+    // see WeeklyPage.jsx's violationsByBlockId), so it is left as two honest,
     // differently-worded warnings rather than suppressing either.
     const taskBlocks = dayBlocks.filter((b) => b.blockType === 'TASK')
     const planned = taskBlocks.reduce((sum, b) => sum + durationOf(b), 0)
     if (planned <= capacity) continue
-    push(
-      'V4',
-      // Targets are the TASK blocks that make up the excess, not the
-      // SCHEDULE(s) that shrank capacity — selecting this item should answer
-      // "which of MY tasks would I move", and a schedule (a fixed personal
-      // commitment) isn't something V4 is asking the user to reconsider.
-      taskBlocks.map((b) => b.planBlockId),
-      {
+    pushIssue('V3_CAPACITY_EXCEEDED', {
+      weekday: WEEKDAY_KEY_TO_FULL[WEEKDAY_KEYS[dayIndex]],
+      params: {
         dayLabel: `${WEEKDAY_LABELS_KO[dayIndex]}요일`,
         overMinutes: Math.round(planned - capacity),
       },
-    )
+    })
   }
 
-  // V3 마감일 이후 배치 (경고) — the task's own dueDate vs the day it sits on.
+  // V6_AFTER_DUE_DATE 마감일 이후 배치 (경고) — the task's own dueDate vs the day
+  // it sits on. Block-level (unlike V3/V4 above) — planBlockId AND taskId both
+  // present, matching ValidationIssue.java's own comment ("요일 단위 규칙에서는
+  // planBlockId·taskId가 null" implies a BLOCK-level rule like this one carries
+  // both).
   for (const block of inWeek) {
     const task = block.taskId ? placedTaskData.get(block.taskId) : null
     const placedDate = dateOf(block.startAt)
     if (!task?.dueDate || placedDate <= task.dueDate) continue
-    push('V3', [block.planBlockId], {
-      blockTitle: block.title,
-      dueDate: task.dueDate,
-      placedDate,
+    pushIssue('V6_AFTER_DUE_DATE', {
+      planBlockId: block.planBlockId,
+      taskId: block.taskId ?? null,
+      targetBlockIds: [block.planBlockId],
+      params: {
+        blockTitle: block.title,
+        dueDate: task.dueDate,
+        placedDate,
+      },
     })
   }
 
-  // V6 버퍼 부족 (경고) — consecutive same-day blocks with a gap under the
-  // buffer. A gap of EXACTLY 0 (back-to-back, no breathing room at all) is the
-  // WORST case of "버퍼 부족", not an exemption from it — it must warn same as
-  // any gap under BUFFER_MIN_MINUTES (owner-reported: 5분 간격은 경고되는데 0분은
-  // 안 뜨는 건 규칙이 앞뒤가 안 맞았음). Only a NEGATIVE gap is skipped here —
-  // that is a genuine overlap, already reported as the 차단 V1 above; V6 has
-  // nothing further to add about it as a mere warning.
+  // V7_BUFFER_SHORTAGE 버퍼 부족 (경고) — consecutive same-day blocks with a gap
+  // under the buffer. A gap of EXACTLY 0 (back-to-back, no breathing room at
+  // all) is the WORST case of "버퍼 부족", not an exemption from it — it must
+  // warn same as any gap under BUFFER_MIN_MINUTES (owner-reported: 5분 간격은
+  // 경고되는데 0분은 안 뜨는 건 규칙이 앞뒤가 안 맞았음). Only a NEGATIVE gap is
+  // skipped here — that is a genuine overlap, already reported as the 차단
+  // V1_OVERLAP above; this rule has nothing further to add about it as a mere
+  // warning.
+  //
+  // ADR-0013's "쌍 규칙"(counterpartId) convention names ONLY V1_OVERLAP/
+  // V2_FIXED_CONFLICT — this rule is NOT among them, so it gets a single
+  // representative `planBlockId` (the later/crowding block), no counterpartId.
+  // `targetBlockIds` still carries BOTH blocks as a mock-only convenience (the
+  // review panel/grid can keep highlighting the whole crowded pair in DEV);
+  // a real server, sending only the single planBlockId, would highlight one.
   for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
     const dayBlocks = inWeek.filter((b) => b.dayIndex === dayIndex)
     for (let i = 1; i < dayBlocks.length; i += 1) {
@@ -731,10 +842,14 @@ function computeValidationIssues(weekStartISO, blocks) {
       const next = dayBlocks[i]
       const gap = minutesOfDay(next.startAt) - minutesOfDay(prev.endAt)
       if (gap < 0 || gap >= BUFFER_MIN_MINUTES) continue
-      push('V6', [prev.planBlockId, next.planBlockId], {
-        blockTitle: prev.title,
-        otherTitle: next.title,
-        gapMinutes: gap,
+      pushIssue('V7_BUFFER_SHORTAGE', {
+        planBlockId: next.planBlockId,
+        targetBlockIds: [prev.planBlockId, next.planBlockId],
+        params: {
+          blockTitle: prev.title,
+          otherTitle: next.title,
+          gapMinutes: gap,
+        },
       })
     }
   }
@@ -782,16 +897,22 @@ function fixedScheduleSpans(weekStartISO) {
 }
 
 // RB-PLAN-03 최소 변경안 — move ONLY the blocks currently named by a 차단
-// violation (V1 겹침 / V2 고정 일정 충돌) to the NEXT free slot after their
-// current position ("인접 가용 시간"); every other block is untouched. Returns
-// null when there is nothing blocking to fix — a real "no change needed"
-// result, not a failure.
+// violation (V1_OVERLAP 겹침 / V2_FIXED_CONFLICT 고정 일정 충돌) to the NEXT free
+// slot after their current position ("인접 가용 시간"); every other block is
+// untouched. Returns null when there is nothing blocking to fix — a real "no
+// change needed" result, not a failure.
 function buildMinimalChange(week, blocks) {
   const days = weekDays(week.weekStartDate)
   const fixedSpans = fixedScheduleSpans(week.weekStartDate)
   const issues = computeValidationIssues(week.weekStartDate, blocks)
+  // W3 field rename: `code` → `ruleId` (this issue shape now matches the real
+  // ValidationIssue contract — see computeValidationIssues' own SHAPE header).
+  // `targetBlockIds` is still the mock-only convenience list (both rules here
+  // are pair-rules that always populate it) — never empty for V1_OVERLAP/
+  // V2_FIXED_CONFLICT, so this strategy's own "which blocks to move" logic is
+  // unaffected by V3/V4's new weekday-only (blockless) shape above.
   const conflictingIds = new Set(
-    issues.filter((i) => MOCK_BLOCKING_CODES.has(i.code)).flatMap((i) => i.targetBlockIds),
+    issues.filter((i) => MOCK_BLOCKING_CODES.has(i.ruleId)).flatMap((i) => i.targetBlockIds ?? []),
   )
   if (conflictingIds.size === 0) return null
 
@@ -1015,7 +1136,12 @@ function computeDerived(week) {
   // the first dry-run answers, so it runs the same rules the dry-run does — a
   // placeholder here would make the badge briefly lie on every week change.
   const issues = computeValidationIssues(week.weekStartDate, blocks)
-  const blockingCodes = issues.filter((i) => MOCK_BLOCKING_CODES.has(i.code))
+  // W3 field rename: `code` → `ruleId`, values re-keyed to the real server
+  // rule names (see computeValidationIssues' own SHAPE header) — this filter
+  // (and buildMinimalChange's own copy above) must read the SAME field name
+  // MOCK_BLOCKING_CODES/pushIssue now use, or this badge silently freezes at
+  // 0/0 regardless of what the rules actually find.
+  const blockingCodes = issues.filter((i) => MOCK_BLOCKING_CODES.has(i.ruleId))
   return {
     ...week,
     blocks,
@@ -1368,7 +1494,15 @@ export const mockBackend = {
       // From then on this explicit value wins over the derived one, exactly
       // like every other persisted field here.
       status: body.status ?? src.status ?? derivePlanTaskStatus(taskId),
-      category: body.category !== undefined ? body.category : src.category,
+      // W3 fix (Thomas 리뷰 MAJOR): body.category → body.categoryId. 편집 폼은
+      // categoryId만 보낸다(TaskEditModal) — 이 필드가 여전히 `category`를
+      // 읽던 탓에 body.category가 항상 undefined였고, 그래서 사용자가 카테고리를
+      // 골라 저장해도 조용히 src.category(옛 필드, 늘 null)로 되돌아갔다 —
+      // 저장 성공 토스트는 뜨는데 값은 반영 안 되는 최악의 실패 방식이었다.
+      // `undefined`-check(⁠`??`가 아님)는 projectFixtures의 동일 필드와 같은
+      // 이유: "없음"으로 지우는 것도 정당한 값이라 falsy만으로 "안 보냄"을
+      // 오판하면 안 된다.
+      categoryId: body.categoryId !== undefined ? body.categoryId : src.categoryId,
       memo: body.memo ?? src.memo,
     })
     src.version = currentVersion + 1
@@ -1487,11 +1621,20 @@ export const mockBackend = {
     await delay(50)
     const week = findWeekByPlanId(weeklyPlanId)
     if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
-    const issues = computeValidationIssues(week.weekStartDate, blocks ?? []).map((issue) => ({
-      ...issue,
-      severity: MOCK_BLOCKING_CODES.has(issue.code) ? 'blocking' : 'warning',
-    }))
-    return { issues }
+    // W3: pushIssue (computeValidationIssues) now stamps each issue's own
+    // `severity` (server-shaped 'BLOCK'/'WARNING') at creation time — this used
+    // to re-derive it here from the old bare `code`, which is no longer needed
+    // (and would have silently stopped matching anything once the codes were
+    // re-keyed to the real ruleId format, same trap the two consumers above
+    // were just fixed for).
+    const issues = computeValidationIssues(week.weekStartDate, blocks ?? [])
+    // ADR-0013: savable = 차단(BLOCK) 0건. The mock computes this itself (no
+    // controller exists yet to ask) so planApi.normalizeValidationPayload's own
+    // `savable` field has a real value to carry even on the mock path — see
+    // that function's own header for why the derived fallback and this value
+    // are guaranteed to agree.
+    const savable = !issues.some((i) => i.severity === 'BLOCK')
+    return { issues, savable }
   },
 
   // PUT /weekly-plans/{weeklyPlanId} — PLAN-03 저장(확정). Flips the week to

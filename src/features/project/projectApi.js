@@ -92,22 +92,24 @@ function normalizeProject(p) {
 /*
   실서버 대조 (2026-07-29, TaskUpdateRequest): 편집 PATCH가 받는 건
   {title, memo, estimatedMinutes, priority, dueDate, categoryId, version}
-  뿐이다. 편집 폼이 함께 보내던 두 필드는 각각 이렇게 어긋났다:
+  뿐이다. 편집 폼이 함께 보내던 필드 중 하나만 여전히 걸러낸다:
 
   - `status` — `@Null` 이라 담겨 오기만 해도 400("status는 지정할 수 없습니다").
     상태는 전용 엔드포인트(PATCH /tasks/{id}/status)만 바꾼다. 즉 지금까지
     태스크 편집 저장은 실서버에서 항상 실패했다. 폼의 상태 라디오는 그대로
     두되(모의 서버에선 계속 동작한다) 실 요청에서는 빼낸다 — 실서버 상태
     변경은 완료 토글이 담당한다.
-  - `category` — 서버 필드는 `categoryId`(UUID)인데 이 앱의 카테고리는 아직
-    GET /categories 자체가 404(미구현)라 목업 문자열이다. 문자열을 UUID 자리에
-    실어 보내면 그 자체로 400이므로, 실 카테고리 엔드포인트가 생기기 전까지는
-    보내지 않는다(모의 서버 쪽은 지금처럼 왕복한다).
+
+  `category`(문자열)를 지우던 규칙은 여기서 사라졌다(W3, 실 /task-categories
+  CRUD 대조): 그 문자열은 GET /categories 자체가 404였던 시절의 목업
+  placeholder였고, 서버의 실제 `categoryId`(UUID) 자리에 그대로 실으면 400이라
+  통째로 빼야 했다. 이제 편집 폼(TaskEditModal)이 진짜 categoryId(UUID, 또는
+  "없음"의 null)를 담아 보내므로 더 이상 뺄 이유가 없다 — 그 필드가 그대로
+  살아서 PATCH에 실린다.
 */
 function toTaskUpdateBody(body) {
   const request = { ...body }
   delete request.status
-  delete request.category
   return request
 }
 
@@ -135,10 +137,15 @@ function normalizeTask(t) {
     dueDate: t.dueDate ?? t.due_date ?? null,
     status: t.status ?? 'UNASSIGNED', // UNASSIGNED · IN_PROGRESS · COMPLETED (ERD tasks.status)
     dueSoon: t.dueSoon ?? t.due_soon ?? false, // [가정] — no documented "마감 임박" flag; see §PROJ.0.2
-    // [가정—신규] (ST-F1-09 AC-1 카테고리 Select): no ERD column/endpoint for a
-    // task category exists yet (see getCategories below). `null` renders as
-    // the edit form's "없음" option and round-trips through PATCH unchanged.
-    category: t.category ?? null,
+    // 실서버 대조 (W3, TaskCategoryController): categoryId는 실제 UUID 필드다
+    // — 이전엔 GET /categories 자체가 404라 문자열 목업이었다(위 category
+    // 주석은 그 시절 유물, 이번에 categoryId로 교체됐다). `null`은 편집 폼의
+    // "없음" 옵션이자, 서버가 카테고리 삭제 시 FK(ON DELETE SET NULL)로 자동
+    // 되돌리는 값과 같다. 이 필드 자체는 표시용 이름을 담지 않는다 — 이름은
+    // useProjectData.useTaskCategories의 프리셋 목록에서 이 id로 조회해
+    // 이어 붙인다(그 훅 자신의 헤더 참고 — 여러 화면이 프리셋을 한 번만 받아
+    // 공유하는 이유).
+    categoryId: t.categoryId ?? t.category_id ?? null,
     // [가정—신규] (ST-F1-09 AC-4): optimistic-lock counter for the edit
     // page's conflict overlay. No other task write path in this codebase
     // needed it (create has nothing to conflict with; delete/schedule don't
@@ -343,19 +350,6 @@ export function getTask(taskId) {
     () => apiClient.get(`/tasks/${taskId}`),
     () => (isPlanTaskId(taskId) ? planMockBackend.getTask(taskId) : mockBackend.getTask(taskId)),
   ).then(normalizeTask)
-}
-
-/**
- * OP-TASK-CATEGORIES → GET /categories ([가정—신규], ST-F1-09 AC-1). No
- * category endpoint or ERD column exists yet for tasks; see normalizeTask's
- * own `category` note. A small static list stands in until BE-1 defines the
- * real model.
- */
-export function getCategories() {
-  return withDevFallback(
-    () => apiClient.get('/categories'),
-    () => mockBackend.getCategories(),
-  ).then((r) => unwrapList(r, 'categories'))
 }
 
 /**

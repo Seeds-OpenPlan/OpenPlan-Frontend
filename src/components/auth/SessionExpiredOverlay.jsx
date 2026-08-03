@@ -67,7 +67,9 @@ export function SessionExpiredOverlay() {
   }
 
   const failureCopy =
-    loginMutation.error?.code === 'E-AUTH-401'
+    // 실서버 E-AUTH-001 "이메일 또는 비밀번호가 올바르지 않습니다"(401) — 실서버
+    // 대조 2026-08-03, 존재하지 않는 `E-AUTH-401`을 대체.
+    loginMutation.error?.code === 'E-AUTH-001'
       ? '이메일 또는 비밀번호가 올바르지 않습니다'
       : loginMutation.isError
         ? '다시 로그인하지 못했습니다'

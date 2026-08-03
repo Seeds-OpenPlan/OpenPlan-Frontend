@@ -3,15 +3,14 @@
   HELP-01~06 · OPS-01/02). Same latency/id conventions as settingsFixtures.js.
 
   UNLIKE settingsApi.js's own [가정-확장] resources, 문의(support_tickets)·
-  FAQ(help_articles)·공지(announcements) are BE1(전창현)'s stories ST-B1-13/14
-  — "완료·머지 대기" per `references/specs/2주차 작업 분배/02. 스토리 스펙
-  (AC·엔드포인트).md` L134-139, i.e. a REAL backend for these already exists,
-  just not merged/documented in THIS checkout yet. The field names below are
-  this PR's best-effort guess (service-stories.md §SS14's "소유 상태" line:
-  `support_ticket.status`(접수/처리중/답변완료/종료)·`answer_content`) rather
-  than an invented shape from nothing — still flagged [가정] since the exact
-  REST paths/casing aren't visible here, but expect a SMALLER diff at real-API
-  swap time than a from-scratch guess would need.
+  FAQ(help_articles)·공지(announcements) are BE1(전창현)'s stories ST-B1-13/14,
+  and all three are now CONFIRMED against the real backend (문의·FAQ 2026-07-29,
+  공지 2026-08-04 — see helpApi.js's own per-resource comments for each
+  contract). The field names below stay this file's OWN convention on purpose
+  even where they differ from the server's (e.g. `noticeId`/`body` vs the
+  server's `announcementId`/`content`) — helpApi.js's normalize* adapters are
+  the one place that absorbs the difference, same choice planApi.js makes for
+  casing.
 
   Ownership (`userId`) matters here specifically for HELP AC-1/NFR-030: one
   ticket below belongs to someone OTHER than the dev-auth fixed user
@@ -118,21 +117,29 @@ const faqArticles = [
   },
 ]
 
+// announcementType — 실서버 대조 2026-08-04, AnnouncementType.java(MAINTENANCE·
+// INCIDENT·CHANGE 3종 enum). 이전엔 이 mock에 이 필드 자체가 없었다 — helpApi.js의
+// normalizeAnnouncement가 아무 값도 못 읽어 dev에서 이 필드를 한 번도 exercise
+// 못 하는 채였다(카테고리 스토리에서 mock이 실서버와 다른 모양이라 난 문제와
+// 같은 종류). 화면이 아직 이 값을 안 읽는 건 그대로다 — mock 데이터 모양만 맞춘다.
 let announcements = [
   {
     noticeId: 'notice-1',
+    announcementType: 'MAINTENANCE',
     title: '7월 정기 점검 안내',
     body: '7월 마지막 주 화요일 새벽 2시~4시 사이 서비스 점검이 진행됩니다. 해당 시간에는 일시적으로 접속이 제한될 수 있습니다.',
     publishedAt: '2026-07-22T09:00:00.000Z',
   },
   {
     noticeId: 'notice-2',
+    announcementType: 'CHANGE',
     title: '재계획 대안 기능 개선',
     body: '재계획 대안 생성 속도가 개선되었고, 각 대안의 변경 근거가 더 자세히 표시됩니다.',
     publishedAt: '2026-07-18T09:00:00.000Z',
   },
   {
     noticeId: 'notice-3',
+    announcementType: 'CHANGE',
     title: '서비스 이용약관 개정 안내',
     body: '개인정보 처리방침 일부 조항이 개정되어 8월 1일부터 적용됩니다.',
     publishedAt: '2026-07-10T09:00:00.000Z',

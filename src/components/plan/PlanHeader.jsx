@@ -47,6 +47,14 @@ import { Badge } from '../common/Badge'
 export function PlanHeader({
   blockingCount = 0,
   warningCount = 0,
+  // W3 2차 리뷰 (ADR-0013): the server's own "savable = 차단 0건" verdict —
+  // planApi.normalizeValidationPayload already prefers this over a derived
+  // count when the server sends one (see that function's own header). Default
+  // derives from blockingCount so this stays correct for any caller that
+  // doesn't pass it explicitly (today there is exactly one caller,
+  // WeeklyPage.jsx, and it always does) — the two are DEFINED to always agree,
+  // so this default is not a silent behavior change, only a safety net.
+  savable = blockingCount === 0,
   // The counts shown were not computed for the current block set → cannot save.
   validationStale = false,
   // The last dry-run didn't answer; the counts shown are the previous result.
@@ -59,7 +67,11 @@ export function PlanHeader({
   readOnly,
 }) {
   const hasIssues = blockingCount > 0 || warningCount > 0
-  const blockedBySaveGate = blockingCount > 0
+  // `!savable` — not `blockingCount > 0` — is the actual save-blocking verdict
+  // now (server-authoritative); the 차단 BADGE above still counts by severity
+  // (그 자체로 "몇 건" 정보 표시가 목적이라 값이 남는다), it just no longer
+  // ALSO decides whether the button is disabled.
+  const blockedBySaveGate = !savable
   const saveDisabled = !canWrite || blockedBySaveGate || validationStale
   // Offline is the only reason still rendered as visible text under Save — see
   // the intro comment for why 차단 and "still validating" no longer are.

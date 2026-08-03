@@ -6,6 +6,7 @@ import { ErrorState } from '../common/ErrorState'
 import { MinuteStepper } from '../plan/MinuteStepper'
 import { priorityLabelKO } from '../../features/plan/planPlacement'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useTaskCategories } from '../../features/project/useProjectData'
 
 /*
   OVL-TASK-CREATE (ui-spec §PROJ.8, PROJ-17). 예상시간 prefill = 60분: the
@@ -23,6 +24,12 @@ import { useIsDesktop } from '../../hooks/useMediaQuery'
   as-is (harmless, still correct if ever reused) rather than stripped, since
   removing a working code path isn't this story's job; ProjectWorkspacePage
   no longer passes `task`, so in practice this component is create-only again.
+
+  카테고리 Select (W3, 실 /task-categories CRUD 대조): POST /projects/{id}/tasks
+  도 TaskUpdateRequest와 같은 `categoryId`(UUID) 필드를 받는다(TaskCreateRequest
+  실서버 대조 확인) — TaskEditModal의 편집 폼과 같은 프리셋 목록(useTaskCategories,
+  한 캐시 공유)을 여기서도 그대로 쓴다. "없음"은 빈 문자열 상태를 null로
+  변환해 보낸다(TaskEditModal과 동일한 관례).
 */
 
 const FIELD =
@@ -39,8 +46,10 @@ export function TaskCreateForm({ task, onClose, onSubmit, submitting = false, su
   const [estimatedMinutes, setEstimatedMinutes] = useState(task?.estimatedMinutes ?? 60)
   const [priority, setPriority] = useState(task?.priority ?? 2)
   const [dueDate, setDueDate] = useState(task?.dueDate ?? '')
+  const [categoryId, setCategoryId] = useState(task?.categoryId ?? '')
   const [memo, setMemo] = useState(task?.memo ?? '')
 
+  const categoriesQuery = useTaskCategories()
   const trimmedTitle = title.trim()
 
   const submit = (e) => {
@@ -51,6 +60,7 @@ export function TaskCreateForm({ task, onClose, onSubmit, submitting = false, su
       estimatedMinutes,
       priority,
       dueDate: dueDate || null,
+      categoryId: categoryId || null,
       memo: memo.trim(),
     })
   }
@@ -92,6 +102,18 @@ export function TaskCreateForm({ task, onClose, onSubmit, submitting = false, su
       <label className="flex flex-col gap-1">
         <span className="text-caption font-medium text-text-muted">마감일</span>
         <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={FIELD} />
+      </label>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-caption font-medium text-text-muted">카테고리</span>
+        <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={FIELD}>
+          <option value="">없음</option>
+          {(categoriesQuery.data ?? []).map((c) => (
+            <option key={c.taskCategoryId} value={c.taskCategoryId}>
+              {c.name}
+            </option>
+          ))}
+        </select>
       </label>
 
       <label className="flex flex-col gap-1">

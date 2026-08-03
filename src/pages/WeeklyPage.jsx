@@ -290,6 +290,16 @@ function WeeklyPage() {
   const warningCount = validation.hasResult
     ? validation.warningCount
     : (plan?.validation?.warningCount ?? 0)
+  // W3 2차 리뷰 (ADR-0013 "savable = 차단 0건"): the save gate now defers to the
+  // SERVER's own verdict (validation.savable — planApi.normalizeValidationPayload
+  // already prefers it over a derived count, see that function's header) rather
+  // than re-deriving "차단이 있는가" from blockingCount itself. Before the first
+  // dry-run answers, mirrors blockingCount's own pre-result fallback (the week
+  // payload's cached blockCount) for the identical reason: not knowing yet must
+  // not read as "safe to save".
+  const savable = validation.hasResult
+    ? validation.savable
+    : (plan?.validation?.blockCount ?? 0) === 0
 
   /*
     Layer 1 input: the worst severity per block plus how many issues it carries.
@@ -888,7 +898,10 @@ function WeeklyPage() {
     // same conditions, but this handler is also the one path a stray Enter or a
     // stale click can still reach, and confirming a plan nobody checked is the
     // exact failure this gate exists to prevent.
-    if (!plan || !canWrite || blockingCount > 0 || validation.stale) return
+    //
+    // `!savable` (W3 2차 리뷰) replaces the old `blockingCount > 0` check here —
+    // see `savable`'s own comment above for why the server's verdict must win.
+    if (!plan || !canWrite || !savable || validation.stale) return
     if (warningCount > 0) {
       setConfirmSaveOpen(true)
       return
@@ -926,12 +939,30 @@ function WeeklyPage() {
   }
 
   /*
-    AC-4 — the confirm race. A 409 means someone (another tab/device) confirmed a
-    newer version of this week first, so what we validated is no longer what the
-    server holds. The panel is re-synced from the error's own `details.issues`
-    when it carries them, and from a forced dry-run when it doesn't; the week is
-    refetched either way, so the grid, the counts and the save gate all end up
-    describing the CURRENT server state rather than the one we submitted.
+    AC-4 — two DIFFERENT 409s can land here, confirmed against the real error
+    catalog (ErrorCode.java/errors.properties, 대조 2026-08-03), and they must
+    not share one explanation:
+      E-PLAN-004 — NOT a race. The server re-ran validation on confirm and
+        found blocking items still present (PLAN-28's own rule, enforced
+        again server-side). This is the SAME "차단" state ReviewPanel/
+        PlanHeader already model for the client-side dry-run.
+      E-COM-006  — the actual optimistic-lock race: someone (another tab/
+        device) confirmed a newer version of this week first, so what we
+        validated is no longer what the server holds.
+    (이전엔 이 둘을 구분하지 않고 아무 409나 "확정 레이스"로 취급해 하나의 문구를
+    보여줬다 — E-PLAN-004는 검증 게이트 차단이지 레이스가 아니라서, 그 문구가
+    사용자에게 엉뚱한 원인을 확신 있게 알려주는 셈이었다. 실서버 카탈로그
+    대조로 발견·정정.)
+
+    Both still get the SAME re-sync: the panel is re-synced from the error's own
+    `details.issues` when it carries them, and from a forced dry-run when it
+    doesn't; the week is refetched either way, so the grid, the counts and the
+    save gate all end up describing the CURRENT server state rather than the one
+    we submitted. Only the TOAST COPY differs by cause. A 409 whose code is
+    neither of the two known ones still gets this same re-sync (a 409 on this
+    endpoint always means "our picture of this week disagrees with the
+    server's" one way or another) but earns the neutral generic toast instead of
+    guessing which of the two specific explanations applies.
 
     The save button goes back to DISABLED immediately and without a dedicated
     conflict flag: both branches below make `validation.stale` true — adopted
@@ -944,24 +975,27 @@ function WeeklyPage() {
     would leave the debounce loop with nothing to react to and the gate shut
     forever.
 
-    Nor is OVL-CONFLICT shown here — that overlay is not mounted by any screen yet
-    (errorRouting.js only catalogs the routing), so an in-panel refresh plus one
-    toast is the whole surface, with no duplicate conflict UI to collide with.
+    Nor is OVL-CONFLICT shown here for E-COM-006 — that overlay is not mounted
+    by any screen yet (errorRouting.js only catalogs the routing), so an
+    in-panel refresh plus one toast is the whole surface, with no duplicate
+    conflict UI to collide with.
   */
   const handleSaveError = (error) => {
-    // Match the CODE first and fall back to the status: `E-PLAN-004` is the
-    // confirm race specifically, while a bare 409 on this endpoint could be any
-    // optimistic-lock rejection — telling the user "다른 곳에서 먼저 저장되었습니다"
-    // about an unrelated conflict would be a confident, wrong explanation.
-    const isConfirmRace = error?.code === 'E-PLAN-004' || error?.status === 409
-    if (isConfirmRace) {
+    const isValidationBlocked = error?.code === 'E-PLAN-004'
+    const isVersionConflict = error?.code === 'E-COM-006'
+    const isConflictLike = isValidationBlocked || isVersionConflict || error?.status === 409
+    if (isConflictLike) {
       const serverIssues = error?.details?.issues
       if (Array.isArray(serverIssues)) validation.applyServerIssues(serverIssues)
       validation.revalidate(blocks)
       planQuery.refetch()
       toast({
         tone: 'error',
-        message: '이 주간 계획이 다른 곳에서 먼저 저장되었습니다. 검토 항목을 다시 확인해 주세요',
+        message: isValidationBlocked
+          ? '차단 항목이 남아 있어 저장할 수 없습니다. 검토 항목을 확인해 주세요'
+          : isVersionConflict
+            ? '이 주간 계획이 다른 곳에서 먼저 저장되었습니다. 검토 항목을 다시 확인해 주세요'
+            : systemMessages.error.writeTitle,
       })
       return
     }
@@ -1095,6 +1129,7 @@ function WeeklyPage() {
       <PlanHeader
         blockingCount={blockingCount}
         warningCount={warningCount}
+        savable={savable}
         validationStale={validation.stale}
         validationDelayed={validation.delayed}
         onOpenReview={() => setReviewOpen(true)}
