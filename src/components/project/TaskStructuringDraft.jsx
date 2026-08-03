@@ -3,6 +3,7 @@ import { EmptyState } from '../common/EmptyState'
 import { Button } from '../common/Button'
 import { MinuteStepper } from '../plan/MinuteStepper'
 import { clampPriority, priorityLabelKO } from '../../features/plan/planPlacement'
+import { snapDuration } from '../../features/plan/planTime'
 import { useCreateStructuringDraft, useApplyStructuringDraft } from '../../features/project/useProjectData'
 import { toast } from '../../hooks/useToasts'
 
@@ -27,12 +28,18 @@ export function TaskStructuringDraft({ projectId, project, onCreateTaskDirect, d
         onSuccess: (result) => {
           setDraft({
             draftId: result.draftId,
-            // The draft's priorities come from the STRUCTURING engine, not from
-            // a form, so they're the one place a value outside 1~3 could reach
-            // the row's select — which would render it with nothing selected.
+            // The draft's priorities/estimates come from the STRUCTURING
+            // engine, not a form, so this is the one place each could arrive
+            // outside what the rest of the app assumes: priority outside 1~3
+            // would reach the row's select with nothing selected, and an
+            // estimate that isn't a 5-minute multiple would sit in the
+            // MinuteStepper below unsnapped until the user happens to nudge
+            // it — and would 400 if "선택 항목 저장" ever forwards it verbatim
+            // to POST .../tasks (5분배수 필수, see projectApi.js's own note).
             tasks: (result.tasks ?? []).map((t) => ({
               ...t,
               priority: clampPriority(t.priority),
+              estimatedMinutes: snapDuration(t.estimatedMinutes),
               checked: true,
             })),
           })

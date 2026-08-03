@@ -52,12 +52,14 @@ import { findFirstFreeSlot } from '../features/plan/planPlacement'
 import { getPopoverAnchorStyle } from '../utils/popoverPosition'
 import {
   addWeeksISO,
+  clampBlockSpan,
   composeTimestamp,
   currentWeekStartISO,
   dateOf,
   isPastWeek,
   MINUTES_PER_DAY,
   minutesOfDay,
+  snapDuration,
   WEEKDAY_KEYS,
   weekDays as weekDaysOf,
 } from '../features/plan/planTime'
@@ -496,13 +498,14 @@ function WeeklyPage() {
     // — the panel's task cards already stop offering drag/quick-place while
     // locked (UnplacedPanel's `disabled`, below), so this is the backstop.
     if (!plan || planLocked) return
-    const duration = task.estimatedMinutes ?? 60
-    let startMin = slot.startMin
-    let endMin = startMin + duration
-    if (endMin > MINUTES_PER_DAY) {
-      endMin = MINUTES_PER_DAY
-      startMin = endMin - duration
-    }
+    // clampBlockSpan folds two invariant checks into one call: it snaps the
+    // task's estimate to the 5-minute grid the server enforces (E-COM-009 —
+    // an AI-suggested or partial-remainder estimate might not already be a
+    // multiple of 5, see planTime.js's own header) AND keeps the placement
+    // from crossing midnight, exactly like the hand-rolled clamp this
+    // replaced did — see that helper's own comment for why both live in one
+    // place now instead of six.
+    const { startMin, endMin } = clampBlockSpan(slot.startMin, task.estimatedMinutes ?? 60)
     const dayISO = days[slot.dayIndex]
     placeTask({
       weeklyPlanId: plan.weeklyPlanId,
@@ -540,12 +543,21 @@ function WeeklyPage() {
   })
 
   // Keyboard "quick place": drop the task in the first free slot of the week.
+  //
+  // Snapped HERE, before the search, not only in placeTaskAt's own clamp: the
+  // slot search below only guarantees enough room for the durationMin it was
+  // GIVEN. If that were the raw (possibly non-5-aligned) estimate and
+  // placeTaskAt's clampBlockSpan then rounded it UP, the placed block could
+  // overrun the very gap the search just confirmed was free — snapping once,
+  // before the search, is what keeps "what we searched for" and "what we
+  // place" the same number.
   const quickPlace = (task) => {
+    const duration = snapDuration(task.estimatedMinutes ?? 60)
     const slot = findFirstFreeSlot({
       days,
       availability,
       blocks,
-      durationMin: task.estimatedMinutes ?? 60,
+      durationMin: duration,
     })
     if (slot) placeTaskAt(task, slot)
     else toast({ tone: 'info', message: '이번 주에 배치할 빈 시간이 부족합니다' })
@@ -563,11 +575,21 @@ function WeeklyPage() {
 
   // Auto placement (RB-PLAN-01): announce progress, then hold the returned draft
   // as an overlay until the user applies or cancels it.
+  //
+  // No `priorityType` sent (owner/lead review, W2 API alignment): this
+  // button has exactly ONE ordering, and its own toast text says which one —
+  // "우선순위·마감일 순" is byPriorityThenDue, postAutoPlacements's own
+  // no-argument default (see its header). This USED to hardcode
+  // `priorityType: 'DEADLINE_FIRST'`, which was harmless only because the
+  // mock silently ignored the argument; now that the mock branches on it for
+  // real, sending that literal would have flipped this button to due-date
+  // -first ordering while still claiming "우선순위·마감일 순" in the toast —
+  // exactly the "조용히 바뀌는 정렬" this whole change was meant to prevent.
   const handleAutoPlace = () => {
     if (!plan) return
     toast({ tone: 'info', message: '우선순위·마감일 순으로 배치 중입니다…' })
     autoPlace.mutate(
-      { weeklyPlanId: plan.weeklyPlanId, priorityType: 'DEADLINE_FIRST' },
+      { weeklyPlanId: plan.weeklyPlanId },
       { onSuccess: (result) => setAutoDraft(result) },
     )
   }

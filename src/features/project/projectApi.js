@@ -25,6 +25,9 @@ import { apiClient } from '../../api/client'
 import { mockBackend } from './projectFixtures'
 import { mockBackend as planMockBackend } from '../plan/planFixtures'
 import { clampPriority } from '../plan/planPlacement'
+import { snapDuration } from '../plan/planTime'
+import { unwrapList } from '../../api/unwrap'
+import { fetchAllPages } from '../../api/paging'
 
 // `plan-task-*` ids are minted only by planFixtures.js's own seed/placement
 // code (never by this store) — see that file's own comment on the prefix.
@@ -40,23 +43,13 @@ async function withDevFallback(realCall, mockCall) {
 }
 
 /*
-  Shape guard for every list-shaped endpoint below (W2 live-connect finding,
-  2026-07-26). client.js's response interceptor unwraps the real server's
-  `{data, meta}` envelope down to the bare `data` value — for THESE endpoints
-  that value is already an array (confirmed live against GET /projects).
-  The DEV mock, however, still wraps its array in a named key (`{projects:
-  [...]}`, `{tasks: [...]}`, etc.) because that key is also this mock's own
-  in-memory shape. Reading `r?.<key> ?? []` alone (the pre-W2 code) silently
-  returned an EMPTY list against the real server — no error, no console
-  warning, just a blank screen — because `r.projects` is `undefined` on an
-  array. This helper accepts both without the caller needing to know which
-  backend answered.
+  이 파일의 목록 함수는 전부 `api/unwrap.js`의 `unwrapList`를 쓴다. 예전엔 이
+  파일 안에 같은 일을 하는 `toList`가 따로 있었는데(W2 실연결 때 여기서 먼저
+  터진 버그의 응급 처치였다), 공용 헬퍼가 생긴 뒤로도 한동안 둘이 공존했다.
+  같은 규칙을 두 곳에서 관리하면 한쪽만 고쳐지는 게 시간 문제라 하나로 합쳤다
+  — 왜 이 가드가 필요한지(실서버는 벗겨진 배열, mock은 이름 붙은 객체)는
+  unwrap.js 자신의 헤더에 있다.
 */
-function toList(r, key) {
-  if (Array.isArray(r)) return r
-  return r?.[key] ?? []
-}
-
 /*
   ASSUMPTION (§보고): the 07 spec's list/detail response samples are thin
   (`{projects: []}` / `{projectId, title, description}`) and document no
@@ -129,7 +122,13 @@ function normalizeTask(t) {
     // so both TaskCreateForm's create mode AND TaskEditPage's edit mode fall
     // back to this SAME hardcoded 60 until that settings surface exists —
     // one fallback number in one place, not a second copy on the edit page.
-    estimatedMinutes: t.estimatedMinutes ?? t.estimated_minutes ?? 60,
+    //
+    // snapDuration wraps the whole fallback chain: POST /projects/{id}/tasks
+    // itself requires estimatedMinutes to be a 5-minute multiple (BE-confirmed
+    // openapi contract), and this is the value TaskEditModal seeds its
+    // MinuteStepper from AND re-sends untouched if the user never touches
+    // that field — so an odd value here would round-trip straight back out.
+    estimatedMinutes: snapDuration(t.estimatedMinutes ?? t.estimated_minutes ?? 60),
     // 1~3 only — 태스크 편집 prefills this select and 프로젝트 복제 copies it
     // straight into a create body (see clampPriority).
     priority: clampPriority(t.priority),
@@ -172,12 +171,30 @@ function normalizeTask(t) {
  * and the 진행중 tab is the only place it visually fits). Always fetches the
  * FULL list; the page splits it into tabs client-side (진행중 tab = anything
  * not CLOSED, 종료 tab = CLOSED) — same "fetch once, filter client-side"
- * choice usePlanData.useUnplacedTasks makes for its own project chips. */
+ * choice usePlanData.useUnplacedTasks makes for its own project chips.
+ *
+ * PAGING (W2+ meta 유실 해소): this endpoint pages too (server default
+ * size=20, max 100) — walked in full via `fetchAllPages` (api/paging.js), the
+ * same helper taskApi.getUnplacedTasks uses, rather than trusting one page to
+ * be everyone's whole project list. Also switched to `unwrapList` here: the
+ * bare `r?.projects ?? []` this used to read is exactly the "real server
+ * returns an array, not `{projects:[...]}`" bug unwrap.js's own header
+ * describes as having "already surfaced once in projectApi" — it had crept
+ * back in on just these two functions (see getProjectTasks below too). */
 export function getProjects() {
-  return withDevFallback(
-    () => apiClient.get('/projects'),
-    () => mockBackend.getProjects(),
-  ).then((r) => toList(r, 'projects').map(normalizeProject))
+  const realCall = (page, size) => apiClient.get('/projects', { params: { page, size }, withMeta: true })
+  // Mock fallback is wired ONLY into page 1 (fetchAllPages's own header
+  // comment explains why: letting a LATER page also fall back risks
+  // splicing page-1-real items together with the mock's whole list). Page
+  // 2+ reuses `realCall` directly, unwrapped — no fallback possible there.
+  const fetchFirstPage = (page, size) =>
+    withDevFallback(
+      () => realCall(page, size),
+      () => mockBackend.getProjects().then((data) => ({ data, meta: null })),
+    )
+  return fetchAllPages(fetchFirstPage, realCall, (data) => unwrapList(data, 'projects')).then((items) =>
+    items.map(normalizeProject),
+  )
 }
 
 /** OP-PROJ-DETAIL → GET /projects/{id}. */
@@ -260,14 +277,26 @@ export function deleteProject(projectId) {
   )
 }
 
-/** OP-PROJ-TASKS → GET /projects/{id}/tasks. */
+/** OP-PROJ-TASKS → GET /projects/{id}/tasks.
+ *
+ * 서버 기본 size=20(최대 100) — 이 목록엔 페이저가 없으므로 `fetchAllPages`
+ * (api/paging.js)로 전 페이지를 이어 받는다(taskApi.getUnplacedTasks와 같은
+ * 이유). `unwrapList`로 교체: 이전엔 `r?.tasks ?? []`를 그대로 읽어 실서버가
+ * 벗겨진 배열을 주면 조용히 빈 목록이 되던 버그(unwrap.js 자체 헤더가 말하는
+ * "이미 한 번 터진 버그")가 이 두 함수(getProjects 포함)에만 남아 있었다. */
 export function getProjectTasks(projectId) {
-  return withDevFallback(
-    // 서버 기본 size=20(최대 100) — 이 목록엔 페이저가 없으므로 한 페이지로
-    // 담을 수 있는 최대치를 요청한다(taskApi.getUnplacedTasks와 같은 이유·한계).
-    () => apiClient.get(`/projects/${projectId}/tasks`, { params: { size: 100 } }),
-    () => mockBackend.getProjectTasks(projectId),
-  ).then((r) => toList(r, 'tasks').map(normalizeTask))
+  const realCall = (page, size) =>
+    apiClient.get(`/projects/${projectId}/tasks`, { params: { page, size }, withMeta: true })
+  // Mock fallback only on page 1 — see fetchAllPages's header on why a later
+  // page must never be allowed to fall back to the mock's whole list.
+  const fetchFirstPage = (page, size) =>
+    withDevFallback(
+      () => realCall(page, size),
+      () => mockBackend.getProjectTasks(projectId).then((data) => ({ data, meta: null })),
+    )
+  return fetchAllPages(fetchFirstPage, realCall, (data) => unwrapList(data, 'tasks')).then((items) =>
+    items.map(normalizeTask),
+  )
 }
 
 /** OP-TASK-CREATE → POST /projects/{id}/tasks (PROJ-17 태스크 추가). Returns
@@ -326,7 +355,7 @@ export function getCategories() {
   return withDevFallback(
     () => apiClient.get('/categories'),
     () => mockBackend.getCategories(),
-  ).then((r) => toList(r, 'categories'))
+  ).then((r) => unwrapList(r, 'categories'))
 }
 
 /**
@@ -374,7 +403,7 @@ export function getProjectStructureWarnings(projectId) {
   return withDevFallback(
     () => apiClient.get(`/projects/${projectId}/validation-issues`),
     () => mockBackend.getStructureWarnings(projectId),
-  ).then((r) => toList(r, 'issues'))
+  ).then((r) => unwrapList(r, 'issues'))
 }
 
 /**
@@ -409,10 +438,16 @@ export function getProjectWbs(projectId) {
     () => apiClient.get(`/projects/${projectId}/wbs`),
     () => mockBackend.getProjectWbs(projectId),
   ).then((r) =>
-    toList(r, 'nodes').map((n) => ({
+    unwrapList(r, 'nodes').map((n) => ({
       taskId: n.taskId ?? n.task_id,
       title: n.title,
-      estimatedMinutes: n.estimatedMinutes ?? n.estimated_minutes ?? 60,
+      // Same read-boundary snap as normalizeTask above, for consistency —
+      // this WBS-node estimate only feeds WbsTimeline's day-count display
+      // today (duplicateProject re-creates tasks from getProjectTasks's own
+      // already-snapped list, not from here), but snapping every server
+      // value this field name can come from keeps that guarantee true
+      // regardless of which adapter a future caller reaches for.
+      estimatedMinutes: snapDuration(n.estimatedMinutes ?? n.estimated_minutes ?? 60),
       plannedStartDate: n.plannedStartDate ?? n.planned_start_date ?? n.startDate ?? n.start_date ?? null,
       plannedEndDate: n.plannedEndDate ?? n.planned_end_date ?? n.endDate ?? n.end_date ?? null,
     })),

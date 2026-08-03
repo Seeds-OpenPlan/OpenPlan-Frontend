@@ -11,6 +11,7 @@
 */
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
+import { snapDuration } from '../plan/planTime'
 import { mockBackend } from './statsFixtures'
 import { TIME_BANDS } from './statsConstants'
 import { unwrapList } from '../../api/unwrap'
@@ -20,13 +21,23 @@ import { unwrapList } from '../../api/unwrap'
  * proposal exists for `category` — including a null/empty category ("없음"),
  * which short-circuits WITHOUT a request: "없음" can never have a correction
  * proposal by definition, so there is nothing to ask the server.
+ *
+ * `suggestedMinutes` is snapped to the 5-minute grid here (read boundary):
+ * this is a recent-deviation AVERAGE the server computes, which has no
+ * reason to land on a 5-minute multiple on its own, yet TaskEditModal's AC-2
+ * "제안 칩" applies it straight into the task's `estimatedMinutes` field on
+ * one click — bypassing the MinuteStepper (step 5) entirely, unlike every
+ * other way that field gets set. Snapping here, not at the click handler,
+ * keeps the chip's OWN displayed label ("최근 … 편차 반영: N분") consistent
+ * with what actually gets applied, rather than showing one number and
+ * setting another.
  */
 export function getCorrectionProposal(category) {
   if (!category) return Promise.resolve(null)
   return withDevFallback(
     () => apiClient.get('/stats/correction-proposals', { params: { category } }),
     () => mockBackend.getCorrectionProposal(category),
-  )
+  ).then((r) => (r ? { ...r, suggestedMinutes: snapDuration(r.suggestedMinutes) } : r))
 }
 
 // --- ST-F1-11: 수행 통계 -----------------------------------------------------

@@ -59,6 +59,11 @@ function normalizeBlock(b) {
     endAt: b.endAt ?? b.end_at,
     // SCHEDULE-block extras (PLAN-17 편집 프리필); null on TASK blocks.
     memo: b.memo ?? null,
+    // NOT run through snapDuration (planTime.js): unlike a TASK's estimate,
+    // this field never feeds a block start/end computation — a SCHEDULE's
+    // own startAt/endAt come from the user's time-of-day picks, each
+    // independently snapped (see ScheduleForm's own `snapMinutes` calls) — so
+    // it sits outside this invariant's actual scope (block times).
     estimatedMinutes: b.estimatedMinutes ?? b.estimated_minutes ?? null,
     // Folded to the 1~3 the server accepts: this value prefills 일정 편집's own
     // 우선순위 select and is re-sent on save (see clampPriority's header).

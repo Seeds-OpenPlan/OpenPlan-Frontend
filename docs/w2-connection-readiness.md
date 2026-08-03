@@ -44,9 +44,9 @@
 | 이슈 | 근거 | 조치 |
 |---|---|---|
 | 401 갱신 경로 | client.js:130 `POST /auth/refresh` vs openapi:84 `/auth/token-refresh` | 인터셉터 경로 1줄 교정 |
-| `meta` 유실 | client.js:117 `data.data ?? data` | 목록 소비 함수가 `meta`(unreadCount/page)를 필요로 하면 인터셉터/시그니처 재설계 필요 |
-| 목록 봉투 = 벗겨진 배열 | 전 목록 endpoint `data:[...]`(예 openapi:970,1148,782) | 각 `getXxx`의 `.then((r)=>(r?.KEY??[]))`를 `.then((r)=>(Array.isArray(r)?r:(r?.KEY??[])))` 류로 통일 |
-| 페이지네이션 | projects/tasks/notifications/tickets/announcements 모두 `Page/Size` 파라미터(openapi:773 등) | 프론트는 전량 로드 가정. 기본 페이지 크기로 잘릴 수 있음 — 협의 |
+| `meta` 유실 | client.js:117 `data.data ?? data` | ✅ **해소(W2+)**: 기본 반환은 그대로 두고(수십 개 기존 호출부 무수정), 요청 config에 `withMeta:true`를 실은 호출만 인터셉터가 `{data, meta}`를 돌려주는 opt-in을 추가(client.js). `meta.page` 소비는 아래 `api/paging.js` 참고. `meta.unreadCount`(알림)는 아직 소비자가 없어 그대로 열어만 둠 — notificationsApi가 붙을 때 같은 플래그 재사용 가능 |
+| 목록 봉투 = 벗겨진 배열 | 전 목록 endpoint `data:[...]`(예 openapi:970,1148,782) | 각 `getXxx`의 `.then((r)=>(r?.KEY??[]))`를 `.then((r)=>(Array.isArray(r)?r:(r?.KEY??[])))` 류로 통일 (`api/unwrap.js`의 `unwrapList`) — `getProjects`/`getProjectTasks`는 이 통일에서 빠져 있던 것도 이번에 맞춤 |
+| 페이지네이션 | projects/tasks/notifications/tickets/announcements 모두 `Page/Size` 파라미터(openapi:773 등) | ✅ **해소(W2+)**: `meta` 노출을 전제로 `api/paging.js`의 `fetchAllPages`가 `meta.page.totalPages`를 따라 전 페이지를 이어 받는다. 적용: `taskApi.getUnplacedTasks`·`projectApi.getProjects`·`projectApi.getProjectTasks`·`helpApi.getTickets`. 페이지 수엔 방어적 상한(100)이 있고, 상한에 걸리면 `console.error`로 드러낸다(조용한 잘림 금지). notifications/announcements는 아직 미적용(담당 모듈이 아직 mock-only) |
 | 낙관적 락 `version` | project/task/schedule/fixed update가 `version` 필수(openapi:1031,1257,1687,1815) | 각 update body에 version 실림 확인. schedule은 **누락**(아래) |
 | 에러 코드 | 프론트 planApi는 `E-COM-004`(미구현 404) 폴백에 의존(planApi.js:36). ErrorResponse는 `E-[A-Z]+-[0-9]{3}`(openapi:2070) | 실서버 구현 후엔 mock 폴백이 실오류를 가리지 않도록 정리(로드맵 "mock 폴백 정리"와 동일) |
 | 우선순위 3단계 | BE 확인(2026-07-29): `1=높음 · 2=보통 · 3=낮음`, **4·5는 400** | ✅ 모든 폼은 이미 1~3만 제공. 위험은 **되돌려 보내는 값**(프로젝트 정보 PUT의 priority 재전송·프로젝트 복제·일정 편집 프리필)이라, 읽기 경계(normalize\*)에서 범위 밖 값을 가장 가까운 유효 등급으로 접는다 — `planPlacement.clampPriority` |
@@ -240,7 +240,7 @@
 |---|---|---|
 | `PATCH /tasks/{id}/status` | body가 `{status:'COMPLETED'}` → **400**. 실제는 `{completed, version}`(둘 다 `@NotNull`) | body 교체. 블록엔 태스크 version이 없어, caller가 못 주면 `GET /tasks/{id}`로 읽어 그대로 전송 |
 | `GET /tasks` | `projectId` 쿼리를 서버가 바인딩하지 않음(무시, 200) | 파라미터 제거 + 클라이언트 필터 |
-| `GET /tasks`·`GET /projects/{id}/tasks`·`GET /support/tickets` | 페이지 응답, `size` 기본 20 → 목록이 조용히 잘림 | `size=100`(서버 최대) 전송. 진짜 페이징은 `meta` 유실 해소가 선행 |
+| `GET /tasks`·`GET /projects/{id}/tasks`·`GET /support/tickets` | 페이지 응답, `size` 기본 20 → 목록이 조용히 잘림 | ✅ **해소(W2+)**: 당시엔 `size=100`(서버 최대) 전송이 유일한 완화책이었고 진짜 페이징은 `meta` 유실 해소가 선행 조건이라고 적어 뒀다 — 그 선행 작업을 마쳤다. `client.js`가 `withMeta` opt-in으로 `meta`를 노출하고, `api/paging.js`의 `fetchAllPages`가 `meta.page.totalPages`를 따라 전 페이지를 이어 받는다(`getProjects`도 같은 방식으로 함께 정리). `GET /projects`도 페이지드라 동일 조치 |
 | 우선순위 | 1·2·3만 허용, 그 외 **422 E-COM-009** | 읽기 경계에서 `clampPriority`로 접음(되돌려 보내는 경로 보호) |
 | `GET/PUT /users/me/availabilities` | 응답이 `{patterns,weeklyTotalMinutes}`인데 배열로 `.map()` → **TypeError로 쿼리 실패**. 쓰기는 분(정수) 전송 → **400**(`startTime` 필수) | 봉투 해제 + 분↔`HH:mm:ss` 양방향 변환. 비활성 요일도 시간 채워 전송 |
 | 온보딩 진행 | 서버는 **단계별 done 플래그**, FE는 **커서(`currentStep`)**. 필드명이 하나도 안 겹쳐 매 로딩이 1단계로 리셋되고 온보딩이 끝나지 않음 | 양방향 매핑(플래그→"아직 안 끝난 첫 단계", 커서→직전 단계 done) |

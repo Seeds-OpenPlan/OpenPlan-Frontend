@@ -12,6 +12,7 @@ import {
   resolveGridSlot,
 } from '../../features/plan/planGeometry'
 import {
+  clampBlockSpan,
   dateOf,
   formatISODate,
   formatMinutesLabel,
@@ -320,13 +321,11 @@ export function CalendarGrid({
   // read during render), so this only lays out the ghost for the task's duration.
   const placementPreview = (() => {
     if (!placement?.slot) return null
-    const duration = placement.task.estimatedMinutes ?? 60
-    let startMin = placement.slot.startMin
-    let endMin = startMin + duration
-    if (endMin > MINUTES_PER_DAY) {
-      endMin = MINUTES_PER_DAY
-      startMin = endMin - duration
-    }
+    // clampBlockSpan mirrors WeeklyPage's placeTaskAt exactly (same helper) —
+    // the ghost drawn here must land at the SAME span the drop actually
+    // commits, including the 5-minute snap of the task's own estimate, or the
+    // preview would show one span and the real block a different one.
+    const { startMin, endMin } = clampBlockSpan(placement.slot.startMin, placement.task.estimatedMinutes ?? 60)
     return { dayIndex: placement.slot.dayIndex, startMin, endMin, title: placement.task.title }
   })()
 
