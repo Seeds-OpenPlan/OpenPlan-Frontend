@@ -43,6 +43,14 @@ async function withDevFallback(realCall, mockCall) {
 }
 
 /*
+  이 파일의 목록 함수는 전부 `api/unwrap.js`의 `unwrapList`를 쓴다. 예전엔 이
+  파일 안에 같은 일을 하는 `toList`가 따로 있었는데(W2 실연결 때 여기서 먼저
+  터진 버그의 응급 처치였다), 공용 헬퍼가 생긴 뒤로도 한동안 둘이 공존했다.
+  같은 규칙을 두 곳에서 관리하면 한쪽만 고쳐지는 게 시간 문제라 하나로 합쳤다
+  — 왜 이 가드가 필요한지(실서버는 벗겨진 배열, mock은 이름 붙은 객체)는
+  unwrap.js 자신의 헤더에 있다.
+*/
+/*
   ASSUMPTION (§보고): the 07 spec's list/detail response samples are thin
   (`{projects: []}` / `{projectId, title, description}`) and document no
   aggregate fields at all — no taskCount/completedCount/placedCount/
@@ -205,13 +213,30 @@ export function createProject(body) {
   )
 }
 
-/** OP-PROJ-UPDATE → PATCH /projects/{id} (name/description/dueDate/priority,
- * and — per the 07 spec's own PATCH body sample — status too, though
- * §PROJ.5 sends status through the DEDICATED endpoint below when only the
- * status changed; this one is used for the info-only edit half of "관리"). */
+/**
+ * OP-PROJ-UPDATE → PUT /projects/{id} (W2 live-connect correction, 2026-07-26).
+ *
+ * DIVERGENCE NOTE (§보고): the pre-W2 code called PATCH here per the 07 spec's
+ * body sample. Live against the real server, PATCH /projects/{id} has no
+ * route at all (only PUT is mapped — see ProjectController) and — because an
+ * unmatched-method-but-matched-path request throws
+ * HttpRequestMethodNotSupportedException, which the real server's
+ * GlobalExceptionHandler has no specific handler for — it fell through to the
+ * catch-all and came back as a confusing generic 500 (E-COM-005), not a 404/405.
+ * Flagged for BE-1 as its own small bug (should 405), but the FE-side fix is
+ * simply calling the verb the server actually maps: PUT.
+ *
+ * PUT also means **full replacement**, not a partial merge — the real
+ * ProjectUpdateRequest requires all four editable fields (name/description/
+ * dueDate/priority) AND a `version` (optimistic-lock input, 400 if missing,
+ * confirmed live). `body` must carry the CURRENT priority/version even when
+ * the caller's form never lets the user touch those fields (see
+ * ProjectsPage.handleManageSubmit's own comment on why it now reads them off
+ * `project` instead of leaving them out).
+ */
 export function updateProject(projectId, body) {
   return withDevFallback(
-    () => apiClient.patch(`/projects/${projectId}`, body),
+    () => apiClient.put(`/projects/${projectId}`, body),
     () => mockBackend.updateProject(projectId, body),
   )
 }
@@ -224,12 +249,22 @@ export function updateProject(projectId, body) {
  * column is documented as `IN_PROGRESS / PAUSED / CLOSED` — "ON_HOLD" appears
  * nowhere else in either source. The ERD is treated as authoritative for the
  * ENUM VALUES themselves (the 07 sample is presumably a stray draft value),
- * so this adapter sends/expects PAUSED for "중지". Flagged for BE-1 to confirm
- * which string the real server actually accepts.
+ * so this adapter sends/expects PAUSED for "중지". Confirmed live: the real
+ * server accepts PAUSED and rejects ON_HOLD (422 unrecognized enum), so no
+ * further BE-1 confirmation is needed on this point.
+ *
+ * `version` (W2 live-connect correction, 2026-07-26): the pre-W2 code sent
+ * only `{status}`. Live, the real ProjectStatusChangeRequest requires
+ * `version` too (`@NotNull` — confirmed 400 E-COM-001 without it), the same
+ * optimistic-lock input PUT above needs. The caller must pass the project's
+ * CURRENT version — and if an info PUT just ran first in the same submit
+ * (§PROJ.5's info-then-status sequence), the version THAT call returned, not
+ * the stale pre-edit one, since the PUT already bumped it server-side (see
+ * ProjectsPage.handleManageSubmit's own comment).
  */
-export function updateProjectStatus(projectId, status) {
+export function updateProjectStatus(projectId, status, version) {
   return withDevFallback(
-    () => apiClient.patch(`/projects/${projectId}/status`, { status }),
+    () => apiClient.patch(`/projects/${projectId}/status`, { status, version }),
     () => mockBackend.updateProjectStatus(projectId, status),
   )
 }
@@ -320,7 +355,7 @@ export function getCategories() {
   return withDevFallback(
     () => apiClient.get('/categories'),
     () => mockBackend.getCategories(),
-  ).then((r) => r?.categories ?? [])
+  ).then((r) => unwrapList(r, 'categories'))
 }
 
 /**
@@ -368,7 +403,7 @@ export function getProjectStructureWarnings(projectId) {
   return withDevFallback(
     () => apiClient.get(`/projects/${projectId}/validation-issues`),
     () => mockBackend.getStructureWarnings(projectId),
-  ).then((r) => r?.issues ?? [])
+  ).then((r) => unwrapList(r, 'issues'))
 }
 
 /**
@@ -403,7 +438,7 @@ export function getProjectWbs(projectId) {
     () => apiClient.get(`/projects/${projectId}/wbs`),
     () => mockBackend.getProjectWbs(projectId),
   ).then((r) =>
-    (r?.nodes ?? []).map((n) => ({
+    unwrapList(r, 'nodes').map((n) => ({
       taskId: n.taskId ?? n.task_id,
       title: n.title,
       // Same read-boundary snap as normalizeTask above, for consistency —
