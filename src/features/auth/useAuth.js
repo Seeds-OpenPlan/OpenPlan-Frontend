@@ -103,7 +103,7 @@ export function useLogout() {
 
 /**
  * SCR-AUTH-LOGIN 전용 재활성화(Thomas 리뷰 MAJOR) — 로그인 실패
- * (E-AUTH-DEACTIVATED) 응답의 `details.email`로 지목한, 아직 세션이 없는
+ * (E-AUTH-008) 응답의 `details.email`로 지목한, 아직 세션이 없는
  * 계정을 재활성화한다. 이름을 `useReactivateAccount`(아래 재-export, 이미
  * 로그인된 내 계정을 다루는 settings 쪽 훅)와 겹치지 않게 구분했다 — 두 훅을
  * 같은 화면에서 혼동해 부르는 실수를 타입/이름 레벨에서 막기 위함.

@@ -53,7 +53,12 @@ export async function mockDashboard() {
     // 안 함)가 실제로 타는 데이터.
     priorityAction: {
       id: 'risk-fixed-conflict',
-      code: 'V2',
+      // W3: violationMessages.js's own catalog re-keyed 'V2' → 'V2_FIXED_CONFLICT'
+      // (real server ruleId, see that file's own header) — this code must stay
+      // in sync with it, or dashboardIssueCopy.resolveIssueCopy's own
+      // `violationCatalog[issue.code]` lookup silently misses and this card
+      // falls back to raw server text it was never given (empty label/message).
+      code: 'V2_FIXED_CONFLICT',
       severity: 'blocking',
       params: { blockTitle: '회의', otherTitle: '스터디', timeRange: '화요일 14:00–15:00' },
       actionType: 'FIXED_CONFLICT_RESOLVE',
@@ -133,7 +138,9 @@ export async function mockDashboard() {
     risks: [
       {
         id: 'risk-fixed-conflict',
-        code: 'V2',
+        // W3: kept in sync with priorityAction's own code above — see that
+        // field's own comment.
+        code: 'V2_FIXED_CONFLICT',
         severity: 'blocking',
         source: '주간 계획',
         params: { blockTitle: '회의', otherTitle: '스터디', timeRange: '화요일 14:00–15:00' },

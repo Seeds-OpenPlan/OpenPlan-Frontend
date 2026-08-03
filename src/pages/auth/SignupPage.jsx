@@ -53,7 +53,9 @@ export function SignupPage() {
   }
 
   const signupErrorCopy =
-    signupMutation.error?.code === 'E-AUTH-409'
+    // 실서버 E-AUTH-003 "이미 가입된 이메일"(409) — 실서버 대조 2026-08-03,
+    // 존재하지 않는 `E-AUTH-409`를 대체.
+    signupMutation.error?.code === 'E-AUTH-003'
       ? '이미 가입된 이메일입니다. 로그인해 주세요.'
       : signupMutation.isError
         ? '가입을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.'

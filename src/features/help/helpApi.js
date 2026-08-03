@@ -56,12 +56,31 @@ function normalizeFaqArticle(a) {
   }
 }
 
+/*
+  실서버 대조 (2026-08-04, AnnouncementController/AnnouncementResponse): the
+  server shape is `{announcementId, announcementType, title, content,
+  publishedStartAt}`, where this file had assumed `{noticeId, title, body,
+  publishedAt}` (still this screen's own vocabulary — kept, same reasoning
+  normalizeFaqArticle's header gives for question/answer over title/content).
+  Two fields were silently WRONG against a real response before this fix: only
+  `a.body` was read (server has no `body` — every real notice showed empty
+  content) and only `a.publishedAt` was read (server has no `publishedAt` —
+  every real notice showed an invalid/missing date).
+
+  `announcementType` (MAINTENANCE/INCIDENT/CHANGE enum — see the backend's own
+  AnnouncementType.java) is a NEW field this adapter didn't carry at all. It is
+  NOT decorative: OPS-01's own user story text lists "목록(유형·제목·게시일)"
+  and ST-B1-14 AC③ ties it to a Badge. Passed through here so it's available,
+  but no screen reads it yet — building that badge is a separate UI decision,
+  not bundled into this adapter fix.
+*/
 function normalizeAnnouncement(a) {
   return {
     noticeId: a.noticeId ?? a.notice_id ?? a.announcementId ?? a.announcement_id,
+    announcementType: a.announcementType ?? a.announcement_type ?? null,
     title: a.title,
-    body: a.body,
-    publishedAt: a.publishedAt ?? a.published_at,
+    body: a.body ?? a.content ?? '',
+    publishedAt: a.publishedAt ?? a.published_at ?? a.publishedStartAt ?? a.published_start_at,
   }
 }
 
@@ -127,16 +146,34 @@ export function getFaqArticles(query) {
 
 // --- 공지 (OPS-01/02) ---------------------------------------------------------------
 
-/** GET /announcements ([가정], OP-OPS-ANNOUNCEMENTS). */
+/*
+  PAGINATION (실서버 대조 2026-08-04, AnnouncementController): the real
+  endpoint pages (1-base `page`, default 20, server-clamped max 100), and this
+  screen has no pager (AnnouncementAccordionList/AnnouncementsPage just render
+  whatever array they get) — same shape of bug taskApi/projectApi/
+  helpApi.getTickets already hit and fixed the same way, so this walks every
+  page via `fetchAllPages` rather than requesting one page and assuming that's
+  everything. Server list is already public/unauthenticated (no scoping to
+  worry about, unlike getTickets).
+*/
+
+/** GET /announcements (OP-OPS-ANNOUNCEMENTS, OPS-01). 게시된 공지 전체, 게시일 DESC. */
 export function getAnnouncements() {
-  return withDevFallback(
-    () => apiClient.get('/announcements'),
-    () => mockBackend.getAnnouncements(),
-    // Real: `data:[Announcement]` (array). Mock: `{ announcements: [...] }`.
-  ).then((r) => unwrapList(r, 'announcements').map(normalizeAnnouncement))
+  const realCall = (page, size) => apiClient.get('/announcements', { params: { page, size }, withMeta: true })
+  // Mock fallback only on page 1 — see fetchAllPages's header on why a later
+  // page must never be allowed to fall back to the mock's whole list.
+  const fetchFirstPage = (page, size) =>
+    withDevFallback(
+      () => realCall(page, size),
+      () => mockBackend.getAnnouncements().then((data) => ({ data, meta: null })),
+    )
+  return fetchAllPages(fetchFirstPage, realCall, (data) => unwrapList(data, 'announcements')).then((items) =>
+    items.map(normalizeAnnouncement),
+  )
 }
 
-/** GET /announcements/{id} ([가정]). */
+/** GET /announcements/{announcementId} (OPS-02). 미게시 공지는 서버가 404로 은닉 —
+ * AnnouncementDetailPage가 이미 그 실패를 "공지를 불러오지 못했습니다"로 처리한다. */
 export function getAnnouncement(noticeId) {
   return withDevFallback(
     () => apiClient.get(`/announcements/${noticeId}`),

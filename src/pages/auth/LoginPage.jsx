@@ -57,11 +57,15 @@ export function LoginPage() {
       {
         onSuccess: () => navigate('/', { replace: true }),
         onError: (error) => {
-          if (error?.code === 'E-AUTH-UNVERIFIED') {
+          // 실서버 카탈로그(ErrorCode.java/errors.properties, 대조 2026-08-03):
+          // E-AUTH-005 이메일 인증 미완료(403), E-AUTH-008 비활성화된 계정(409).
+          // 이전엔 서버 enum에 없는 `E-AUTH-UNVERIFIED`/`E-AUTH-DEACTIVATED`를
+          // 임의로 썼다.
+          if (error?.code === 'E-AUTH-005') {
             navigate('/verify-email', { state: { email: error.details?.email ?? email } })
             return
           }
-          if (error?.code === 'E-AUTH-DEACTIVATED') {
+          if (error?.code === 'E-AUTH-008') {
             setReactivateInfo(error.details)
           }
         },
@@ -81,9 +85,9 @@ export function LoginPage() {
   }
 
   const loginErrorCopy =
-    loginMutation.error?.code === 'E-AUTH-401'
+    loginMutation.error?.code === 'E-AUTH-001'
       ? '이메일 또는 비밀번호가 올바르지 않습니다'
-      : loginMutation.isError && loginMutation.error?.code !== 'E-AUTH-DEACTIVATED'
+      : loginMutation.isError && loginMutation.error?.code !== 'E-AUTH-008'
         ? '로그인하지 못했습니다. 잠시 후 다시 시도해 주세요.'
         : null
 

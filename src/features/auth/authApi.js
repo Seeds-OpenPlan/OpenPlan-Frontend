@@ -1,9 +1,25 @@
 /*
   OP functions for ST-F1-14 (인증 화면). Mirrors settingsApi.js's own contract:
-  every export is 1 OP, real call first, DEV-only mock fallback on network
-  error/unimplemented-404 via withDevFallback (defined once in planApi.js —
-  reused here rather than redeclared, same choice settingsApi.js/statsApi.js
-  already made). mock→real diff stays base-URL-only (charter §G3/§A4).
+  every export is 1 OP, real call first, DEV-only mock fallback. mock→real diff
+  stays base-URL-only (charter §G3/§A4).
+
+  PATHS (실서버 대조 2026-08-04 — AuthStubController.java, 직접 열어 확인): every
+  path below now targets the REAL route the stub controller maps, not a guess.
+  Every one of them except GET/DELETE /auth/session still answers 501
+  E-AUTH-011 ("아직 제공되지 않는 기능") until 4주차 — see withAuthDevFallback's
+  own header for how that's handled in DEV.
+
+  (지난 대조, 2026-08-03, 틀렸던 것: login이 `/auth/login`을 불렀지만 실제는
+  `/auth/sessions`; verifyEmail이 `/auth/email-verifications`를 불러 실제로는
+  "발송" 엔드포인트에 부딪혔고 진짜 확정 경로 `/auth/email-verifications/
+  confirmation`은 따로 있었다; resendVerificationEmail이 `/auth/email-
+  verifications/resend`라는 존재하지 않는 경로를 불렀다; confirmPasswordReset이
+  PATCH `/auth/password-resets`를 불렀지만 실제는 token이 경로 변수인
+  `/auth/password-resets/{token}`. 틀린 경로들은 대부분 404 E-COM-004로
+  떨어져 withDevFallback의 "미구현 404" 규칙에 우연히 걸려 mock으로 폴백됐지만,
+  verifyEmail은 실제로 존재하는 다른 라우트(발송)와 겹쳐 501을 그대로 받았고,
+  confirmPasswordReset은 500 E-COM-005로 떨어져 폴백도 안 됐다 — 둘 다 실서버가
+  떠 있으면 화면이 그대로 깨지는 채였다.)
 
   ACCT-01/02(이름 변경·계정 조회)와, **로그인된 사용자 자신의** ACCT-04/05
   (비활성화·재활성화)는 이미 settingsApi.js/settings/useSettings.js에 있다 —
@@ -12,7 +28,7 @@
   SettingsAccountPage의 OVL-ACCT-DEACT/REACT가 같은 호출을 그대로 쓴다.
 
   `reactivate(email)`는 그것과 다른 함수다(Thomas 리뷰 MAJOR) — SCR-AUTH-LOGIN
-  이 로그인 실패(E-AUTH-DEACTIVATED)로 얻은, **아직 로그인하지 않은 남의 계정을
+  이 로그인 실패(E-AUTH-008)로 얻은, **아직 로그인하지 않은 남의 계정을
   email로 지목해** 재활성화하는 경로라 세션 기반인 settingsApi 쪽 재활성화와
   전제 자체가 다르다(그 함수는 "지금 로그인된 나"만 다룬다 — email 인자가
   없다). 두 경로 모두 서버에서는 결국 `POST /auth/reactivations`로 만나겠지만,
@@ -36,70 +52,118 @@
   바꾸면 된다(LoginPage 주석 참조).
 */
 import { apiClient } from '../../api/client'
-import { withDevFallback } from '../plan/planApi'
 import { authMockBackend } from './authFixtures'
 
-/** POST /auth/login ([가정-확장]). */
+/**
+ * AUTH-ONLY dev fallback. Starts from planApi.js's `withDevFallback` rule
+ * (network failure, or a 404 carrying E-COM-004 — Spring's generic "no route
+ * at all") and adds exactly ONE more case: a 501 carrying E-AUTH-011. That
+ * code is this backend's DELIBERATE "not built yet" marker for the whole auth
+ * surface (AuthStubController.java's own doc comment: "나머지 인증 EP=501
+ * E-AUTH-011" until 4주차) — not a generic server failure the way a stray 501
+ * from anywhere else in the app would be.
+ *
+ * This rule is declared HERE, NOT added to the shared `withDevFallback` in
+ * planApi.js, on purpose: every OTHER unimplemented endpoint in this codebase
+ * still signals "not built" the SAME way Spring does automatically (404 +
+ * E-COM-004, no handler for the route). Auth is the one surface where the
+ * backend hand-codes a 501 instead. If the shared helper swallowed every 501
+ * E-AUTH-011 globally, a genuine 501 from a module that ISN'T a deliberate
+ * stub (a real crash reported with the wrong code, say) would also start
+ * silently resolving to a mock response — this file is the only place a 501
+ * is a known, intentional placeholder rather than a bug to surface.
+ *
+ * W4 SWITCH: every path this file calls already targets the REAL route
+ * (실서버 대조 2026-08-04). Once BE-3 replaces AuthStubController with actual
+ * implementations, EVERY function below starts getting real 200s/4xx instead
+ * of 501 — the ONLY code change "going live" requires is deleting the
+ * `isAuthStub` branch below (so a genuine future 501 stops being masked). Forgetting
+ * that deletion is the failure mode: a real 501 from the live server would
+ * keep silently falling back to the mock.
+ */
+async function withAuthDevFallback(realCall, mockCall) {
+  try {
+    return await realCall()
+  } catch (error) {
+    const isUnimplementedEndpoint = error?.status === 404 && error?.code === 'E-COM-004'
+    const isAuthStub = error?.status === 501 && error?.code === 'E-AUTH-011'
+    const shouldFallback = error?.isNetwork || isUnimplementedEndpoint || isAuthStub
+    if (import.meta.env.DEV && shouldFallback) return mockCall()
+    throw error
+  }
+}
+
+/** POST /auth/sessions (로그인, AUTH-01). */
 export function login(email, password) {
-  return withDevFallback(
-    () => apiClient.post('/auth/login', { email, password }),
+  return withAuthDevFallback(
+    () => apiClient.post('/auth/sessions', { email, password }),
     () => authMockBackend.login(email, password),
   )
 }
 
-/** POST /auth/signup ([가정-확장]). */
+/**
+ * POST /auth/signup ([가정-확장]). 실서버 대조 2026-08-04: 이 경로 자체가 아직
+ * 없다 — AuthStubController에도, UserController(`GET /users/me`·
+ * `PATCH /users/me/profile`뿐)에도 가입 라우트가 없다. 추측으로 다른 경로(예:
+ * `POST /users`)를 지어내는 대신 기존 경로를 그대로 두고, 4주차 실인증 연결 때
+ * 전창현(BE)과 실제 경로를 확정한다 — 지금은 어떤 경로를 불러도 결과가 같다
+ * (Spring의 일반 404 E-COM-004 → withAuthDevFallback이 mock으로 폴백).
+ */
 export function signup({ name, email, password }) {
-  return withDevFallback(
+  return withAuthDevFallback(
     () => apiClient.post('/auth/signup', { name, email, password }),
     () => authMockBackend.signup({ name, email, password }),
   )
 }
 
-/** POST /auth/email-verifications ([가정-확장], AUTH-04). */
+/** POST /auth/email-verifications/confirmation (이메일 인증 확정, AUTH-04). */
 export function verifyEmail(token) {
-  return withDevFallback(
-    () => apiClient.post('/auth/email-verifications', { token }),
+  return withAuthDevFallback(
+    () => apiClient.post('/auth/email-verifications/confirmation', { token }),
     () => authMockBackend.verifyEmail(token),
   )
 }
 
-/** POST /auth/email-verifications/resend ([가정-확장], AUTH-03 AC5 60초 쿨다운). */
+/** POST /auth/email-verifications (인증 메일 발송, AUTH-03 AC5 60초 쿨다운). */
 export function resendVerificationEmail(email) {
-  return withDevFallback(
-    () => apiClient.post('/auth/email-verifications/resend', { email }),
+  return withAuthDevFallback(
+    () => apiClient.post('/auth/email-verifications', { email }),
     () => authMockBackend.resendVerificationEmail(email),
   )
 }
 
-/** POST /auth/password-resets ([가정-확장], AUTH-05). 계정 존재 비노출 — 항상 동일 응답. */
+/** POST /auth/password-resets (재설정 메일 요청, AUTH-05). 계정 존재 비노출 — 항상 동일 응답. */
 export function requestPasswordReset(email) {
-  return withDevFallback(
+  return withAuthDevFallback(
     () => apiClient.post('/auth/password-resets', { email }),
     () => authMockBackend.requestPasswordReset(email),
   )
 }
 
-/** PATCH /auth/password-resets ([가정-확장], AUTH-06). */
+/**
+ * PATCH /auth/password-resets/{token} (재설정 확정, AUTH-06). token은 경로
+ * 변수다(이전엔 body에만 실어 PATCH `/auth/password-resets`를 불렀는데, 그
+ * 경로엔 핸들러가 없어 500 E-COM-005로 떨어졌었다 — 실서버 대조 2026-08-04 정정).
+ */
 export function confirmPasswordReset({ token, password }) {
-  return withDevFallback(
-    () => apiClient.patch('/auth/password-resets', { token, password }),
+  return withAuthDevFallback(
+    () => apiClient.patch(`/auth/password-resets/${token}`, { password }),
     () => authMockBackend.confirmPasswordReset({ token, password }),
   )
 }
 
 /**
- * DELETE /auth/session (실서버 대조 2026-07-29 — AuthStubController). This is
+ * DELETE /auth/session (실서버 대조 2026-08-04 — AuthStubController). This is
  * one of only TWO auth endpoints the backend actually implements today (the
- * other is GET /auth/session); everything else on this file's surface —
- * login/signup/token-refresh/oauth — answers 501 E-AUTH-011 until 4주차, so
- * their paths are left as-is rather than churned against a stub. `POST
- * /auth/logout` was this file's guess and has no route at all. Best-effort — the
- * caller (SettingsAccountPage) clears the local session cache and navigates
+ * other is GET /auth/session, read via useAuth.js's useSession) — everything
+ * else on this file's surface answers 501 E-AUTH-011 until 4주차 (see
+ * withAuthDevFallback's own header). Best-effort — the caller
+ * (SettingsAccountPage) clears the local session cache and navigates
  * regardless of this promise's outcome (dev-auth stub means there is no real
  * server session to actually invalidate yet; see that page's own comment).
  */
 export function logout() {
-  return withDevFallback(
+  return withAuthDevFallback(
     () => apiClient.delete('/auth/session'),
     () => authMockBackend.logout(),
   )
@@ -113,7 +177,7 @@ export function logout() {
  * mock 단계에서는 로그인 실패 응답이 이미 준 email을 그대로 body에 싣는다.
  */
 export function reactivate(email) {
-  return withDevFallback(
+  return withAuthDevFallback(
     () => apiClient.post('/auth/reactivations', { email }),
     () => authMockBackend.reactivate(email),
   )

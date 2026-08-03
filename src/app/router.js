@@ -18,6 +18,7 @@ import SettingsLayout from '../pages/settings/SettingsLayout'
 import SettingsDefaultsPage from '../pages/settings/SettingsDefaultsPage'
 import SettingsAvailabilityPage from '../pages/settings/SettingsAvailabilityPage'
 import SettingsFixedSchedulesPage from '../pages/settings/SettingsFixedSchedulesPage'
+import SettingsTaskCategoriesPage from '../pages/settings/SettingsTaskCategoriesPage'
 import SettingsAccountPage from '../pages/settings/SettingsAccountPage'
 import SettingsCalendarPage from '../pages/settings/SettingsCalendarPage'
 import SettingsNotificationsPage from '../pages/settings/SettingsNotificationsPage'
@@ -186,6 +187,7 @@ export const router = createBrowserRouter([
           { path: 'defaults', Component: SettingsDefaultsPage }, // FIX-10~12 · RB-FIX-01
           { path: 'availability', Component: SettingsAvailabilityPage }, // FIX-01~03
           { path: 'fixed-schedules', Component: SettingsFixedSchedulesPage }, // FIX-04~09
+          { path: 'task-categories', Component: SettingsTaskCategoriesPage }, // W3 SC-01 — 태스크 카테고리 프리셋 CRUD
           { path: 'account', Component: SettingsAccountPage }, // ACCT-01/02
           { path: 'calendar', Component: SettingsCalendarPage }, // FIX-13~17
           { path: 'notifications', Component: SettingsNotificationsPage }, // NOTI-01

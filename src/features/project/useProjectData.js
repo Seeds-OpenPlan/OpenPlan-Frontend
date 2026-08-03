@@ -14,7 +14,6 @@ import {
   deleteProject,
   deleteTask,
   duplicateProject,
-  getCategories,
   getProject,
   getProjects,
   getProjectStructureWarnings,
@@ -26,6 +25,7 @@ import {
   updateTask,
   updateTaskSchedule,
 } from './projectApi'
+import { createTaskCategory, deleteTaskCategory, getTaskCategories } from './taskCategoryApi'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
 
@@ -35,7 +35,7 @@ export const projectTasksKey = (projectId) => ['projectTasks', projectId]
 export const structureWarningsKey = (projectId) => ['projectStructureWarnings', projectId]
 export const projectWbsKey = (projectId) => ['projectWbs', projectId]
 export const taskKey = (taskId) => ['task', taskId]
-export const categoriesKey = () => ['categories']
+export const taskCategoriesKey = () => ['taskCategories']
 
 /** GET /projects — SCR-PROJ-LIST (§PROJ.1). Tabs split this client-side. */
 export function useProjects() {
@@ -153,13 +153,64 @@ export function useTask(taskId) {
   })
 }
 
-/** GET /categories — SCR-TASK-EDIT's 카테고리 Select (ST-F1-09 AC-1). A long
- * staleTime: this is a small, rarely-changing lookup list, not per-task data. */
-export function useCategories() {
+/**
+ * GET /task-categories (W3, real endpoint — supersedes the old placeholder
+ * `useCategories`/getCategories that read a 404 route). Shared source for
+ * every screen that needs the preset list: SCR-TASK-EDIT/생성 폼's Select
+ * (TaskEditModal/TaskCreateForm), StatisticsPage's 카테고리별 편차 hint row, and
+ * the CRUD screen itself (SettingsTaskCategoriesPage) — one query key, one
+ * cache entry, never re-fetched per caller. Long staleTime: a small,
+ * rarely-changing lookup list, not per-task data (same reasoning the old
+ * hook already had).
+ */
+export function useTaskCategories() {
   return useQuery({
-    queryKey: categoriesKey(),
-    queryFn: getCategories,
+    queryKey: taskCategoriesKey(),
+    queryFn: getTaskCategories,
     staleTime: 10 * 60 * 1000,
+  })
+}
+
+/**
+ * POST /task-categories (W3 SC-01). Name-length (422 E-COM-009) and
+ * duplicate-name (409 E-CAT-001) failures are surfaced to the CALLER via the
+ * rejected promise/mutation.error — the settings form branches on those two
+ * codes itself to show an inline, field-specific message (R1: never parse
+ * `message`); this hook's own onError only toasts anything ELSE.
+ */
+export function useCreateTaskCategory() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name) => createTaskCategory(name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: taskCategoriesKey() })
+      toast({ tone: 'success', message: '카테고리를 추가했습니다' })
+    },
+    onError: (error) => {
+      if (error?.code === 'E-CAT-001' || error?.code === 'E-COM-009') return
+      toast({ tone: 'error', message: systemMessages.error.writeTitle })
+    },
+  })
+}
+
+/**
+ * DELETE /task-categories/{id} (W3 SC-01). Hard delete — the SERVER resets
+ * every task that referenced this category to categoryId=null (FK ON DELETE
+ * SET NULL, confirmed live), so this hook does not separately patch any task
+ * cache: only THIS list needs invalidating. A task screen open at the exact
+ * moment of deletion keeps showing its now-stale categoryId until its own
+ * next re-fetch — same "no cross-invalidation for a resource this store
+ * doesn't own" boundary useUpdateTaskSchedule's own comment draws elsewhere.
+ */
+export function useDeleteTaskCategory() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (taskCategoryId) => deleteTaskCategory(taskCategoryId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: taskCategoriesKey() })
+      toast({ tone: 'success', message: '카테고리를 삭제했습니다' })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
 }
 

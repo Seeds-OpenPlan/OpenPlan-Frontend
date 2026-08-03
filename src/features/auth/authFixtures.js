@@ -80,15 +80,21 @@ export const authMockBackend = {
     await delay()
     const user = users.find((u) => u.email === email)
     // 존재하지 않는 계정과 비밀번호 불일치를 하나의 카피/코드로 통일 — 계정
-    // 존재 자체를 노출하지 않는다(ui-spec §AUTH, AC2).
+    // 존재 자체를 노출하지 않는다(ui-spec §AUTH, AC2). 코드는 실서버 카탈로그의
+    // E-AUTH-001 "이메일 또는 비밀번호가 올바르지 않습니다"(401) — 이전엔
+    // 서버 enum에 없는 `E-AUTH-401`을 임의로 썼다(실서버 대조 2026-08-03 정정).
     if (!user || user.password !== password) {
-      throw authError('E-AUTH-401', 401)
+      throw authError('E-AUTH-001', 401)
     }
     if (user.status === 'PENDING_VERIFICATION') {
-      throw authError('E-AUTH-UNVERIFIED', 403, { email: user.email })
+      // 실서버 E-AUTH-005 "이메일 인증 미완료 계정"(403) — 이전 `E-AUTH-UNVERIFIED`
+      // 는 존재하지 않는 코드였다.
+      throw authError('E-AUTH-005', 403, { email: user.email })
     }
     if (user.status === 'DEACTIVATED') {
-      throw authError('E-AUTH-DEACTIVATED', 403, {
+      // 실서버 E-AUTH-008 "비활성화된 계정" — status는 403이 아니라 409(카탈로그
+      // 확인). 이전 `E-AUTH-DEACTIVATED`/403은 존재하지 않는 코드+틀린 status였다.
+      throw authError('E-AUTH-008', 409, {
         // email 포함 — LoginPage가 "이 이메일을 재활성화하라"고 뒤이어 부르는
         // reactivate(email)에 그대로 넘겨준다(Thomas 리뷰 MAJOR: 로그인 실패로
         // 얻은 이 계정 자체를 재활성화해야지, settingsFixtures의 별개
@@ -108,8 +114,10 @@ export const authMockBackend = {
     if (users.some((u) => u.email === email)) {
       // 가입 자체는 이메일 중복을 알려줘야 사용자가 다음 행동(로그인/재설정)을
       // 고를 수 있다 — 로그인 실패와 달리 "계정 존재 비노출" 원칙이 적용되는
-      // 지점이 아니다(본인이 방금 그 이메일을 입력한 발신자이므로).
-      throw authError('E-AUTH-409', 409, { field: 'email' })
+      // 지점이 아니다(본인이 방금 그 이메일을 입력한 발신자이므로). 실서버
+      // E-AUTH-003 "이미 가입된 이메일"(409) — 이전 `E-AUTH-409`는 존재하지
+      // 않는 코드였다(실서버 대조 2026-08-03 정정).
+      throw authError('E-AUTH-003', 409, { field: 'email' })
     }
     const userId = `dev-user-${String(users.length + 1).padStart(4, '0')}`
     users = [...users, { userId, email, password, name, status: 'PENDING_VERIFICATION', deactivatedAt: null }]
@@ -129,7 +137,11 @@ export const authMockBackend = {
     const email = match ? decodeURIComponent(match[1]) : null
     const user = email ? users.find((u) => u.email === email && u.status === 'PENDING_VERIFICATION') : null
     if (!user) {
-      throw authError('E-AUTH-422', 422, { reason: 'INVALID_TOKEN' })
+      // 실서버 E-AUTH-004 "이메일 인증 링크 만료"(410) — 이전 `E-AUTH-422`/422는
+      // 존재하지 않는 코드+틀린 status였다(실서버 대조 2026-08-03 정정). 이
+      // mock은 만료·형식오류·계정불명을 구분하지 않고 전부 이 코드로 귀결시킨다
+      // (실서버도 "링크가 더 이상 유효하지 않다"는 하나의 결론으로 답한다).
+      throw authError('E-AUTH-004', 410, { reason: 'INVALID_TOKEN' })
     }
     user.status = 'ACTIVE'
     return { verified: true }
@@ -155,7 +167,11 @@ export const authMockBackend = {
   async confirmPasswordReset({ token }) {
     await delay()
     if (!token || token === 'invalid' || token === 'expired') {
-      throw authError('E-AUTH-422', 422, { reason: 'INVALID_TOKEN' })
+      // 실서버 E-AUTH-006 "재설정 링크 만료·사용됨"(410) — verifyEmail의
+      // E-AUTH-004와 이유는 같은 부류("링크가 더 이상 유효하지 않다")지만 엔드
+      // 포인트가 달라 서버 코드도 다르다. 이전 `E-AUTH-422`/422는 존재하지
+      // 않는 코드+틀린 status였다(실서버 대조 2026-08-03 정정).
+      throw authError('E-AUTH-006', 410, { reason: 'INVALID_TOKEN' })
     }
     return { reset: true }
   },
@@ -165,7 +181,7 @@ export const authMockBackend = {
     return { loggedOut: true }
   },
 
-  // 로그인 실패(E-AUTH-DEACTIVATED)로 드러난 그 계정 자체를 재활성화한다 —
+  // 로그인 실패(E-AUTH-008)로 드러난 그 계정 자체를 재활성화한다 —
   // settingsFixtures의 단일 account 싱글턴(설정 화면 전용, 항상 user@ 컨텍스트)
   // 과는 별개(Thomas 리뷰 MAJOR). 대상을 못 찾으면(이미 재활성화됐거나 잘못된
   // email) 조용히 무시하지 않고 에러로 알린다 — 호출부가 "재활성화됐다"고
@@ -174,7 +190,11 @@ export const authMockBackend = {
     await delay()
     const user = users.find((u) => u.email === email && u.status === 'DEACTIVATED')
     if (!user) {
-      throw authError('E-AUTH-401', 401)
+      // 자격 증명 실패가 아니라 "재활성화 대상 계정을 못 찾음"이라 E-AUTH
+      // 네임스페이스가 아니라 공통 E-COM-004(404) — 이전 `E-AUTH-401`/401은
+      // 존재하지 않는 코드였을 뿐 아니라 의미도 로그인 실패 것을 잘못 빌려 쓴
+      // 것이었다(실서버 대조 2026-08-03 정정).
+      throw authError('E-COM-004', 404)
     }
     user.status = 'ACTIVE'
     user.deactivatedAt = null
