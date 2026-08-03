@@ -41,7 +41,7 @@
 */
 import { useMemo } from 'react'
 import { useAvailability, usePlanValidation, useWeekPlan } from '../plan/usePlanData'
-import { composeTimestamp, currentWeekStartISO, weekDays } from '../plan/planTime'
+import { clampBlockSpan, composeTimestamp, currentWeekStartISO, snapDuration, weekDays } from '../plan/planTime'
 import { findFirstFreeSlot } from '../plan/planPlacement'
 
 // Never sent to a real server as a real id — validatePlan's dry-run body only
@@ -74,11 +74,23 @@ export function useTaskEditPreview({ taskId, title, estimatedMinutes }) {
 
   const virtualBlock = useMemo(() => {
     if (!availability) return null // still loading — nothing to search yet
-    const duration = Math.max(5, Number(estimatedMinutes) || 0)
+    // snapDuration both floors at one grid step (replacing the old
+    // `Math.max(5, …)`) AND rounds to the 5-minute multiple a real block
+    // would be built from (see planTime.js's own header) — the field itself
+    // is mid-edit here (this hook re-runs on every keystroke), so its raw
+    // value is never assumed to already be aligned the way a committed
+    // task's estimate is.
+    const duration = snapDuration(Number(estimatedMinutes) || 0)
     const slot = findFirstFreeSlot({ days, availability, blocks: otherBlocks, durationMin: duration })
     if (!slot) return null
-    const startAt = composeTimestamp(days[slot.dayIndex], slot.startMin)
-    const endAt = composeTimestamp(days[slot.dayIndex], slot.startMin + duration)
+    // clampBlockSpan, not a raw `startMin + duration`: this is a dry-run (no
+    // write happens — see this file's own header), but it must still report
+    // the SAME span shape the real grid would produce, or the validation
+    // rules it feeds (V1/V2/V4/V5/V6) would be checking a span the app could
+    // never actually create.
+    const { startMin, endMin } = clampBlockSpan(slot.startMin, duration)
+    const startAt = composeTimestamp(days[slot.dayIndex], startMin)
+    const endAt = composeTimestamp(days[slot.dayIndex], endMin)
     return {
       planBlockId: PREVIEW_BLOCK_ID,
       blockType: 'TASK',

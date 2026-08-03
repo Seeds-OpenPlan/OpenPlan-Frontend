@@ -114,10 +114,26 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   // Success: hand the caller the unwrapped payload. `data.data` is the envelope
   // body; the `?? data` fallback tolerates non-enveloped responses defensively.
-  // TODO(W2+): this drops `data.meta` (unreadCount, pagination). Revisit once a
-  // consumer actually needs meta (notifications unread badge / paged lists) —
-  // see references/w2-connection-readiness.md §2 "meta 유실".
-  (response) => response.data?.data ?? response.data,
+  //
+  // META OPT-IN (W2 meta 유실 해소, docs/w2-connection-readiness.md §2/§6): the
+  // envelope also carries `meta` (e.g. `meta.page` for paged lists), which the
+  // default return value below still drops — on purpose. Dozens of *Api.js
+  // call sites across the codebase already depend on this interceptor handing
+  // back the BARE payload (an array, a task object, …), so changing the
+  // default shape to `{data, meta}` for every caller would be a breaking
+  // change repo-wide for the sake of the handful of callers that actually page.
+  // Instead, a caller that needs `meta` sets `withMeta: true` on its OWN
+  // request config (axios preserves unknown config keys onto `response.config`)
+  // and gets `{data, meta}` back; every other request is unaffected. See
+  // api/paging.js — the one place today that sets this flag, to walk paged
+  // list endpoints (tasks/projects/support-tickets) page by page.
+  (response) => {
+    const payload = response.data?.data ?? response.data
+    if (response.config?.withMeta) {
+      return { data: payload, meta: response.data?.meta ?? null }
+    }
+    return payload
+  },
   async (error) => {
     const appError = normalizeError(error)
     const config = error?.config ?? {}

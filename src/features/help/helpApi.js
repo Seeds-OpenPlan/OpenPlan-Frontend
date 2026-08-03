@@ -12,6 +12,7 @@ import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
 import { mockBackend } from './helpFixtures'
 import { unwrapList } from '../../api/unwrap'
+import { fetchAllPages } from '../../api/paging'
 
 /*
   실서버 대조 (2026-07-29, SupportController/SupportTicketResponse): the ticket
@@ -69,18 +70,25 @@ function normalizeAnnouncement(a) {
 /*
   PATH CORRECTION (실서버 대조 2026-07-29): every support endpoint lives under
   `/support/*` (SupportController), not the flat `/support-tickets` this file
-  assumed. `size` is sent for the same reason taskApi's own list does: the
-  server pages at 20 by default and the 문의 목록 screen has no pager, so the
-  server's max (100) is the widest single page available.
+  assumed. The server pages at 20 by default and the 문의 목록 screen has no
+  pager, so — same as taskApi/projectApi — this walks every page via
+  `fetchAllPages` (api/paging.js) rather than requesting just the server's max
+  single page and hoping that's everything.
 */
 
 /** GET /support/tickets (HELP-01/02). 본인 문의만, 최신순. */
 export function getTickets() {
-  return withDevFallback(
-    () => apiClient.get('/support/tickets', { params: { size: 100 } }),
-    () => mockBackend.getTickets(),
-    // Real: `data:[SupportTicket]` (array). Mock: `{ tickets: [...] }`.
-  ).then((r) => unwrapList(r, 'tickets').map(normalizeTicket))
+  const realCall = (page, size) => apiClient.get('/support/tickets', { params: { page, size }, withMeta: true })
+  // Mock fallback only on page 1 — see fetchAllPages's header on why a later
+  // page must never be allowed to fall back to the mock's whole list.
+  const fetchFirstPage = (page, size) =>
+    withDevFallback(
+      () => realCall(page, size),
+      () => mockBackend.getTickets().then((data) => ({ data, meta: null })),
+    )
+  return fetchAllPages(fetchFirstPage, realCall, (data) => unwrapList(data, 'tickets')).then((items) =>
+    items.map(normalizeTicket),
+  )
 }
 
 /** GET /support-tickets/{id} ([가정], OP-HELP-DETAIL). 소유권 검증은 호출자

@@ -14,7 +14,9 @@ import { apiClient } from '../../api/client'
 import { withDevFallback } from './planApi'
 import { mockBackend } from './planFixtures'
 import { unwrapList } from '../../api/unwrap'
+import { fetchAllPages } from '../../api/paging'
 import { clampPriority } from './planPlacement'
+import { snapDuration } from './planTime'
 
 /** Normalize a task to the camelCase shape the panel reads (tolerates snake_case). */
 function normalizeTask(t) {
@@ -23,7 +25,14 @@ function normalizeTask(t) {
     projectId: t.projectId ?? t.project_id ?? null,
     projectName: t.projectName ?? t.project_name ?? null,
     title: t.title,
-    estimatedMinutes: t.estimatedMinutes ?? t.estimated_minutes ?? 60,
+    // Snapped to the 5-minute grid the weekly-plan endpoint enforces
+    // (E-COM-009) right here at the read boundary — this is the ONE place
+    // every consumer of this list (quick-place, drag preview, auto-place)
+    // reads a task's duration from, so a server value that isn't already a
+    // multiple of 5 gets caught before it can ever reach a block's start/end
+    // math (see planTime.js's clampBlockSpan for the other half of this,
+    // where it's re-checked at assembly time as a backstop).
+    estimatedMinutes: snapDuration(t.estimatedMinutes ?? t.estimated_minutes ?? 60),
     // null stays null here (this panel sorts unknown priorities LAST — see
     // byPriorityThenDue's own 99 default — rather than treating them as 보통).
     priority: clampPriority(t.priority, null),
@@ -57,24 +66,34 @@ const PLACED_OR_DONE = new Set(['IN_PROGRESS', 'COMPLETED'])
  * Showing one task too many is recoverable; silently emptying the panel
  * because the server spells a status differently is not.
  *
- * `size` (실서버 확인, 2026-07-29): this endpoint is PAGED — `size` defaults to
- * 20 and caps at 100 — so sending nothing silently truncated the backlog at 20
- * with no indication, which the client-side project filter above would then
- * narrow further (a project's tasks could vanish entirely just for sitting
- * past the first page). 100 is the server's own maximum, taken here as a
- * deliberate ceiling, not a fix: the response's `meta.page` is dropped by
- * client.js's interceptor, so nothing on this path can even SEE that a 101st
- * task exists. Real paging needs that meta first (see the readiness doc's
- * "meta 유실" item); until then this is the widest single page available.
+ * `size`/paging (실서버 확인, 2026-07-29 → resolved W2+): this endpoint is
+ * PAGED — `size` defaults to 20 and caps at 100 — so sending nothing silently
+ * truncated the backlog at 20 with no indication, which the client-side
+ * project filter above would then narrow further (a project's tasks could
+ * vanish entirely just for sitting past the first page). This used to send
+ * `size:100` (the server's own max) as a deliberate CEILING, not a fix,
+ * because `meta.page` was dropped by client.js's interceptor and nothing here
+ * could even SEE that a 101st task existed. Now that client.js exposes `meta`
+ * behind an opt-in flag (see its own header comment), `fetchAllPages` (api/
+ * paging.js) walks every page and this reads the true full backlog regardless
+ * of size.
  */
 export function getUnplacedTasks(projectId) {
-  return withDevFallback(
-    () => apiClient.get('/tasks', { params: { status: 'UNASSIGNED', size: 100 } }),
-    () => mockBackend.getUnplacedTasks(projectId),
-    // Real server: GET /tasks returns the array directly (`data:[Task]`). Mock
-    // fixture: `{ tasks: [...] }`. unwrapList tolerates both (see api/unwrap.js).
-  ).then((r) =>
-    unwrapList(r, 'tasks')
+  // One page = one `size:100` request with `withMeta: true` so the response
+  // interceptor hands back `{data, meta}` instead of the bare payload.
+  const realCall = (page, size) =>
+    apiClient.get('/tasks', { params: { status: 'UNASSIGNED', page, size }, withMeta: true })
+  // Mock fallback is wired ONLY into page 1 — see fetchAllPages's own header
+  // comment on the mock/real mixing bug this split closes. Page 2+ (below,
+  // passed as fetchNextPage) reuses the SAME `realCall`, unwrapped, so a later
+  // page can never fall back to the mock's whole-list answer.
+  const fetchFirstPage = (page, size) =>
+    withDevFallback(
+      () => realCall(page, size),
+      () => mockBackend.getUnplacedTasks(projectId).then((data) => ({ data, meta: null })),
+    )
+  return fetchAllPages(fetchFirstPage, realCall, (data) => unwrapList(data, 'tasks')).then((items) =>
+    items
       .filter((t) => !PLACED_OR_DONE.has(t.status ?? t.task_status ?? null))
       .map(normalizeTask)
       .filter((t) => !projectId || t.projectId === projectId),
@@ -96,8 +115,21 @@ export function postBlock(weeklyPlanId, body) {
  * OP-PLAN-AUTOPLACE → POST /weekly-plans/{id}/auto-placements. Returns a DRAFT
  * { placements, unplaced } — no server-side write happens here (the draft is
  * applied later via postBlockBatch).
+ *
+ * `priorityType` (owner/lead review, W2 API alignment): left WITHOUT a
+ * default here — the button's only current call site (WeeklyPage's
+ * handleAutoPlace) never passes one, which is what "우선순위·마감일 순으로
+ * 배치 중입니다" (its own toast) has always meant. The previous default,
+ * `'DEADLINE_FIRST'`, was never actually observable: the mock backend used to
+ * accept-but-ignore this whole parameter, so every call silently behaved as
+ * priority-first regardless of what was sent. Now that the mock branches on
+ * it for real (see planFixtures.autoPlace's own header), keeping that stale
+ * default here would have flipped the ONLY caller's real behavior to
+ * due-date-first the moment the mock started honoring it — contradicting its
+ * own toast text. `'DEADLINE_FIRST'` is still a real, meaningful value for a
+ * FUTURE caller that explicitly wants that ordering (see planFixtures.js).
  */
-export function postAutoPlacements(weeklyPlanId, priorityType = 'DEADLINE_FIRST') {
+export function postAutoPlacements(weeklyPlanId, priorityType) {
   return withDevFallback(
     () => apiClient.post(`/weekly-plans/${weeklyPlanId}/auto-placements`, { priorityType }),
     () => mockBackend.autoPlace(weeklyPlanId, priorityType),

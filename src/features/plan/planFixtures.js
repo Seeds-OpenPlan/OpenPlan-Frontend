@@ -15,11 +15,13 @@
 import {
   addDaysISO,
   addWeeksISO,
+  clampBlockSpan,
   composeTimestamp,
   currentWeekStartISO,
   dateOf,
   formatMinutesLabel,
   minutesOfDay,
+  snapDuration,
   WEEKDAY_KEYS,
   WEEKDAY_LABELS_KO,
   weekDays,
@@ -356,7 +358,19 @@ function placedRemainders() {
     if (remaining >= 5) {
       out.push({
         ...task,
-        estimatedMinutes: Math.round(remaining),
+        // snapDuration, not a plain Math.round: an A4 shrink-resize can leave
+        // a `remaining` that isn't a 5-minute multiple even though the task's
+        // OWN estimate and every placed block were (e.g. est 107 − placed 60
+        // = 47), and this remainder becomes the next quickPlace/auto-place's
+        // OWN durationMin — see taskApi.normalizeTask's matching comment for
+        // why the read boundary is where this gets caught. ROUND-NEAREST
+        // (not floor/ceil) is deliberate: a task can be split repeatedly
+        // across several partial placements, and floor/ceil would each
+        // compound a ONE-DIRECTIONAL bias every time (always losing a little
+        // planned time, or always inflating it toward a V4 가용 시간 초과 false
+        // positive) — nearest keeps the drift bounded and zero-expectation
+        // instead of accumulating.
+        estimatedMinutes: snapDuration(remaining),
         // Only a PARTIALLY-placed task is a "placed shorter than planned"
         // remainder; a fully-unplaced one (placed 0) is just a normal backlog item.
         reason: placed > 0 ? '예정보다 짧게 배치되어 남은 시간이 있습니다' : null,
@@ -788,6 +802,14 @@ function buildMinimalChange(week, blocks) {
     if (!block || block.blockType !== 'TASK') continue // only a TASK block is this strategy's to move
     const dayIndex = days.indexOf(dateOf(block.startAt))
     if (dayIndex < 0) continue
+    // durationOf reads an ALREADY-COMMITTED block's own span, not a task's raw
+    // estimate — every block this strategy can ever see got its span through
+    // clampBlockSpan/snapDuration at creation (createBlock/autoPlace/
+    // commitBatch, all above), so `duration` here is already a 5-minute
+    // multiple by construction and `startMin + duration` below stays aligned
+    // without re-snapping. Not true of a fresh estimate (see taskApi's
+    // normalizeTask) — this is why replan strategies don't need their own
+    // clampBlockSpan call the way a NEW placement does.
     const duration = durationOf(block)
     const occupied = [
       ...working.filter((b) => b.planBlockId !== blockId).map((b) => ({ startAt: b.startAt, endAt: b.endAt })),
@@ -844,6 +866,8 @@ function buildDeadlineFirst(week, blocks) {
   const placed = []
   let movedCount = 0
   for (const block of ordered) {
+    // durationOf(block) is already 5-aligned by construction — see
+    // buildMinimalChange's own comment on this same pattern, above.
     const duration = durationOf(block)
     const slot = findFirstFreeSlot({ days, availability, blocks: occupied, durationMin: duration })
     if (!slot) {
@@ -929,6 +953,8 @@ function buildWorkloadBalance(week, blocks) {
     // what this iteration was trying to do).
     if (!slot || slot.dayIndex !== underDay.dayIndex) break
 
+    // durationOf(candidate) is already 5-aligned by construction — see
+    // buildMinimalChange's own comment on this same pattern, above.
     const startAt = composeTimestamp(days[slot.dayIndex], slot.startMin)
     const endAt = composeTimestamp(days[slot.dayIndex], slot.startMin + durationOf(candidate))
     working = working.map((b) =>
@@ -1213,26 +1239,55 @@ export const mockBackend = {
   },
 
   // POST /weekly-plans/{id}/auto-placements — DRAFT only. Greedily lays the
-  // backlog into free slots (우선순위·마감일 순) without mutating any store; the
-  // client holds the result as a draft overlay until [적용] commits it.
-  async autoPlace(weeklyPlanId) {
+  // backlog into free slots without mutating any store; the client holds the
+  // result as a draft overlay until [적용] commits it.
+  //
+  // `priorityType` (owner/lead review, W2 API alignment): RB-PLAN-01's OWN
+  // toast copy ("우선순위·마감일 순으로 배치 중입니다", WeeklyPage's
+  // handleAutoPlace) is the one ordering this button has ever promised, so
+  // byPriorityThenDue is the DEFAULT for any value this doesn't recognize —
+  // including no argument at all, which is what every current caller sends.
+  // Only the ONE literal this codebase already gave a meaning to elsewhere
+  // (`'DEADLINE_FIRST'`, replanStrategies.js's RB-PLAN-04 "마감 우선안") flips
+  // to the inverse ordering — reusing that SAME comparator rather than a
+  // second implementation of "due date first", so a future caller that wants
+  // that ordering here gets identical behavior to the replan alternative of
+  // the same name. Previously this parameter was accepted by taskApi's
+  // signature but silently DROPPED here (JS just ignores an extra arg) — the
+  // real risk once a real server actually reads this field is that it starts
+  // reordering placements the mock never did, a "조용히 바뀌는 정렬" the owner
+  // flagged; branching on it now, even before the real contract is settled,
+  // means dev-mode behavior can no longer silently diverge from it.
+  async autoPlace(weeklyPlanId, priorityType) {
     await delay(220) // a visible "배치 중…" beat, without feeling stuck
     const week = findWeekByPlanId(weeklyPlanId)
     if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
     const days = weekDays(week.weekStartDate)
     // occupied grows as we draft, so drafts don't overlap each other or real blocks.
     const occupied = week.blocks.map((b) => ({ startAt: b.startAt, endAt: b.endAt }))
+    const compare = priorityType === 'DEADLINE_FIRST' ? byDueThenPriority : byPriorityThenDue
     const placements = []
     const unplaced = []
-    for (const task of [...unplacedTasks].sort(byPriorityThenDue)) {
-      const duration = task.estimatedMinutes ?? 60
+    for (const task of [...unplacedTasks].sort(compare)) {
+      // snapDuration here is a backstop, not the primary fix — taskApi's
+      // normalizeTask already snaps every task's estimate at the read
+      // boundary, but this mock's OWN seed/remainder data feeds `unplacedTasks`
+      // too (never round-tripped through that adapter), so this call site
+      // stays defensive rather than trusting every source to already comply.
+      const duration = snapDuration(task.estimatedMinutes ?? 60)
       const slot = findFirstFreeSlot({ days, availability, blocks: occupied, durationMin: duration })
       if (!slot) {
         unplaced.push({ ...task, reason: '이번 주 남은 가용 시간에 맞는 빈 구간이 없습니다' })
         continue
       }
-      const startAt = composeTimestamp(days[slot.dayIndex], slot.startMin)
-      const endAt = composeTimestamp(days[slot.dayIndex], slot.startMin + duration)
+      // clampBlockSpan (not a raw `+ duration`): findFirstFreeSlot already
+      // guarantees `duration` fits within the day's window, so the midnight
+      // clamp never actually fires here — kept anyway so this call site
+      // can't silently diverge from the one real rule (start/end always
+      // built through this same helper) if that guarantee ever changes.
+      const { startMin, endMin } = clampBlockSpan(slot.startMin, duration)
+      const startAt = composeTimestamp(days[slot.dayIndex], startMin)
+      const endAt = composeTimestamp(days[slot.dayIndex], endMin)
       placements.push({ taskId: task.taskId, title: task.title, startAt, endAt })
       occupied.push({ startAt, endAt })
     }
