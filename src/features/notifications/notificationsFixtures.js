@@ -58,6 +58,7 @@ let notifications = [
     body: '"7월 정기 점검 안내"를 확인해 주세요',
     routePath: '/notices/notice-1',
     readAt: '2026-07-22T08:00:00.000Z',
+    createdAt: '2026-07-22T06:30:00.000Z',
   },
   {
     notificationId: 'noti-5',
@@ -66,6 +67,7 @@ let notifications = [
     body: '주간 계획을 세우고 한 주를 시작해 보세요',
     routePath: '/weekly',
     readAt: '2026-07-21T09:00:00.000Z',
+    createdAt: '2026-07-21T07:45:00.000Z',
   },
 ]
 
