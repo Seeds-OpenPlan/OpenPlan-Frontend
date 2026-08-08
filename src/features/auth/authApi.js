@@ -102,17 +102,28 @@ export function login(email, password) {
 }
 
 /**
- * POST /auth/signup ([가정-확장]). 실서버 대조 2026-08-04: 이 경로 자체가 아직
- * 없다 — AuthStubController에도, UserController(`GET /users/me`·
- * `PATCH /users/me/profile`뿐)에도 가입 라우트가 없다. 추측으로 다른 경로(예:
- * `POST /users`)를 지어내는 대신 기존 경로를 그대로 두고, 4주차 실인증 연결 때
- * 전창현(BE)과 실제 경로를 확정한다 — 지금은 어떤 경로를 불러도 결과가 같다
- * (Spring의 일반 404 E-COM-004 → withAuthDevFallback이 mock으로 폴백).
+ * POST /users (회원가입, AUTH-03). 실서버 대조 2026-08-08 — openapi.yaml
+ * `operationId: signUp`이 이제 채워져 경로가 확정됐다(이전 주석은 "경로 자체가
+ * 아직 없다"였다 — 그 시점엔 맞는 말이었지만 지금은 아니다). 경로가 `/auth/*`가
+ * 아니라 `/users`인 이유: 가입은 세션이 아니라 계정 리소스 자체를 만드는
+ * 동작이라 `users` 태그다(security: [] — 비인증 호출).
+ *
+ * body는 email·password·termsAgreed 셋뿐이다. `name`은 계약에 없다 — 이 앱은
+ * 이름을 온보딩 ONB-02(`PATCH /users/me/profile`)에서 받으므로 가입 시점엔
+ * 보낼 곳이 없다(폼 자체는 그대로 둔다 — SignupPage.jsx가 name을 검증에는
+ * 계속 쓰되 서버로는 보내지 않는 이유와, 이후 화면으로 이어붙일 수 없는 이유를
+ * 그 파일 주석에 남겨 뒀다). 201 응답은 `{ userId, emailVerificationRequired }`.
+ *
+ * 로컬 BE 대조(2026-08-08): 컨트롤러 라우트 자체가 아직 매핑되어 있지 않아
+ * (x-implementation-status: not-implemented — AuthStubController가 아니라
+ * UserController가 맡을 자리인데 핸들러가 없음) 501 E-AUTH-011이 아니라 Spring의
+ * 일반 404 E-COM-004로 떨어진다. withAuthDevFallback의 기존 404 분기가 이미
+ * 그 코드를 잡으므로 이 함수는 그 헬퍼를 변경 없이 그대로 쓴다.
  */
-export function signup({ name, email, password }) {
+export function signup({ email, password, termsAgreed }) {
   return withAuthDevFallback(
-    () => apiClient.post('/auth/signup', { name, email, password }),
-    () => authMockBackend.signup({ name, email, password }),
+    () => apiClient.post('/users', { email, password, termsAgreed }),
+    () => authMockBackend.signup({ email, password, termsAgreed }),
   )
 }
 

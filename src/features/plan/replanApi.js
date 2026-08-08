@@ -3,20 +3,27 @@
   1:1 to an endpoint; consumers (usePlanData's useReplanOptions/useApplyReplanOption)
   call ONLY these. Same DEV mock-fallback rule as planApi/taskApi/scheduleApi.
 
-  ENDPOINT NOTE — apply: the 작업지시 writes the apply step as POST
-  `.../application` (api-contracts.md §2.7 mirrors that verbatim). The BE 명세서
-  (07번) instead documents PATCH `/replan-options/{id}/selection` with body
-  `{isSelected}`, and the ERD's replan_options row carries `is_selected` /
-  `selected_at` fields that match THAT shape — not "application" — exactly. This
-  file follows the 07 spec + ERD (same precedent as planApi's validate/save
-  endpoint notes: 07 wins when it disagrees with the 작업지시).
+  ENDPOINT NOTE — apply (W4 — corrects this header's own prior note, which had
+  it backwards): `openapi.yaml`'s `applyReplanOption` is POST
+  `/replan-options/{optionId}/application`, no body — exactly what the 작업지시
+  said all along. The PATCH `/replan-options/{id}/selection` `{isSelected}`
+  shape this file used to follow was this repo's own guess from the 07번 API
+  명세서 CSV, retired 2026-07-24; `openapi.yaml` (BE-1's Swagger source) is now
+  the ONE spec this repo treats as authoritative for any endpoint it documents
+  — same correction as planApi's validate/save endpoint notes.
 
-  ENDPOINT NOTE — list: the 07 spec has NO GET list endpoint for replan-options
-  at all (api-contracts.md's OP-REPLAN-LIST doesn't correspond to anything in the
-  07 CSV). This isn't a gap in practice: POST generate's OWN response already
-  carries the option(s) for the strategy just requested, so nothing here ever
-  needs to re-fetch a list — see usePlanData.js's useReplanOptions for how the
-  three per-strategy responses are assembled into the 4-way comparison.
+  ENDPOINT NOTE — list: `openapi.yaml` DOES document a GET list endpoint after
+  all (operationId `listReplanOptions`, `GET /weekly-plans/{planId}/replan-
+  options` — reusing generateReplanOption's own path, distinguished by verb).
+  This corrects this header's own prior claim that no such endpoint existed
+  (true of the retired 07 CSV, not of openapi.yaml). Still no caller here for
+  it, on purpose (out of THIS change's scope) — POST generate's own response
+  already carries the option(s) for the strategy just requested, so nothing in
+  this app has needed to re-fetch a list yet; see usePlanData.js's
+  useReplanOptions for how the three per-strategy responses are assembled into
+  the 4-way comparison. A future "새로고침" affordance on the compare modal
+  (openapi's own summary: "대안 재조회 (비교 화면 새로고침)") is the first
+  caller `listReplanOptions` would actually need.
 */
 
 import { apiClient } from '../../api/client'
@@ -68,20 +75,30 @@ export function generateReplanOption(weeklyPlanId, strategyType) {
 }
 
 /**
- * OP-REPLAN-APPLY → PATCH /replan-options/{id}/selection, body {isSelected:true}.
- * Returns only `{ message }` (no updated week) — the caller refetches the week
- * to see the swapped blocks (useApplyReplanOption's onSuccess).
+ * OP-REPLAN-APPLY → POST /replan-options/{optionId}/application, no body (W4 —
+ * see this file's own header for why the endpoint moved from the old PATCH
+ * `.../selection` guess). Response is now a full `WeeklyPlanView` ("반영 후
+ * 주간 화면 최신 상태", openapi.yaml's own description) rather than the old
+ * `{ message }` this function used to expect — but the caller still only
+ * REFETCHES the week rather than consuming this payload directly
+ * (useApplyReplanOption's `onSuccess` ignores `_data` and invalidates the week
+ * query). That is not a mismatch to fix here: this adapter has never unwrapped
+ * the WeeklyPlanView envelope (`{plan, blocks, fixedSchedules, ...}` — same
+ * gap flagged, and left alone, on planApi.getWeek's own W4 header), and
+ * `saveWeek` follows the identical "ignore the resolved value, invalidate and
+ * refetch" pattern for the exact same reason — consistent with how the rest
+ * of this domain already treats a write's response as a signal, not a source
+ * of truth, until that envelope gets a real adapter.
  *
- * A 409 here means the option is no longer applicable (the 07 spec's own case is
- * "이미 선택된 재계획 대안"; a plan that moved on since this batch was generated
- * would plausibly land here too) — it carries no `details.latest`, unlike
- * E-COM-006, so OVL-CONFLICT's 3-choice UI has nothing to render for it. The
- * caller's job is simply "다시 생성 유도" (AC-3): re-open the generation step, not
- * a version-diff overlay.
+ * A 409 here means the option is no longer applicable (a plan that moved on
+ * since this batch was generated, or the option was already applied) — it
+ * carries no `details.latest`, unlike E-COM-006, so OVL-CONFLICT's 3-choice UI
+ * has nothing to render for it. The caller's job is simply "다시 생성 유도"
+ * (AC-3): re-open the generation step, not a version-diff overlay.
  */
 export function selectReplanOption(replanOptionId) {
   return withDevFallback(
-    () => apiClient.patch(`/replan-options/${replanOptionId}/selection`, { isSelected: true }),
+    () => apiClient.post(`/replan-options/${replanOptionId}/application`),
     () => mockBackend.selectReplanOption(replanOptionId),
   )
 }

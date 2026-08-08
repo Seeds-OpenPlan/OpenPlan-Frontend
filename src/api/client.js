@@ -23,6 +23,13 @@ if (import.meta.env.DEV && !baseURL) {
   )
 }
 
+// 토큰 저장 확인(W4, 2026-08-08): 이 코드베이스 어디에도 access/refresh 토큰을
+// 담는 localStorage/sessionStorage/Authorization 헤더가 없다 — 세션은 항상
+// httpOnly Set-Cookie(op_at/op_rt)로만 오간다(위 token-refresh 코멘트 참조).
+// `withCredentials`도 추가하지 않았다: dev는 Vite 프록시(vite.config.js
+// `/api` → localhost:8080, changeOrigin), 배포는 nginx 단일 오리진(D-11)이라
+// 브라우저 기준 항상 동일 출처 — 쿠키가 자동으로 실린다. 교차 출처가 되는
+// 순간(예: 프록시 없이 별도 API 도메인 직접 호출)에만 이 설정이 필요해진다.
 export const apiClient = axios.create({
   baseURL: baseURL ?? '',
   timeout: 10000,
