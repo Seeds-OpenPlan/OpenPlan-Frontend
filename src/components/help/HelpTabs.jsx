@@ -8,6 +8,18 @@
 
   Owner feedback #B: FAQ는 항상 왼쪽(첫 번째) — "지원" 진입 시 FAQ가 먼저
   보이는 기본값(owner feedback #7)과 같은 순서로 통일.
+
+  W6 review (Thomas Major #2 / Matthias T41 / Hananiah class C): this used to
+  declare `role="tablist"`/`role="tab"`/`aria-selected` without honoring the
+  WAI-ARIA tabs pattern's behavioral contract (no arrow-key navigation, no
+  roving tabindex, no wired-up `role="tabpanel"`). A screen reader user hears
+  "tab" and expects arrow-key movement that never comes — worse than no role
+  at all. Since the caller (SettingsSupportPage) only swaps which content
+  renders via `value`/`onChange` — there's no real tabpanel structure here,
+  this was never actually tabs — switched to the same `role="group"` +
+  `aria-pressed` pill-toggle pattern stats/StatsToggle.jsx already uses,
+  rather than building out a full tablist (no test suite in this repo to
+  guard a bigger, riskier change).
 */
 const TABS = [
   { value: 'faq', label: '자주 묻는 질문' },
@@ -16,15 +28,14 @@ const TABS = [
 
 export function HelpTabs({ value, onChange }) {
   return (
-    <div role="tablist" aria-label="문의·FAQ" className="inline-flex rounded-full border border-border bg-surface p-0.5">
+    <div role="group" aria-label="문의·FAQ" className="inline-flex rounded-full border border-border bg-surface p-0.5">
       {TABS.map((tab) => {
         const active = value === tab.value
         return (
           <button
             key={tab.value}
             type="button"
-            role="tab"
-            aria-selected={active}
+            aria-pressed={active}
             onClick={() => onChange(tab.value)}
             className={[
               'rounded-full px-3 py-1 text-label font-medium transition-colors',
