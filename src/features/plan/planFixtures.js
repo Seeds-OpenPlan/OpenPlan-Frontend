@@ -1613,8 +1613,9 @@ export const mockBackend = {
     return { message: 'UPDATED' }
   },
 
-  // POST /weekly-plans/{id}/validation-issues — the dry-run (ST-F1-05 AC-1). Runs
-  // the rules against the CLIENT's block set (the unsaved draft), never the stored
+  // POST /weekly-plans/{id}/validations — the dry-run (ST-F1-05 AC-1, path
+  // corrected W4 — see planApi.validatePlan's own header). Runs the rules
+  // against the CLIENT's block set (the unsaved draft), never the stored
   // one, and writes nothing. Kept fast on purpose: the whole loop — local change →
   // 300ms debounce → this call → badge update — has a 1s budget (NFR-025).
   async validatePlan(weeklyPlanId, blocks) {
@@ -1637,17 +1638,33 @@ export const mockBackend = {
     return { issues, savable }
   },
 
-  // PUT /weekly-plans/{weeklyPlanId} — PLAN-03 저장(확정). Flips the week to
-  // CONFIRMED and bumps `version`, which is what a real optimistic-lock 409 would
-  // key off; the mock never rejects, so the 409 path is exercised against a real
-  // server (or by pointing at one) rather than simulated here.
-  async saveWeek(weeklyPlanId, body) {
+  // POST /weekly-plans/{weeklyPlanId}/confirmation — PLAN-03 저장(확정), W4
+  // (was PUT with a status body; the real endpoint takes NO body — see
+  // planApi.saveWeek's own header — so this mock no longer reads one either).
+  // Flips the week to CONFIRMED, stamps confirmedAt, bumps `version` (what a
+  // real optimistic-lock 409/E-COM-006 would key off; the mock never rejects,
+  // so that path is exercised against a real server rather than simulated
+  // here). Response shape now matches `WeeklyPlan` (openapi.yaml) instead of
+  // the old ad-hoc `{ weeklyPlanId }` — nothing in this app actually reads
+  // the resolved value today (useSaveWeek's onSuccess ignores it and
+  // refetches instead), but the mock still owes a shape a future consumer
+  // could rely on without being surprised it's mock-only.
+  async saveWeek(weeklyPlanId) {
     await delay()
     const week = findWeekByPlanId(weeklyPlanId)
     if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
-    week.status = body?.status ?? 'CONFIRMED'
+    week.status = 'CONFIRMED'
     week.version += 1
-    return { weeklyPlanId }
+    week.confirmedAt = new Date().toISOString()
+    return {
+      weeklyPlanId: week.weeklyPlanId,
+      weekStartDate: week.weekStartDate,
+      weekEndDate: week.weekEndDate,
+      status: week.status,
+      totalPlannedMinutes: computeDerived(week).totalPlannedMinutes,
+      confirmedAt: week.confirmedAt,
+      version: week.version,
+    }
   },
 
   // POST /tasks/{taskId}/execution-records — PLAN-15 실제 시간 기록 (write-only).
@@ -1676,10 +1693,14 @@ export const mockBackend = {
     return { replanOptions: [{ ...option, replanOptionId }] }
   },
 
-  // PATCH /replan-options/{id}/selection — ST-F1-07 AC-3 "초안 교체 반영". The
-  // real endpoint returns only a message (no updated week), so the client always
-  // refetches after this resolves; this mock just needs to make that refetch
-  // return the swapped blocks. FIXED schedules are never plan_blocks, so nothing
+  // POST /replan-options/{id}/application — ST-F1-07 AC-3 "초안 교체 반영", W4
+  // (was PATCH .../selection; see replanApi.js's own header for the endpoint
+  // correction). The real endpoint now returns a full WeeklyPlanView, but the
+  // client still always REFETCHES after this resolves rather than consuming
+  // it (replanApi.selectReplanOption's own header explains why) — so this
+  // mock just needs that refetch to return the swapped blocks; the `{message}`
+  // shape below is kept only because nothing reads it either way. FIXED
+  // schedules are never plan_blocks, so nothing
   // about them needs preserving here — only week.blocks is replaced.
   async selectReplanOption(replanOptionId) {
     await delay()

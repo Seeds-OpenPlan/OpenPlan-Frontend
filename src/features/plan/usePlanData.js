@@ -727,7 +727,7 @@ function blockSignature(weeklyPlanId, blocks) {
 
 /**
  * The validation dry-run loop (AC-1): local block change → 300ms debounce → POST
- * validation-issues → badges, block marks and the review panel all update from
+ * .../validations → badges, block marks and the review panel all update from
  * ONE result object.
  *
  * Deliberately NOT a useQuery: this is a POST whose body is the local draft, it
@@ -892,8 +892,17 @@ export function usePlanValidation({ weeklyPlanId, blocks, enabled = true }) {
 }
 
 /**
- * PUT /weekly-plans/{id} with status CONFIRMED — PLAN-03 저장. Success invalidates
- * the week (the server may renumber/adjust on confirm) and announces it.
+ * POST /weekly-plans/{id}/confirmation (no body — W4, see planApi.saveWeek's
+ * own header) — PLAN-03 저장. Success invalidates the week (the server may
+ * renumber/adjust on confirm) and announces it.
+ *
+ * `weekStartDate`/`weekEndDate`/`totalPlannedMinutes` are still accepted from
+ * the caller (WeeklyPage.commitSave still sends them) but no longer forwarded
+ * to `saveWeek` — the confirm endpoint takes no body now, so there is nothing
+ * left for them to fill; only `weekStartISO` below is still read, to key the
+ * cache invalidation. Left un-narrowed at the WeeklyPage call site on purpose
+ * (out of this change's scope, and harmless — extra object keys `saveWeek`
+ * doesn't declare a parameter for are simply ignored).
  *
  * No onError here ON PURPOSE: the save's failure branches are not generic. A 409
  * has to re-sync the review panel and restore the disabled save button (AC-4),
@@ -903,8 +912,7 @@ export function usePlanValidation({ weeklyPlanId, blocks, enabled = true }) {
 export function useSaveWeek() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ weeklyPlanId, weekStartDate, weekEndDate, totalPlannedMinutes }) =>
-      saveWeek(weeklyPlanId, { weekStartDate, weekEndDate, totalPlannedMinutes }),
+    mutationFn: ({ weeklyPlanId }) => saveWeek(weeklyPlanId),
     onSuccess: (_data, { weekStartISO }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       toast({ tone: 'success', message: '주간 계획을 저장했습니다' })
@@ -1008,12 +1016,13 @@ export function useReplanOptions(weeklyPlanId) {
 }
 
 /**
- * PATCH /replan-options/{id}/selection — AC-3 "초안 교체 반영". The endpoint
- * returns no updated week (07 spec: `{message:"APPLIED"}` only), so success just
- * invalidates the week query; the caller (WeeklyPage) is expected to ALSO force
- * `validation.revalidate(blocks)` afterward, same split as
- * useToggleFixedException's header explains — this hook only knows about the
- * week cache, not the validation loop.
+ * POST /replan-options/{id}/application — AC-3 "초안 교체 반영" (path corrected
+ * W4 — see replanApi.selectReplanOption's own header). The endpoint's response
+ * (a full WeeklyPlanView) is still not consumed directly here — same reasoning
+ * as `useSaveWeek` — so success just invalidates the week query; the caller
+ * (WeeklyPage) is expected to ALSO force `validation.revalidate(blocks)`
+ * afterward, same split as useToggleFixedException's header explains — this
+ * hook only knows about the week cache, not the validation loop.
  *
  * No onError here on purpose (mirrors useSaveWeek): a 409 on this endpoint means
  * "this option is no longer selectable" (already applied, or the plan moved on

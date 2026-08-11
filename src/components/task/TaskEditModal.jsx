@@ -305,7 +305,7 @@ function DiscardConfirmDialog({ onKeepEditing, onDiscard }) {
 
   WHY CONDITIONAL MOUNT, not a `hidden`/CSS-collapsed panel with the hook left
   running: useTaskEditPreview owns useWeekPlan + useAvailability + the debounced
-  usePlanValidation dry-run (GET the active week, POST validation-issues on
+  usePlanValidation dry-run (GET the active week, POST .../validations on
   every estimatedMinutes/title keystroke). Firing that while the user can't
   even SEE the result would be pure waste. Mounting `TaskEditPreviewBody`
   (the component that actually calls the hook) ONLY while the overlay is

@@ -17,13 +17,21 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
   가입 직후 이동해서야 "재발송" 버튼이 존재하므로, 이 화면은 가입 폼 제출까지만
   다루고 쿨다운 타이머는 VerifyEmailPage로 넘긴다(그 화면이 실제 재발송 호출을
   갖고 있다).
+
+  이름 입력 필드 없음 (오너 결정, 2026-08-08): 서버 계약(POST /users, openapi
+  operationId: signUp)엔 애초에 name 자리가 없고, 이 앱은 이름을 온보딩
+  ONB-02(PATCH /users/me/profile)에서만 받는다. 가입 화면에서 받아 봐야
+  보낼 곳이 없을 뿐 아니라, 온보딩까지 이어붙일 수도 없다 — 이메일 인증은
+  사용자가 메일 클라이언트에서 링크를 클릭해 들어오는 앱 밖 하드
+  네비게이션이라 router state(SignupPage→VerifyEmailPage 사이의 email처럼)가
+  그 경계를 못 넘는다. 입력받고 버리느니 온보딩 한 곳에서만 받는다 — 이
+  화면에 이름 필드를 다시 추가하지 말 것(중복 질문이 된다).
 */
 export function SignupPage() {
   const navigate = useNavigate()
-  const nameRef = useRef(null)
+  const emailRef = useRef(null)
   const errorId = useId()
 
-  const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -31,23 +39,22 @@ export function SignupPage() {
 
   const signupMutation = useSignup()
 
-  // Thomas 리뷰 MINOR: nameRef가 그냥 죽은 ref로 남아있던 것을 첫 필드
-  // autofocus에 실제로 쓴다.
+  // 이름 필드가 빠지면서 첫 필드가 이메일이 됐다 — autofocus 대상도 그에
+  // 맞춰 이동(이전엔 nameRef가 이 역할이었다).
   useEffect(() => {
-    nameRef.current?.focus()
+    emailRef.current?.focus()
   }, [])
 
-  const trimmedName = name.trim()
   const emailValid = EMAIL_RE.test(email)
   const passwordValid = isPasswordValid(password)
   const passwordsMatch = password.length > 0 && password === confirmPassword
-  const canSubmit = trimmedName && emailValid && passwordValid && passwordsMatch && agreedToTerms
+  const canSubmit = emailValid && passwordValid && passwordsMatch && agreedToTerms
 
   const submit = (e) => {
     e.preventDefault()
     if (!canSubmit || signupMutation.isPending) return
     signupMutation.mutate(
-      { name: trimmedName, email, password },
+      { email, password, termsAgreed: agreedToTerms },
       { onSuccess: () => navigate('/verify-email', { state: { email } }) },
     )
   }
@@ -76,20 +83,9 @@ export function SignupPage() {
         <h1 className="sr-only">회원가입</h1>
 
         <label className="flex flex-col gap-1">
-          <span className="text-caption font-medium text-text-muted">이름</span>
-          <input
-            ref={nameRef}
-            type="text"
-            autoComplete="name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className={FIELD}
-          />
-        </label>
-
-        <label className="flex flex-col gap-1">
           <span className="text-caption font-medium text-text-muted">이메일</span>
           <input
+            ref={emailRef}
             type="email"
             autoComplete="email"
             placeholder="example@email.com"

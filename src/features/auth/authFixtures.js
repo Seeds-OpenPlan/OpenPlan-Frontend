@@ -109,7 +109,13 @@ export const authMockBackend = {
     return { userId: user.userId, name: user.name, email: user.email, status: user.status }
   },
 
-  async signup({ name, email, password }) {
+  // 실서버 계약(openapi `/users` operationId: signUp, 실서버 대조 2026-08-08):
+  // body는 email·password·termsAgreed뿐이다 — name은 계약에 없어(authApi.js
+  // signup 헤더 참조) 이 mock도 인자에서 뺐다(termsAgreed는 mock이 검증하지
+  // 않는다 — 실서버 유효성만 다루는 이 mock 단계에서 판별할 근거가 없다).
+  // 새로 생성되는 계정 레코드는 name: null로 남는다 — 이름은 온보딩 단계에서
+  // 채워질 몫이라 signup mock이 대신 채워 넣지 않는다.
+  async signup({ email, password }) {
     await delay()
     if (users.some((u) => u.email === email)) {
       // 가입 자체는 이메일 중복을 알려줘야 사용자가 다음 행동(로그인/재설정)을
@@ -120,8 +126,11 @@ export const authMockBackend = {
       throw authError('E-AUTH-003', 409, { field: 'email' })
     }
     const userId = `dev-user-${String(users.length + 1).padStart(4, '0')}`
-    users = [...users, { userId, email, password, name, status: 'PENDING_VERIFICATION', deactivatedAt: null }]
-    return { userId, email, status: 'PENDING_VERIFICATION' }
+    users = [...users, { userId, email, password, name: null, status: 'PENDING_VERIFICATION', deactivatedAt: null }]
+    // 실서버 201 응답 형태(openapi `/users` 201 — 실서버 대조 2026-08-08):
+    // { userId, emailVerificationRequired }. 이전엔 서버 계약에 없는
+    // { userId, email, status }를 임의로 돌려주고 있었다.
+    return { userId, emailVerificationRequired: true }
   },
 
   // 토큰 검증 mock — 실제 이메일 발송이 없어 resendVerificationEmail의 devHint

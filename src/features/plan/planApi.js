@@ -74,6 +74,23 @@ function normalizeBlock(b) {
   }
 }
 
+/**
+ * KNOWN UNRESOLVED GAP (W4 review): this reads fields FLAT off `w`
+ * (`w.weeklyPlanId`, `w.blocks`, ...), which matches the DEV mock's own shape
+ * and the pre-openapi assumption this file was built on — but a real
+ * `WeeklyPlanView` (openapi.yaml, GET /weekly-plans's actual schema) nests the
+ * plan's own fields under `w.plan` (`w.plan.weeklyPlanId`, `w.plan.status`,
+ * `w.plan.version`, `w.plan.totalPlannedMinutes` — only `blocks` happens to
+ * already sit at the top level on that envelope, which is why it doesn't
+ * break at least THAT field today). Unwrapping this envelope properly is a
+ * separate, larger change the team lead has explicitly deferred (out of W4's
+ * scope) — `getWeek`'s own `isEmptyWeekView` only reads `w.plan`'s PRESENCE
+ * and nullness (not its contents) for exactly this reason, and callers of
+ * THIS function should not assume `weeklyPlanId`/`status`/`version`/
+ * `totalPlannedMinutes` are populated once a real (non-mock, non-404) server
+ * answers — they will silently read as `undefined`/defaults until the
+ * envelope unwrap lands.
+ */
 function normalizeWeek(w) {
   return {
     weeklyPlanId: w.weeklyPlanId ?? w.weekly_plan_id,
@@ -148,12 +165,83 @@ function serializeAvailability(patterns) {
   }))
 }
 
-/** OP-PLAN-GETWEEK → GET /weekly-plans?weekStartDate= */
+/**
+ * OP-PLAN-GETWEEK → GET /weekly-plans?weekStartDate=, get-or-create on an empty
+ * result (openapi.yaml getOrCreateWeeklyPlan, W4).
+ *
+ * GET ALONE NEVER PROVISIONS A DRAFT. Before this change there was no call to
+ * `POST /weekly-plans` anywhere in the app — a week nobody had opened before
+ * had no way to come into existence, because GET's own 200 for that case just
+ * says "no plan" (openapi.yaml: "해당 주차 계획 미존재 시 data.plan=null (FE가
+ * POST로 생성)") rather than creating one. This gap was invisible in DEV
+ * because the mock's own `getWeek` (planFixtures.js's `ensureWeek`) already
+ * get-or-creates internally — GET never comes back empty through the mock, on
+ * purpose (see that file's own W4 note) — so the branch below is UNREACHED
+ * while mock-backed and only starts doing anything the day GET is backed by a
+ * real server.
+ *
+ * EMPTY-WEEK TEST, CORRECTED (W4 review — Thomas MAJOR, this function's own
+ * prior version had it wrong): the test is `raw.plan === null`, not "no
+ * `weeklyPlanId` came back". `weeklyPlanId` was NEVER a valid signal either
+ * way — on a real, POPULATED `WeeklyPlanView` it lives NESTED at
+ * `raw.plan.weeklyPlanId`, never at the top level (this adapter still does
+ * not unwrap that envelope — see `normalizeWeek`'s own caveat below, still
+ * true, still out of THIS change's scope) — so the old test was false for
+ * both "no plan" AND "plan exists", meaning every real GET would have wrongly
+ * re-provisioned via POST. `plan` is the one key that only a real
+ * `WeeklyPlanView` carries at all (the mock's own flat shape has none —
+ * `isEmptyWeekView`'s own `hasOwnProperty` check below is what tells the two
+ * apart), and the spec defines emptiness by that field explicitly, so it is
+ * the only field this test can safely read.
+ *
+ * "no `plan` key at all" (mock, or any other flat shape) and "`plan` key
+ * present but null" (real, genuinely empty week) are DELIBERATELY different
+ * branches — collapsing them would either break the mock (which never had a
+ * `plan` to be null) or miss a real empty week (a flat object with no `plan`
+ * key isn't reliably "has a plan" either, but the mock is the ONLY shape that
+ * currently reaches this function without one, and it always get-or-creates,
+ * so treating "no `plan` key" as "already complete" is safe today).
+ */
+function isEmptyWeekView(raw) {
+  return raw != null && Object.prototype.hasOwnProperty.call(raw, 'plan') && raw.plan === null
+}
+
 export function getWeek(weekStartDate) {
-  return withDevFallback(
-    () => apiClient.get('/weekly-plans', { params: { weekStartDate } }),
-    () => mockBackend.getWeek(weekStartDate),
-  ).then(normalizeWeek)
+  const fetchWeekView = () =>
+    withDevFallback(
+      () => apiClient.get('/weekly-plans', { params: { weekStartDate } }),
+      () => mockBackend.getWeek(weekStartDate),
+    )
+
+  return fetchWeekView().then((raw) => {
+    if (!isEmptyWeekView(raw)) return normalizeWeek(raw)
+
+    // Empty week: create the draft, then RE-FETCH THE FULL VIEW — do not
+    // normalize the create response directly. `POST /weekly-plans` only ever
+    // returns a bare `WeeklyPlan` (weeklyPlanId/weekStartDate/weekEndDate/
+    // status/totalPlannedMinutes/confirmedAt/version — openapi.yaml's own
+    // schema for it), with no blocks/fixedSchedules/availability/summary at
+    // all. Normalizing THAT directly would make `normalizeWeek`'s
+    // `blocks: (w.blocks ?? [])` silently collapse to `[]` even for a week
+    // that already had placed blocks — get-or-create is idempotent
+    // server-side (a repeat POST against an existing draft just returns it,
+    // it does not wipe anything), so a plan CAN exist with blocks even though
+    // this particular GET raced ahead of it; wiping the screen every load for
+    // such a week was the bug this whole fix exists for. Fetching again after
+    // create is the only way to get the real view back.
+    //
+    // NOT recursive through `getWeek` itself — calls `fetchWeekView` once,
+    // directly — so a still-`plan: null` result after create (a genuinely
+    // brand-new week with nothing in it yet, so nothing lost) is simply
+    // accepted as-is rather than retried into a create→fetch→create loop.
+    return withDevFallback(
+      () => apiClient.post('/weekly-plans', { weekStartDate }),
+      // Unreached via mock (see this function's own header note) — kept only
+      // so a real POST 404 (endpoint not yet live while GET already is)
+      // still resolves instead of throwing.
+      () => mockBackend.getWeek(weekStartDate),
+    ).then(fetchWeekView).then(normalizeWeek)
+  })
 }
 
 /** GET /users/me/availabilities (read side of the availability contract). */
@@ -427,12 +515,56 @@ export function normalizeValidationPayload(payload) {
 }
 
 /**
- * OP-PLAN-VALIDATE → POST /weekly-plans/{weeklyPlanId}/validation-issues (dry-run;
- * writes nothing). Body carries the LOCAL block set so the check reflects the
- * user's unsaved draft, not the last persisted plan.
+ * Translate this app's own local block shape (planBlockId/title/scheduleId/
+ * status, everywhere else in this file) into a wire `PlanBlockInput`
+ * (openapi.yaml components/schemas/PlanBlockInput) — the type `virtualBlocks`
+ * entries actually are. The two shapes are NOT a rename of each other:
+ *   - no planBlockId/scheduleId/status at all: a virtual block being
+ *     validated was never persisted, so it has no ids to send and no
+ *     status — the server judges it purely from type+timing+content.
+ *   - a SCHEDULE block's title/estimate/priority/memo — flat fields on this
+ *     app's own block shape — are nested under a `schedule` object instead;
+ *     a TASK block carries `taskId` and `schedule: null` the other way.
+ * required: [blockType, startAt, endAt] only — taskId/schedule are each
+ * required in practice ONLY for their own blockType (the schema's prose says
+ * so; it isn't enforced by a oneOf), so this only ever fills the one that
+ * matches `b.blockType`, leaving the other explicitly null.
+ */
+function toPlanBlockInput(b) {
+  const isSchedule = b.blockType === 'SCHEDULE'
+  return {
+    blockType: b.blockType,
+    taskId: isSchedule ? null : (b.taskId ?? null),
+    schedule: isSchedule
+      ? { title: b.title, estimatedMinutes: b.estimatedMinutes ?? null, priority: b.priority ?? null, memo: b.memo ?? '' }
+      : null,
+    startAt: b.startAt,
+    endAt: b.endAt,
+  }
+}
+
+/**
+ * OP-PLAN-VALIDATE → POST /weekly-plans/{weeklyPlanId}/validations (dry-run;
+ * writes nothing when `virtualBlocks` is sent). Body carries the LOCAL block
+ * set so the check reflects the user's unsaved draft, not the last persisted
+ * plan.
  *
- * ENDPOINT NOTE: the FE-1 작업지시 writes this as `.../validations`; the BE 명세서
- * (07번) says `.../validation-issues` and that spec is authoritative.
+ * ENDPOINT NOTE (W4 — corrects this function's own prior note, which had it
+ * backwards): the path is `.../validations`, not `.../validation-issues` —
+ * the latter was this file's own guess from the 07번 API 명세서 CSV, retired
+ * 2026-07-24. `openapi.yaml` (BE-1's Swagger source) is now the ONE spec this
+ * repo treats as authoritative; the 작업지시's own `.../validations` turned
+ * out to be right.
+ *
+ * BODY PRESENCE, NOT NAMING, IS WHAT SELECTS DRY-RUN. openapi.yaml's own
+ * summary for this route, verbatim: "body 없음 = 현재 초안 판정 +
+ * validation_issues 영속. body.virtualBlocks 제공 = dry-run(무영속)". This app
+ * always wants the dry-run — it validates the UNSAVED draft on every edit
+ * (usePlanValidation's own header) — so `virtualBlocks` MUST be sent as a key
+ * even when the local draft is empty. An omitted/undefined key on an empty
+ * week would silently flip this call into the OTHER mode: the server would
+ * judge (and PERSIST a judgment of) the last SAVED plan instead of "nothing
+ * placed yet", the opposite of what an empty dry-run is supposed to mean.
  *
  * STATUS BRANCHES ARE RESULTS, NOT FAILURES. The spec lists 200 검증 통과 · 206
  * 일부 블록만 통과 · 409 일정 충돌 발견 as three outcomes of the SAME successful check.
@@ -453,21 +585,18 @@ export function normalizeValidationPayload(payload) {
  * Every other status still rejects and is handled as a genuine failure upstream.
  */
 export function validatePlan(weeklyPlanId, blocks) {
-  const body = {
-    blocks: (blocks ?? []).map((b) => ({
-      planBlockId: b.planBlockId,
-      blockType: b.blockType,
-      title: b.title,
-      taskId: b.taskId ?? null,
-      scheduleId: b.scheduleId ?? null,
-      startAt: b.startAt,
-      endAt: b.endAt,
-      status: b.status,
-    })),
-  }
+  const localBlocks = blocks ?? []
   return withDevFallback(
-    () => apiClient.post(`/weekly-plans/${weeklyPlanId}/validation-issues`, body),
-    () => mockBackend.validatePlan(weeklyPlanId, body.blocks),
+    () => apiClient.post(`/weekly-plans/${weeklyPlanId}/validations`, {
+      virtualBlocks: localBlocks.map(toPlanBlockInput),
+    }),
+    // The mock's own rule engine (planFixtures.js computeValidationIssues)
+    // reads the RICH local shape directly (planBlockId/title/scheduleId/
+    // status — it builds targetBlockIds/counterparts off planBlockId, for
+    // one) — it is not a server parsing wire JSON, so it has no reason to
+    // round-trip through `toPlanBlockInput`'s lossy wire shape. Only the REAL
+    // call needs to speak PlanBlockInput.
+    () => mockBackend.validatePlan(weeklyPlanId, localBlocks),
   ).then(normalizeValidationPayload, (error) => {
     if (error?.status !== 409) throw error
     const issues = error?.details?.issues
@@ -481,11 +610,44 @@ export function validatePlan(weeklyPlanId, blocks) {
 }
 
 /**
- * OP-PLAN-SAVEWEEK → PUT /weekly-plans/{weeklyPlanId} with status:"CONFIRMED"
- * (PLAN-03 저장/확정). Returns { weeklyPlanId }.
+ * OP-PLAN-SAVEWEEK → POST /weekly-plans/{weeklyPlanId}/confirmation (PLAN-03
+ * 저장/확정). Returns the confirmed `WeeklyPlan`.
  *
- * ENDPOINT NOTE: the FE-1 작업지시 writes this as POST `.../confirmation`; the BE
- * 명세서 (07번) says PUT `/weekly-plans/{id}` and that spec is authoritative.
+ * ENDPOINT NOTE (W4 — corrects this function's own prior note, which had it
+ * backwards): the route is POST `.../confirmation`, not PUT
+ * `/weekly-plans/{id}` — the latter was this file's own guess from the 07번
+ * API 명세서 CSV, retired 2026-07-24 in favor of `openapi.yaml` as the one
+ * authoritative spec (same correction as `validatePlan`'s own header). The
+ * 작업지시's `.../confirmation` turned out to be right.
+ *
+ * NO REQUEST BODY. openapi.yaml's `confirmWeeklyPlan` has no `requestBody` at
+ * all — its own summary, verbatim: "서버가 검증 재실행 — 차단 존재 시 409". The
+ * four fields this call used to send (weekStartDate/weekEndDate/
+ * totalPlannedMinutes/status) were this file's own invention to match the old
+ * (wrong) PUT-with-body shape; the server already has all four on the
+ * persisted plan and re-derives its own confirm decision from a fresh
+ * validation run, not from anything the client asserts about itself.
+ *
+ * IDEMPOTENCY-KEY (openapi.yaml components/parameters/IdempotencyKey — the
+ * same "이중 클릭 방지" mechanism the spec already documents on
+ * `/projects/{id}/duplications`). Generated fresh HERE, inside the adapter,
+ * once per call — deliberately NOT threaded down from the caller and not held
+ * in a ref across separate calls. Reasoning: this app has NO automatic retry
+ * anywhere on the write path — `apiClient` never retries (client.js's own
+ * header) and mutations are configured `retry: 0` (queryClient.js: "Writes
+ * are never auto-retried — the user retries manually"). One call to
+ * `saveWeek()` is therefore, by this app's own architecture, always exactly
+ * one confirm ATTEMPT — there is no code path where the SAME attempt calls
+ * this function a second time. A key generated once per call already
+ * satisfies both halves of the rule this header exists for: "같은 시도의
+ * 재시도 = 같은 키" holds trivially (one call → one key → one HTTP request,
+ * nothing to retry inside this function), and "새 시도 = 새 키" holds because
+ * every OTHER call to `saveWeek()` — the user re-clicking 저장 after a failure
+ * — is, in this app, always a genuinely new attempt by definition, never an
+ * automatic resend of the one that just failed. Threading a key down from the
+ * caller (or persisting one across calls) would only earn its keep if this
+ * app grew an automatic retry layer that re-invokes THIS function for the
+ * same logical attempt — flagged here for whoever adds one.
  *
  * TWO DIFFERENT 409s can come back here, and they mean different things
  * (실서버 카탈로그 대조 2026-08-03 — ErrorCode.java/errors.properties):
@@ -499,10 +661,13 @@ export function validatePlan(weeklyPlanId, blocks) {
  * `details.issues` when present, or re-runs the dry-run when it isn't, for
  * BOTH — but must not describe one as the other to the user.
  */
-export function saveWeek(weeklyPlanId, { weekStartDate, weekEndDate, totalPlannedMinutes }) {
-  const body = { weekStartDate, weekEndDate, totalPlannedMinutes, status: 'CONFIRMED' }
+export function saveWeek(weeklyPlanId) {
+  const idempotencyKey = crypto.randomUUID()
   return withDevFallback(
-    () => apiClient.put(`/weekly-plans/${weeklyPlanId}`, body),
-    () => mockBackend.saveWeek(weeklyPlanId, body),
+    () =>
+      apiClient.post(`/weekly-plans/${weeklyPlanId}/confirmation`, null, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      }),
+    () => mockBackend.saveWeek(weeklyPlanId),
   )
 }
