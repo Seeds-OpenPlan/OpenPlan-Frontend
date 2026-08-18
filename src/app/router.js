@@ -43,12 +43,20 @@ import { getOnboardingProgress } from '../features/onboarding/onboardingApi'
   Failure routing follows the locked convention (story §2.4): a designated
   surface is routed explicitly; only undesignated runtime errors fall to the
   root ErrorBoundary (PTN-ERROR).
+    - 401 → throw redirect('/login') (SCR-AUTH-LOGIN)
     - 403 → throw redirect('/403')  (SCR-403, NOT the generic error surface)
     - other → rethrow → root ErrorBoundary
 */
 const sessionQuery = {
   queryKey: ['auth', 'session'],
-  queryFn: () => apiClient.get('/auth/session'),
+  // `_sessionProbe` (W5 인증 실연결): axios가 모르는 config 키는 그대로
+  // 보존되므로 client.js의 응답 인터셉터가 "이 401은 세션 유무를 묻는 질문
+  // 자체였다"를 구분할 수 있다. 그 구분이 필요한 이유 — 로그인한 적 없는
+  // 방문자의 첫 진입도 여기서 401을 받는데, 그때 OVL-SESSION("세션이
+  // 만료되었습니다")을 띄우면 만료된 적 없는 세션의 만료를 알리게 되고,
+  // 아래 로그인 리다이렉트와 겹쳐 로그인 화면 위에 오버레이가 뜬다.
+  // 만료 오버레이는 "쓰던 화면이 있는" 다른 요청들의 몫이다.
+  queryFn: () => apiClient.get('/auth/session', { _sessionProbe: true }),
   staleTime: 5 * 60 * 1000,
 }
 
@@ -74,16 +82,24 @@ export async function sessionGuardLoader() {
     // dev-auth stub responds 200 → pass through with no login screen.
     await queryClient.ensureQueryData(sessionQuery)
   } catch (error) {
+    // 401 = 세션 없음. 실서버 카탈로그상 E-COM-002(인증 필요)와 E-AUTH-007
+    // (refresh 무효/만료)이 여기로 온다 — 후자는 client.js가 이미 토큰 갱신을
+    // 시도해 보고 실패한 뒤다. 코드가 아니라 status로 받는 이유는 그 둘 중
+    // 어느 쪽이 와도 보호 라우트에서의 결론이 같기 때문이다: 로그인 화면.
+    // (이 분기가 없던 동안 401은 아래 rethrow를 타고 RootErrorBoundary로
+    // 떨어져, 로그인하면 되는 상황에 일반 오류 화면이 나왔다.)
+    if (error?.status === 401) {
+      throw redirect('/login')
+    }
     if (error?.status === 403) {
       throw redirect('/403')
     }
-    // DEV without a backend: the stub session endpoint is unreachable, so a
-    // network error here means auth isn't wired yet (it lands in ST-F1-14).
-    // Pass through exactly as a stub 200 would, instead of blocking every page
-    // behind PTN-ERROR. See frontend.md for how to point at a real/mock server.
-    if (import.meta.env.DEV && error?.isNetwork) {
-      return null
-    }
+    // DEV 네트워크 우회 제거(W5, 2026-08-18). 원래는 "백엔드가 없으니 네트워크
+    // 오류면 스텁 200처럼 통과시킨다"였는데, 그 전제(인증 미배선)가 이제 거짓이다.
+    // 남겨 두면 서버가 잠깐 안 뜨거나 VPN이 끊긴 것만으로 모든 보호 라우트가
+    // 인증된 것처럼 열린다 — 프록시를 실서버로 돌린 이유(로컬 스텁 때문에 인증이
+    // 무조건 통과하던 문제)를 그대로 되살리는 우회로다. 이제 서버에 닿지 못하면
+    // 닿지 못한 대로 PTN-ERROR가 보이는 것이 맞다.
     throw error
   }
 
@@ -269,8 +285,9 @@ export const router = createBrowserRouter([
     Component: OnboardingLayout,
     HydrateFallback, // ★ same as the '/' tree above — no blank flash while this loader resolves
     loader: () => queryClient.ensureQueryData(sessionQuery).catch((error) => {
+      if (error?.status === 401) throw redirect('/login') // ★ '/' 트리와 동일 — 미로그인 방문자는 온보딩도 못 본다
       if (error?.status === 403) throw redirect('/403')
-      if (!(import.meta.env.DEV && error?.isNetwork)) throw error
+      throw error // ★ DEV 네트워크 우회 제거 — 위 sessionGuardLoader와 같은 이유
     }),
     children: [
       { index: true, Component: OnboardingIntroPage },

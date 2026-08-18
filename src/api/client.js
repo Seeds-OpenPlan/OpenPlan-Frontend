@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { useSessionStore } from '../features/auth/sessionStore'
 
 /*
   Single shared axios instance and the one place where the response envelope is
@@ -27,7 +28,7 @@ if (import.meta.env.DEV && !baseURL) {
 // 담는 localStorage/sessionStorage/Authorization 헤더가 없다 — 세션은 항상
 // httpOnly Set-Cookie(op_at/op_rt)로만 오간다(위 token-refresh 코멘트 참조).
 // `withCredentials`도 추가하지 않았다: dev는 Vite 프록시(vite.config.js
-// `/api` → localhost:8080, changeOrigin), 배포는 nginx 단일 오리진(D-11)이라
+// `/api` → 실서버 13.208.66.211, changeOrigin), 배포는 nginx 단일 오리진(D-11)이라
 // 브라우저 기준 항상 동일 출처 — 쿠키가 자동으로 실린다. 교차 출처가 되는
 // 순간(예: 프록시 없이 별도 API 도메인 직접 호출)에만 이 설정이 필요해진다.
 export const apiClient = axios.create({
@@ -145,13 +146,23 @@ apiClient.interceptors.response.use(
     const appError = normalizeError(error)
     const config = error?.config ?? {}
 
-    // Token refresh on 401 (E-COM-002). Two guards prevent infinite recursion:
+    // Token refresh on 401. Two guards prevent infinite recursion:
     //  1. config._retry — blocks re-refreshing the SAME original request twice.
     //  2. config._skipAuthRefresh — set on the refresh call itself so that if
     //     the refresh token is also expired (refresh returns 401), it does NOT
-    //     re-trigger this branch; it normalizes straight to AppError(E-COM-002)
-    //     and is delegated to the session surface (ST-F1-14). Story §2.3 N-3.
-    if (appError.code === 'E-COM-002' && !config._retry && !config._skipAuthRefresh) {
+    //     re-trigger this branch; it normalizes straight to an AppError and is
+    //     delegated to the session surface below. Story §2.3 N-3.
+    //
+    // 판정 기준이 code에서 status로 바뀌었다(W5 인증 실연결, 2026-08-18).
+    // 실서버 ErrorCode.java에 401은 넷이다 — E-COM-002(인증 필요) ·
+    // E-AUTH-001(로그인 실패) · E-AUTH-002 · E-AUTH-007(refresh 무효/만료).
+    // `code === 'E-COM-002'` 하나만 보던 동안 나머지 셋은 갱신도 만료 처리도
+    // 받지 못하고 그대로 호출부로 떨어졌다(팀장 지적: "401이 뜨는데 코드
+    // 상으로는 401 처리가 없다"). 세션이 없는 것이 정상인 호출 — 로그인·가입·
+    // 메일인증·비밀번호 재설정 — 은 authApi.js가 자기 요청에 직접
+    // `_skipAuthRefresh`를 달아 빠져나간다. 그래야 E-AUTH-001(비밀번호 틀림)이
+    // 토큰 갱신 시도나 세션 만료 오버레이로 잘못 번역되지 않는다.
+    if (appError.status === 401 && !config._retry && !config._skipAuthRefresh) {
       try {
         // Path per openapi single source (/auth/token-refresh, no request body —
         // refresh token travels as the httpOnly op_rt cookie, ADR-0001).
@@ -160,7 +171,26 @@ apiClient.interceptors.response.use(
         // so the caller receives the retried payload transparently.
         return apiClient({ ...config, _retry: true })
       } catch {
-        // Refresh failed — fall through to reject with the original 401 error.
+        // 갱신 실패 = 세션이 실제로 끝났다. sessionStore.js 헤더가 "REAL
+        // INTEGRATION POINT"로 지목해 둔 바로 그 자리 — OVL-SESSION(AUTH-08)을
+        // 띄워, 배경을 언마운트하지 않은 채(NFR-019) 재로그인을 받고 성공하면
+        // previousPath로 되돌린다(NFR-004).
+        //
+        // `_sessionProbe`(router.js sessionGuardLoader의 GET /auth/session)는
+        // 제외한다: 그 401은 "만료"가 아니라 "애초에 로그인한 적 없음"일 수
+        // 있고, 그 경우의 목적지는 오버레이가 아니라 로그인 화면이다. 가드가
+        // 401을 직접 redirect('/login')으로 처리하므로, 여기서 함께 오버레이를
+        // 띄우면 로그인 화면 위에 "세션이 만료되었습니다"가 겹쳐 뜬다.
+        //
+        // 되돌아갈 경로는 지금 이 순간의 주소다 — 사용자가 보고 있던 화면.
+        if (!config._sessionProbe) {
+          const path =
+            typeof window !== 'undefined'
+              ? `${window.location.pathname}${window.location.search}`
+              : null
+          useSessionStore.getState().expire(path)
+        }
+        // 그리고 원래의 401을 그대로 호출부에 돌려준다(아래 reject).
       }
     }
 

@@ -53,15 +53,34 @@ export function useSession() {
     queryKey: ['auth', 'session'],
     queryFn: () =>
       withDevFallback(
-        () => apiClient.get('/auth/session'),
+        // `_sessionProbe`: router.js sessionQuery와 같은 표식 — 이 401은 "세션이
+        // 끊겼다"가 아니라 "세션이 있느냐"는 질문 자체라, client.js가 만료
+        // 오버레이를 띄우지 않게 한다(그 파일의 해당 분기 주석 참조).
+        () => apiClient.get('/auth/session', { _sessionProbe: true }),
         () => Promise.resolve({ userId: 'dev-user-0001', status: 'ACTIVE', authed: true }),
       ),
     staleTime: 5 * 60 * 1000,
   })
 }
 
+/*
+  로그인 성공 시 `['auth','session']`을 무효화한다 — router.js의
+  sessionGuardLoader가 읽는 바로 그 키다(useLogout이 이미 같은 키를
+  removeQueries 하는 것과 짝).
+
+  없으면 생기는 일: OVL-SESSION으로 재로그인하는 경로에서, 만료 직전에 캐시된
+  이전 세션 응답이 staleTime(5분) 동안 그대로 살아 있다. 같은 사람이 다시
+  로그인하면 티가 안 나지만 다른 계정으로 들어오면 useSession을 읽는 화면
+  (예: 문의 상세의 소유자 대조)이 남의 userId를 보게 된다.
+*/
 export function useLogin() {
-  return useMutation({ mutationFn: ({ email, password }) => login(email, password) })
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ email, password }) => login(email, password),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] })
+    },
+  })
 }
 
 export function useSignup() {
@@ -109,7 +128,15 @@ export function useLogout() {
  * 같은 화면에서 혼동해 부르는 실수를 타입/이름 레벨에서 막기 위함.
  */
 export function useReactivateByEmail() {
-  return useMutation({ mutationFn: reactivate })
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: reactivate,
+    // 재활성화 성공은 곧바로 '/'로 이동하는 경로다(LoginPage) — useLogin과
+    // 같은 이유로 세션 캐시를 새로 읽게 한다.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] })
+    },
+  })
 }
 
 // 계정 조회·비활성화·재활성화(ACCT-01/04/05, "로그인된 나" 컨텍스트)는

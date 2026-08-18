@@ -13,14 +13,15 @@ import { create } from 'zustand'
   nowhere else, but capturing it here keeps the contract explicit and testable
   without reading global location state from three different call sites).
 
-  REAL INTEGRATION POINT (do not wire this cycle — owner: "가드 건드리지
-  마"): once ST-F1-14 is live, `src/api/client.js`'s response interceptor
-  should call `useSessionStore.getState().expire(window.location.pathname)`
-  in the branch where its own comment already says "실패 시 ... 세션 표면
-  (ST-F1-14)으로 위임" (currently just rejects with AppError). That is the
-  ONLY line this store needs touched elsewhere — everything else (the
-  overlay's mount point in AppLayout, the re-login form inside it) is already
-  wired and needs no further change at that point.
+  WIRED (W5, 2026-08-18): `src/api/client.js`의 응답 인터셉터가 토큰 갱신에
+  실패한 지점에서 `useSessionStore.getState().expire(...)`를 호출한다. 위에서
+  예고했던 그 한 줄이고, 나머지(AppLayout의 마운트 지점, 오버레이 안의
+  재로그인 폼)는 예고대로 손댈 것이 없었다.
+
+  단 한 가지 예외가 붙었다 — 세션 프로브(router.js의 sessionGuardLoader와
+  useSession이 부르는 GET /auth/session)의 401에서는 expire()를 부르지 않는다.
+  그건 만료가 아니라 "애초에 로그인한 적 없음"일 수 있고, 그 경우의 목적지는
+  이 오버레이가 아니라 로그인 화면이기 때문이다.
 */
 export const useSessionStore = create((set) => ({
   expired: false,
