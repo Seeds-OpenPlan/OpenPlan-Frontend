@@ -117,3 +117,46 @@ test.describe('W5 인증 — 실계정 필요', () => {
     await expect(page).toHaveURL(/\/settings\/account/)
   })
 })
+
+test.describe('W5 인증 — 계정 없이 확인 가능 (계약)', () => {
+  test('(7) 비밀번호 재설정 확정이 계약대로 newPassword 를 보낸다', async ({ page }) => {
+    // 실사용 결함(오너, 2026-08-18): 새 비밀번호 저장 시 "비밀번호를 저장하지
+    // 못했습니다"만 떴다. 프론트가 body 를 {password} 로 보내는데 openapi
+    // `completePasswordReset` 의 required 는 [newPassword] 라, 서버가 400
+    // E-COM-001 을 냈고 그 코드는 화면의 E-AUTH-006 분기에 걸리지 않아
+    // 원인을 알 수 없는 일반 실패로만 보였다.
+    //
+    // 유효한 토큰은 메일함이 있어야 얻을 수 있으므로 더미 토큰을 쓴다. 서버는
+    // 본문 검증을 먼저 하므로, 필드명이 맞으면 400(형식 오류)이 아니라
+    // 410(만료·사용된 링크)이 온다 — 그 차이가 이 테스트의 판정 기준이다.
+    let sentBody = null
+    let status = null
+    page.on('request', (req) => {
+      if (req.url().includes('/auth/password-resets/') && req.method() === 'PATCH') {
+        sentBody = req.postData()
+      }
+    })
+    page.on('response', (res) => {
+      if (res.url().includes('/auth/password-resets/') && res.request().method() === 'PATCH') {
+        status = res.status()
+      }
+    })
+
+    await page.goto('/reset-password/confirm?token=dummy-token-for-contract-check')
+    const pw = 'Newpass123!'
+    await page.getByLabel('새 비밀번호', { exact: true }).fill(pw)
+    await page.getByLabel('새 비밀번호 확인').fill(pw)
+    await page.getByRole('button', { name: '비밀번호 저장' }).click()
+
+    await expect
+      .poll(() => status, { timeout: 20_000, message: 'PATCH 응답을 받지 못했다' })
+      .not.toBeNull()
+
+    expect(sentBody, '요청 본문').toContain('newPassword')
+    expect(sentBody, '옛 필드명이 남아 있으면 안 된다').not.toMatch(/"password"/)
+    // 400(형식 오류)이면 필드명이 여전히 틀린 것이다.
+    expect(status, '더미 토큰이므로 410이어야 한다 — 400이면 계약 불일치').toBe(410)
+    // 그리고 화면은 그 410을 만료 안내로 번역해야 한다(일반 실패 문구가 아니라).
+    await expect(page.getByText('링크가 만료되었거나 이미 사용되었습니다')).toBeVisible()
+  })
+})

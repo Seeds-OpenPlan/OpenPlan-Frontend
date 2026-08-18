@@ -198,10 +198,20 @@ export function requestPasswordReset(email) {
  * PATCH /auth/password-resets/{token} (재설정 확정, AUTH-06). token은 경로
  * 변수다(이전엔 body에만 실어 PATCH `/auth/password-resets`를 불렀는데, 그
  * 경로엔 핸들러가 없어 500 E-COM-005로 떨어졌었다 — 실서버 대조 2026-08-04 정정).
+ *
+ * 본문 필드는 `password`가 아니라 **`newPassword`**다(openapi
+ * `completePasswordReset` required: [newPassword]). W5 실사용에서 드러났다 —
+ * 오너가 새 비밀번호를 저장하려 하자 "비밀번호를 저장하지 못했습니다"만 떴다.
+ * 실서버 대조(2026-08-18):
+ *   {password}    → 400 E-COM-001 details.fields[0] "newPassword is required"
+ *   {newPassword} → 410 E-AUTH-006 (더미 토큰이므로 정상 반응)
+ * 400은 ResetPasswordPage의 E-AUTH-006 분기에 걸리지 않아 원인을 알 수 없는
+ * 일반 실패 문구로만 보였다. 호출부 인자는 `password`로 그대로 두고(화면이
+ * 다루는 것은 "새 비밀번호" 하나뿐이다) 전송 시점에만 계약 이름으로 옮긴다.
  */
 export function confirmPasswordReset({ token, password }) {
   return withAuthDevFallback(
-    () => apiClient.patch(`/auth/password-resets/${token}`, { password }, UNAUTHENTICATED),
+    () => apiClient.patch(`/auth/password-resets/${token}`, { newPassword: password }, UNAUTHENTICATED),
     () => authMockBackend.confirmPasswordReset({ token, password }),
   )
 }
