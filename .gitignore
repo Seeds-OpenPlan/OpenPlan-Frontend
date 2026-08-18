@@ -26,3 +26,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright e2e 산출물 (trace 에 입력값이 그대로 담긴다 — 커밋 금지)
+test-results
+playwright-report

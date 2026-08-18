@@ -18,4 +18,11 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  {
+    // e2e 스펙과 그 config 는 브라우저가 아니라 Node 에서 실행된다
+    // (playwright 러너). 자격증명을 코드에 넣지 않고 process.env 로 받으므로
+    // 여기에만 node 전역을 더한다.
+    files: ['e2e/**/*.js'],
+    languageOptions: { globals: { ...globals.browser, ...globals.node } },
+  },
 ])

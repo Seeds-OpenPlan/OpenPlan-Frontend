@@ -128,14 +128,11 @@ function NameEditDialog({ currentName, onClose, onSubmit, submitting }) {
   (SettingsCalendarPage)으로 다시 분리됐다(라운드 2에서 여기 섹션으로 합쳤던
   것의 정정).
 
-  로그아웃(item 5): ST-F1-14(실 인증) 이전이라 dev-auth 스텁이 항상 200을
-  주는 세션이다 — 진짜 "로그아웃 상태"를 만들 방법이 없다(다음 페이지 진입 시
-  sessionGuardLoader가 스텁을 통해 즉시 다시 통과시킨다). 그래서 이 버튼은
-  정직하게 "지금 캐시된 세션 정보를 지우고 홈으로 보낸다"까지만 한다 — 그 이상
-  가장하지 않는다(오너 지시 "mock/스텁 동작 — 세션 클리어 후 랜딩 이동"과 일치).
-  Thomas 리뷰 MAJOR: 그 정리 자체를 features/auth/useAuth.js의 `useLogout()`
-  (best-effort POST /auth/logout + 세션 캐시 정리)으로 한다 — 이 화면이
-  `queryClient.removeQueries`를 직접 부르며 그 훅을 우회하던 것을 고쳤다.
+  로그아웃(item 5): W5(2026-08-18)부터 진짜 로그아웃이다 — 실서버가
+  DELETE /auth/session 에 204와 함께 op_at·op_rt 를 만료시키는 Set-Cookie 를
+  내려준다(실측). 정리는 features/auth/useAuth.js 의 `useLogout()` 이 한다
+  (Thomas 리뷰 MAJOR: 이 화면이 queryClient 를 직접 부르며 훅을 우회하던 것을
+  고친 것). 이동 목적지는 홈이 아니라 로그인 화면이다 — 아래 handleLogout 참조.
 
   비활성화/재활성화(ACCT-04/05): 이 화면 전용 ConfirmDialog였던 것을 ST-F1-14가
   만든 공용 OvlAccountDeactivate/OvlAccountReactivate로 교체했다(오너 지시
@@ -169,15 +166,24 @@ function SettingsAccountPage() {
       : null
 
   const handleLogout = () => {
-    // useLogout()이 best-effort POST /auth/logout + ['auth','session'] 캐시
-    // 정리(router.js의 sessionGuardLoader가 쓰는 바로 그 키)를 함께 한다 —
-    // 서버 호출 성공/실패와 무관하게 onSettled에서 정리하므로 여기서도
-    // then/catch 분기 없이 그대로 이어간다.
+    // useLogout()이 DELETE /auth/session + 쿼리 캐시 정리를 함께 한다 — 서버
+    // 호출 성공/실패와 무관하게 onSettled에서 정리하므로 여기서도 then/catch
+    // 분기 없이 그대로 이어간다.
+    //
+    // 목적지가 '/'가 아니라 '/login'인 이유(W5 실측으로 드러난 결함):
+    // '/'로 보내면 로그아웃했는데도 대시보드에 그대로 남는다. React Router는
+    // 이미 매칭돼 있던 부모 라우트의 로더를 재실행하지 않기 때문이다 —
+    // /settings/account 와 '/' 는 같은 AppLayout 트리라, 그 사이 이동은
+    // sessionGuardLoader 를 아예 돌리지 않는다(sessionGuardShouldRevalidate 가
+    // 넘겨받는 defaultShouldRevalidate 자체가 false다). 그래서 "세션이 없으니
+    // 로그인 화면으로" 판정을 내려 줄 사람이 없고, 화면의 모든 요청만 401로
+    // 깨진 채 대시보드가 남았다. 로그아웃의 목적지는 원래 로그인 화면이므로,
+    // 가드에 기대지 말고 직접 보낸다.
     logoutMutation.mutate(undefined, {
       onSettled: () => {
         setConfirmAction(null)
         toast({ tone: 'info', message: '로그아웃했습니다' })
-        navigate('/', { replace: true })
+        navigate('/login', { replace: true })
       },
     })
   }
