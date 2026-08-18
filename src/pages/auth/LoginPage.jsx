@@ -11,10 +11,11 @@ import { oauthStartUrl } from '../../features/auth/authApi'
 const FIELD =
   'w-full rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring'
 
-// 데모 계정 4종 — authFixtures.js의 헤더 코멘트가 정본. 화면에도 짧게
-// 남겨 둬 리뷰/QA가 코드를 안 열어봐도 각 분기를 바로 시도해볼 수 있게 함.
-const DEMO_HINT =
-  'user@openplan.dev · unverified@openplan.dev · deactivated@openplan.dev · expired@openplan.dev (비번 공통: password123)'
+// 데모 계정 힌트 제거(W5, 2026-08-18). `user@openplan.dev` 등 4종은
+// authFixtures.js의 **mock 전용** 계정이라 실서버에는 존재하지 않는다.
+// 프록시가 실서버를 보게 된 지금 저 안내를 보고 시도하면 E-AUTH-001로만
+// 떨어져, "로그인이 안 된다"는 잘못된 결론을 만든다. 실서버에서 계정을
+// 얻는 경로는 회원가입(POST /users) → 인증 메일뿐이다.
 
 /*
   SCR-AUTH-LOGIN (AUTH-01 · AC2 실패 카피/비활성 분기 · AC4 소셜 콜백 오류).
@@ -182,8 +183,6 @@ export function LoginPage() {
 
       <SocialButtons onSelect={handleSocialSelect} disabled={loginMutation.isPending} />
 
-      {/* QA/리뷰용 데모 계정 힌트 — 프로덕션 카피가 아니라 개발 편의 캡션. */}
-      <p className="text-center text-caption text-text-disabled">{DEMO_HINT}</p>
 
       <OvlAccountReactivate
         open={Boolean(reactivateInfo)}
