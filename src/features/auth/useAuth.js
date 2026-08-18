@@ -18,6 +18,7 @@
   try/catch or mutate(..., { onError }) untouched.
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSessionStore } from './sessionStore'
 import {
   login,
   signup,
@@ -78,6 +79,8 @@ export function useLogin() {
   return useMutation({
     mutationFn: ({ email, password }) => login(email, password),
     onSuccess: () => {
+      // 로그아웃 억제 해제 — 다시 로그인했으니 이제부터의 401은 진짜 만료다.
+      useSessionStore.getState().endLogout()
       queryClient.invalidateQueries({ queryKey: ['auth', 'session'] })
     },
   })
@@ -114,8 +117,17 @@ export function useLogout() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: logout,
+    // 서버 호출보다 먼저 표시한다 — 쿠키가 지워지는 순간부터 로그인 화면에
+    // 도착할 때까지의 틈에 마운트된 쿼리들이 401을 받기 때문이다
+    // (sessionStore.js의 `loggingOut` 헤더 참조).
+    onMutate: () => {
+      useSessionStore.getState().beginLogout()
+    },
     onSettled: () => {
-      queryClient.removeQueries({ queryKey: ['auth', 'session'] })
+      // ['auth','session']만이 아니라 전량을 비운다: 로그아웃했는데 이전
+      // 사용자의 프로젝트·태스크·문의가 캐시에 남아 있으면, 다른 계정으로
+      // 로그인했을 때 그 데이터가 잠깐 먼저 보인다.
+      queryClient.clear()
     },
   })
 }

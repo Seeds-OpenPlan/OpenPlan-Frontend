@@ -6,7 +6,6 @@ import { OfflineBanner } from '../components/common/OfflineBanner'
 import { UnsavedGuard } from '../components/common/UnsavedGuard'
 import { Toaster } from '../components/common/Toaster'
 import { SessionExpiredOverlay } from '../components/auth/SessionExpiredOverlay'
-import { useSessionStore } from '../features/auth/sessionStore'
 import { TutorialOverlay } from '../components/tutorial/TutorialOverlay'
 
 /*
@@ -38,9 +37,8 @@ import { TutorialOverlay } from '../components/tutorial/TutorialOverlay'
     NFR-019 ("배경 언마운트 금지") possible at all: whatever the routed page
     below has mounted stays mounted, the overlay just paints on top via its
     own portal. It renders `null` until something calls
-    `useSessionStore.getState().expire(path)` — nothing does yet this cycle
-    (see sessionStore.js's own header for the future wiring point), so this
-    line is inert today and turns on exactly when that lands.
+    `useSessionStore.getState().expire(path)` — W5(2026-08-18)부터 client.js의
+    토큰 갱신 실패 지점이 실제로 호출한다(sessionStore.js 헤더 참조).
   - TutorialOverlay (ST-F1-13) hosts OVL-TUT — it self-gates on onboarding-
     progress and renders nothing outside an active tutorial run, same
     self-gating shape OfflineBanner already has for "not offline".
@@ -48,8 +46,6 @@ import { TutorialOverlay } from '../components/tutorial/TutorialOverlay'
   (components/auth for the session overlay, components/tutorial for the tutorial).
 */
 function AppLayout() {
-  const devTriggerSessionExpired = useSessionStore((s) => s.expire)
-
   return (
     <div className="min-h-screen bg-surface-sunken text-text">
       <TopNav />
@@ -67,19 +63,12 @@ function AppLayout() {
       <SessionExpiredOverlay />
       <TutorialOverlay />
 
-      {/* DEV-only QA affordance: there is no real trigger for OVL-SESSION yet
-          (see comment above), so this is the only way to open it for review
-          before the client.js wiring lands in week 4. Never rendered outside
-          `import.meta.env.DEV` — no production build ever ships this button. */}
-      {import.meta.env.DEV && (
-        <button
-          type="button"
-          onClick={() => devTriggerSessionExpired(window.location.pathname)}
-          className="fixed bottom-4 left-4 z-30 rounded-full border border-border-strong bg-surface px-3 py-1.5 text-caption text-text-muted shadow-popover hover:bg-surface-sunken"
-        >
-          [dev] 세션 만료 시뮬레이션
-        </button>
-      )}
+      {/* `[dev] 세션 만료 시뮬레이션` 버튼 제거(W5, 2026-08-18). 존재 이유였던
+          "OVL-SESSION을 열 실제 트리거가 없다"가 더는 참이 아니다 — client.js가
+          토큰 갱신 실패 시 실제로 띄운다. 오버레이는 의도적으로 닫기 수단이
+          없어(재인증만이 출구) 모든 화면 좌하단에 떠 있는 이 버튼을 잘못 누르면
+          다시 로그인하기 전까지 빠져나올 수 없었다. 오버레이 UI만 보려면
+          DevTools에서 세션 쿠키를 지우고 아무 동작이나 하면 된다. */}
     </div>
   )
 }

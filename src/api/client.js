@@ -162,7 +162,11 @@ apiClient.interceptors.response.use(
     // 메일인증·비밀번호 재설정 — 은 authApi.js가 자기 요청에 직접
     // `_skipAuthRefresh`를 달아 빠져나간다. 그래야 E-AUTH-001(비밀번호 틀림)이
     // 토큰 갱신 시도나 세션 만료 오버레이로 잘못 번역되지 않는다.
-    if (appError.status === 401 && !config._retry && !config._skipAuthRefresh) {
+    // 로그아웃 진행 중이면 갱신 자체를 시도하지 않는다. 쿠키가 막 지워진
+    // 참이라 갱신은 어차피 실패하고, 마운트된 쿼리 수만큼 무의미한
+    // token-refresh 요청이 나간 뒤 그 실패들이 만료 오버레이로 번역된다.
+    const { loggingOut } = useSessionStore.getState()
+    if (appError.status === 401 && !config._retry && !config._skipAuthRefresh && !loggingOut) {
       try {
         // Path per openapi single source (/auth/token-refresh, no request body —
         // refresh token travels as the httpOnly op_rt cookie, ADR-0001).
