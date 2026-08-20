@@ -18,6 +18,7 @@
   try/catch or mutate(..., { onError }) untouched.
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSessionStore } from './sessionStore'
 import {
   login,
   signup,
@@ -53,15 +54,36 @@ export function useSession() {
     queryKey: ['auth', 'session'],
     queryFn: () =>
       withDevFallback(
-        () => apiClient.get('/auth/session'),
+        // `_sessionProbe`: router.js sessionQuery와 같은 표식 — 이 401은 "세션이
+        // 끊겼다"가 아니라 "세션이 있느냐"는 질문 자체라, client.js가 만료
+        // 오버레이를 띄우지 않게 한다(그 파일의 해당 분기 주석 참조).
+        () => apiClient.get('/auth/session', { _sessionProbe: true }),
         () => Promise.resolve({ userId: 'dev-user-0001', status: 'ACTIVE', authed: true }),
       ),
     staleTime: 5 * 60 * 1000,
   })
 }
 
+/*
+  로그인 성공 시 `['auth','session']`을 무효화한다 — router.js의
+  sessionGuardLoader가 읽는 바로 그 키다(useLogout이 이미 같은 키를
+  removeQueries 하는 것과 짝).
+
+  없으면 생기는 일: OVL-SESSION으로 재로그인하는 경로에서, 만료 직전에 캐시된
+  이전 세션 응답이 staleTime(5분) 동안 그대로 살아 있다. 같은 사람이 다시
+  로그인하면 티가 안 나지만 다른 계정으로 들어오면 useSession을 읽는 화면
+  (예: 문의 상세의 소유자 대조)이 남의 userId를 보게 된다.
+*/
 export function useLogin() {
-  return useMutation({ mutationFn: ({ email, password }) => login(email, password) })
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ email, password }) => login(email, password),
+    onSuccess: () => {
+      // 로그아웃 억제 해제 — 다시 로그인했으니 이제부터의 401은 진짜 만료다.
+      useSessionStore.getState().endLogout()
+      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] })
+    },
+  })
 }
 
 export function useSignup() {
@@ -95,8 +117,17 @@ export function useLogout() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: logout,
+    // 서버 호출보다 먼저 표시한다 — 쿠키가 지워지는 순간부터 로그인 화면에
+    // 도착할 때까지의 틈에 마운트된 쿼리들이 401을 받기 때문이다
+    // (sessionStore.js의 `loggingOut` 헤더 참조).
+    onMutate: () => {
+      useSessionStore.getState().beginLogout()
+    },
     onSettled: () => {
-      queryClient.removeQueries({ queryKey: ['auth', 'session'] })
+      // ['auth','session']만이 아니라 전량을 비운다: 로그아웃했는데 이전
+      // 사용자의 프로젝트·태스크·문의가 캐시에 남아 있으면, 다른 계정으로
+      // 로그인했을 때 그 데이터가 잠깐 먼저 보인다.
+      queryClient.clear()
     },
   })
 }
@@ -109,7 +140,15 @@ export function useLogout() {
  * 같은 화면에서 혼동해 부르는 실수를 타입/이름 레벨에서 막기 위함.
  */
 export function useReactivateByEmail() {
-  return useMutation({ mutationFn: reactivate })
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: reactivate,
+    // 재활성화 성공은 곧바로 '/'로 이동하는 경로다(LoginPage) — useLogin과
+    // 같은 이유로 세션 캐시를 새로 읽게 한다.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] })
+    },
+  })
 }
 
 // 계정 조회·비활성화·재활성화(ACCT-01/04/05, "로그인된 나" 컨텍스트)는

@@ -34,9 +34,9 @@ const FIELD =
   overlay. A user who signed up via social still has the "재설정 이메일" path
   as a fallback, same as any other app facing this constraint.
 
-  Wiring note: nothing calls `sessionStore.expire()` yet this cycle (owner:
-  "가드 건드리지 마") — see sessionStore.js's own header for the exact future
-  integration point. This component is fully functional once something does.
+  Wiring note (W5, 2026-08-18): `sessionStore.expire()`를 client.js의 토큰 갱신
+  실패 지점이 호출한다 — 이 오버레이가 실제로 뜨기 시작했다. 미로그인 상태의
+  첫 진입은 여기가 아니라 로그인 화면으로 간다(sessionStore.js 헤더 참조).
 */
 export function SessionExpiredOverlay() {
   const isDesktop = useIsDesktop()

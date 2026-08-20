@@ -1,12 +1,17 @@
 // e2e/playwright.config.js
 //
-// SCAFFOLD ONLY — 이번 QA 사이클(ST-F1-15, W6)에서 실행하지 않았다.
-// `@playwright/test`는 아직 devDependency로 설치되지 않았고(`npx playwright
-// install` 오너 승인 전), 이 config는 승인 후 바로 돌릴 수 있도록 미리
-// 작성해 둔 것이다. 승인 시 필요한 절차:
-//   1) npm i -D @playwright/test (오너 승인 필요)
-//   2) npx playwright install --with-deps chromium (오너 승인 필요)
-//   3) npx playwright test --config=e2e/playwright.config.js
+// W5(2026-08-18) 오너 승인으로 `@playwright/test` 가 devDependency 로 들어왔고,
+// `auth-real-server.spec.js` 가 이 저장소에서 처음으로 실제 실행됐다(6/6 통과).
+// 나머지 스펙들은 아직 스캐폴드 상태다 — 실행해 본 적 없다.
+//
+//   npm run test:e2e
+//
+// ⚠️ WSL 에서는 브라우저가 안 뜬다: chromium 이 libnspr4 등 시스템 라이브러리를
+// 요구하는데 `npx playwright install-deps` 가 sudo 를 필요로 하고 이 환경은
+// 무암호 sudo 가 아니다. W5 검증은 **브라우저만 Windows 에서** 띄우고 dev 서버는
+// WSL 것을 그대로 쓰는 방식으로 돌렸다(WSL mirrored networking 으로
+// Windows→localhost:5173 이 닿는다). WSL 에서 돌리려면 먼저:
+//   sudo npx playwright install-deps chromium
 //
 // 뷰포트 분기 기준은 src/hooks/useMediaQuery.js의 useIsDesktop()과 동일하게
 // 맞춘다(min-width: 768px) — desktop 프로젝트는 768px 이상, mobile 프로젝트는

@@ -86,17 +86,60 @@ async function withAuthDevFallback(realCall, mockCall) {
     return await realCall()
   } catch (error) {
     const isUnimplementedEndpoint = error?.status === 404 && error?.code === 'E-COM-004'
-    const isAuthStub = error?.status === 501 && error?.code === 'E-AUTH-011'
-    const shouldFallback = error?.isNetwork || isUnimplementedEndpoint || isAuthStub
+    // W4 SWITCH 실행됨(2026-08-18): `isAuthStub`(501 E-AUTH-011) 분기를 삭제했다.
+    // BE PR #22·#23이 머지돼 인증 11개 주소가 진짜 응답을 내기 시작했으므로,
+    // 이 분기를 남겨 두면 실서버의 진짜 501(스텁이 아니라 실제 장애)이 조용히
+    // mock 성공으로 둔갑한다 — 위 헤더가 "잊으면 이게 실패 모드"라고 적어 둔
+    // 바로 그것. 404 E-COM-004 분기는 남긴다: 아직 라우트 자체가 없는
+    // 엔드포인트(예: 재활성화)를 위한, 이 저장소 전체의 공통 규칙이다.
+    const shouldFallback = error?.isNetwork || isUnimplementedEndpoint
     if (import.meta.env.DEV && shouldFallback) return mockCall()
     throw error
   }
 }
 
+/*
+  세션이 없는 것이 정상인 호출에 붙이는 config (W5 인증 실연결).
+
+  client.js는 이제 401을 status로 잡아 토큰 갱신을 시도하고, 갱신이 실패하면
+  OVL-SESSION("세션이 만료되었습니다")을 띄운다. 그런데 로그인·가입·메일 인증·
+  비밀번호 재설정은 애초에 세션 없이 부르는 것들이라, 여기서 나오는 401은
+  "만료"가 아니라 그 요청 자체의 실패다 — 특히 E-AUTH-001(이메일 또는 비밀번호가
+  올바르지 않습니다)이 그렇다. 이 표식이 없으면 비밀번호를 한 번 틀릴 때마다
+  쓸데없는 토큰 갱신 요청이 나가고, 그게 실패하면서 로그인 화면 위에 세션 만료
+  오버레이가 뜬다. 로그아웃도 같은 이유로 포함한다(이미 끝난 세션을 정리하는
+  호출이 만료 오버레이를 띄울 이유가 없다).
+*/
+const UNAUTHENTICATED = { _skipAuthRefresh: true }
+
+/**
+ * 소셜 인가 시작 URL (AUTH-02 · openapi `GET /auth/oauth/{provider}` → 302).
+ *
+ * 이것만은 apiClient를 쓰지 않는다 — axios로 부르면 302를 XHR이 따라가 버려
+ * 제공자 페이지의 HTML을 응답으로 받게 되고, 정작 브라우저는 그대로 남는다.
+ * 소셜 로그인은 "브라우저가 통째로 나갔다가 콜백으로 돌아오는" 문서 이동이라
+ * `window.location.href`에 넣어야 성립한다(호출부: LoginPage.handleSocialSelect).
+ *
+ * baseURL을 그대로 앞에 붙이므로 dev에서는 `/api/v1/...` 상대경로가 되어
+ * vite 프록시를 타고, 배포에서는 nginx 단일 오리진을 탄다 — 어느 쪽이든
+ * 쿠키가 우리 오리진에 떨어진다(절대 주소로 부르면 교차 출처가 되어 서버가
+ * 내려주는 httpOnly 쿠키가 버려진다).
+ */
+const OAUTH_PROVIDERS = ['google', 'naver', 'kakao'] // openapi components.parameters.OAuthProvider
+
+export function oauthStartUrl(provider) {
+  const id = String(provider ?? '').toLowerCase()
+  if (!OAUTH_PROVIDERS.includes(id)) {
+    throw new Error(`[auth] 알 수 없는 소셜 프로바이더: ${provider}`)
+  }
+  const base = import.meta.env.VITE_API_BASE_URL ?? ''
+  return `${base}/auth/oauth/${id}`
+}
+
 /** POST /auth/sessions (로그인, AUTH-01). */
 export function login(email, password) {
   return withAuthDevFallback(
-    () => apiClient.post('/auth/sessions', { email, password }),
+    () => apiClient.post('/auth/sessions', { email, password }, UNAUTHENTICATED),
     () => authMockBackend.login(email, password),
   )
 }
@@ -122,7 +165,7 @@ export function login(email, password) {
  */
 export function signup({ email, password, termsAgreed }) {
   return withAuthDevFallback(
-    () => apiClient.post('/users', { email, password, termsAgreed }),
+    () => apiClient.post('/users', { email, password, termsAgreed }, UNAUTHENTICATED),
     () => authMockBackend.signup({ email, password, termsAgreed }),
   )
 }
@@ -130,7 +173,7 @@ export function signup({ email, password, termsAgreed }) {
 /** POST /auth/email-verifications/confirmation (이메일 인증 확정, AUTH-04). */
 export function verifyEmail(token) {
   return withAuthDevFallback(
-    () => apiClient.post('/auth/email-verifications/confirmation', { token }),
+    () => apiClient.post('/auth/email-verifications/confirmation', { token }, UNAUTHENTICATED),
     () => authMockBackend.verifyEmail(token),
   )
 }
@@ -138,7 +181,7 @@ export function verifyEmail(token) {
 /** POST /auth/email-verifications (인증 메일 발송, AUTH-03 AC5 60초 쿨다운). */
 export function resendVerificationEmail(email) {
   return withAuthDevFallback(
-    () => apiClient.post('/auth/email-verifications', { email }),
+    () => apiClient.post('/auth/email-verifications', { email }, UNAUTHENTICATED),
     () => authMockBackend.resendVerificationEmail(email),
   )
 }
@@ -146,7 +189,7 @@ export function resendVerificationEmail(email) {
 /** POST /auth/password-resets (재설정 메일 요청, AUTH-05). 계정 존재 비노출 — 항상 동일 응답. */
 export function requestPasswordReset(email) {
   return withAuthDevFallback(
-    () => apiClient.post('/auth/password-resets', { email }),
+    () => apiClient.post('/auth/password-resets', { email }, UNAUTHENTICATED),
     () => authMockBackend.requestPasswordReset(email),
   )
 }
@@ -155,10 +198,20 @@ export function requestPasswordReset(email) {
  * PATCH /auth/password-resets/{token} (재설정 확정, AUTH-06). token은 경로
  * 변수다(이전엔 body에만 실어 PATCH `/auth/password-resets`를 불렀는데, 그
  * 경로엔 핸들러가 없어 500 E-COM-005로 떨어졌었다 — 실서버 대조 2026-08-04 정정).
+ *
+ * 본문 필드는 `password`가 아니라 **`newPassword`**다(openapi
+ * `completePasswordReset` required: [newPassword]). W5 실사용에서 드러났다 —
+ * 오너가 새 비밀번호를 저장하려 하자 "비밀번호를 저장하지 못했습니다"만 떴다.
+ * 실서버 대조(2026-08-18):
+ *   {password}    → 400 E-COM-001 details.fields[0] "newPassword is required"
+ *   {newPassword} → 410 E-AUTH-006 (더미 토큰이므로 정상 반응)
+ * 400은 ResetPasswordPage의 E-AUTH-006 분기에 걸리지 않아 원인을 알 수 없는
+ * 일반 실패 문구로만 보였다. 호출부 인자는 `password`로 그대로 두고(화면이
+ * 다루는 것은 "새 비밀번호" 하나뿐이다) 전송 시점에만 계약 이름으로 옮긴다.
  */
 export function confirmPasswordReset({ token, password }) {
   return withAuthDevFallback(
-    () => apiClient.patch(`/auth/password-resets/${token}`, { password }),
+    () => apiClient.patch(`/auth/password-resets/${token}`, { newPassword: password }, UNAUTHENTICATED),
     () => authMockBackend.confirmPasswordReset({ token, password }),
   )
 }
@@ -175,7 +228,7 @@ export function confirmPasswordReset({ token, password }) {
  */
 export function logout() {
   return withAuthDevFallback(
-    () => apiClient.delete('/auth/session'),
+    () => apiClient.delete('/auth/session', UNAUTHENTICATED),
     () => authMockBackend.logout(),
   )
 }
@@ -189,7 +242,7 @@ export function logout() {
  */
 export function reactivate(email) {
   return withAuthDevFallback(
-    () => apiClient.post('/auth/reactivations', { email }),
+    () => apiClient.post('/auth/reactivations', { email }, UNAUTHENTICATED),
     () => authMockBackend.reactivate(email),
   )
 }

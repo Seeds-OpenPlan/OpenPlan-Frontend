@@ -6,22 +6,23 @@ import { OvlAccountReactivate } from '../../components/auth/OvlAccountReactivate
 import { Button } from '../../components/common/Button'
 import { Banner } from '../../components/common/Banner'
 import { useLogin, useReactivateByEmail } from '../../features/auth/useAuth'
+import { oauthStartUrl } from '../../features/auth/authApi'
 
 const FIELD =
   'w-full rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring'
 
-// 데모 계정 4종 — authFixtures.js의 헤더 코멘트가 정본. 화면에도 짧게
-// 남겨 둬 리뷰/QA가 코드를 안 열어봐도 각 분기를 바로 시도해볼 수 있게 함.
-const DEMO_HINT =
-  'user@openplan.dev · unverified@openplan.dev · deactivated@openplan.dev · expired@openplan.dev (비번 공통: password123)'
+// 데모 계정 힌트 제거(W5, 2026-08-18). `user@openplan.dev` 등 4종은
+// authFixtures.js의 **mock 전용** 계정이라 실서버에는 존재하지 않는다.
+// 프록시가 실서버를 보게 된 지금 저 안내를 보고 시도하면 E-AUTH-001로만
+// 떨어져, "로그인이 안 된다"는 잘못된 결론을 만든다. 실서버에서 계정을
+// 얻는 경로는 회원가입(POST /users) → 인증 메일뿐이다.
 
 /*
   SCR-AUTH-LOGIN (AUTH-01 · AC2 실패 카피/비활성 분기 · AC4 소셜 콜백 오류).
 
-  로그인 성공 시 '/'(대시보드)로 이동한다 — 실제로는 지금도 dev-auth 스텁이
-  모든 보호 라우트를 무조건 통과시키므로 이 네비게이션이 "인증했기 때문에"
-  통과하는 건 아니지만, 4주차에 스텁이 빠지고 나면 이 successful-login →
-  '/' 흐름이 그대로 실 동작이 된다(오너 지시: 화면만 먼저 만들어 둔다).
+  로그인 성공 시 '/'(대시보드)로 이동한다. W5(2026-08-18)부터 이 이동은 실제로
+  "인증했기 때문에" 통과한다 — dev-auth 스텁을 보던 프록시가 실서버로 바뀌었고
+  (vite.config.js), sessionGuardLoader가 401을 이 화면으로 되돌려 보낸다.
 */
 export function LoginPage() {
   const navigate = useNavigate()
@@ -73,15 +74,24 @@ export function LoginPage() {
     )
   }
 
-  // DEV: 실제 소셜 로그인은 브라우저가 프로바이더로 완전히 나갔다가 콜백
-  // 쿼리스트링으로 돌아오는 리다이렉트다(우리 axios 인스턴스를 거치지
-  // 않음 — authApi.js 헤더 참조). 그 왕복을 클릭 한 번으로 재현할 방법이
-  // 없어, 성공 케이스만 즉시 대시보드 이동으로 시연한다. 실패 배너는
-  // `/login?error=E-AUTH-010`으로 직접 접근해 확인할 수 있다(위 socialCallbackError
-  // 분기). 실 통합 시 이 자리는 `window.location.href = <프로바이더 인가 URL>`로
-  // 바뀐다.
-  const handleSocialSelect = () => {
-    navigate('/', { replace: true })
+  /*
+    AUTH-02 AC4 — 소셜 인가 시작(W5 실연결). 브라우저를 통째로 서버로 보낸다:
+    `GET /auth/oauth/{provider}`가 302로 제공자 인가 페이지를 가리키고, 사용자가
+    동의하면 콜백(`/auth/oauth/{provider}/callback`)이 httpOnly 쿠키를 심은 뒤
+    다시 302로 우리 화면에 돌려보낸다. 실패 시에는 `/login?error=E-AUTH-010`으로
+    돌아오는데, 그 쿼리는 위 socialCallbackError 배너가 이미 받고 있다.
+
+    navigate()가 아니라 window.location.href인 이유: 이건 라우터 안의 화면 전환이
+    아니라 오리진 밖으로 나가는 문서 이동이다. SPA 라우팅으로는 서버의 302를
+    브라우저가 따라갈 기회 자체가 없고, axios로 불러도 XHR이 302를 대신 따라가
+    제공자 HTML만 받아올 뿐 브라우저는 그대로 남는다(authApi.oauthStartUrl 헤더).
+
+    이전에는 이 자리가 곧장 `navigate('/')`였다 — 클릭 한 번으로 왕복을 재현할
+    수 없어 성공 케이스만 흉내 낸 mock이었고, 서버를 거치지 않고 대시보드로
+    들어가 버렸다.
+  */
+  const handleSocialSelect = (provider) => {
+    window.location.href = oauthStartUrl(provider)
   }
 
   const loginErrorCopy =
@@ -173,8 +183,6 @@ export function LoginPage() {
 
       <SocialButtons onSelect={handleSocialSelect} disabled={loginMutation.isPending} />
 
-      {/* QA/리뷰용 데모 계정 힌트 — 프로덕션 카피가 아니라 개발 편의 캡션. */}
-      <p className="text-center text-caption text-text-disabled">{DEMO_HINT}</p>
 
       <OvlAccountReactivate
         open={Boolean(reactivateInfo)}
