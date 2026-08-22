@@ -83,7 +83,10 @@ function useTaskCategoryBadge() {
 function useCalendarConnectionBadge() {
   const query = useConnections()
   if (query.isLoading) return { loading: true }
-  const connected = (query.data ?? []).some((c) => c.connected)
+  // W6: 서버는 이미 수립된 연동만 돌려준다(provider당 최대 1행, connectionId
+  // 키) — 그중 하나라도 CONNECTED면 "연결됨"이다. 목록에 아예 없는 provider는
+  // status 필드 자체가 없으므로 optional chaining으로 미연결 취급한다.
+  const connected = (query.data ?? []).some((c) => c.status === 'CONNECTED')
   return { loading: false, connected }
 }
 

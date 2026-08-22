@@ -24,8 +24,12 @@ import {
   updatePreferences,
   getSuggestion,
   getConnections,
-  setConnectionActive,
+  getAvailableCalendars,
+  setConnectionStatus,
   replaceSelectedCalendars,
+  disconnectConnection,
+  createAppleConnection,
+  createGoogleConnection,
   getAccount,
   updateAccount,
   deactivateAccount,
@@ -161,18 +165,31 @@ export function useUpdatePreferences() {
   })
 }
 
-// --- 연동 (FIX-13~17) — Google/Apple 독립 (오너 4차 리뷰로 2차의 단일 병합 정정) ---
+// --- 연동 (FIX-13~17 + 신규 연동 생성) — connectionId 기준 (W6 계약 정합) -------
 
 export const connectionsKey = () => ['connections']
+export const availableCalendarsKey = (connectionId) => ['connections', connectionId, 'calendars']
 
 export function useConnections() {
   return useQuery({ queryKey: connectionsKey(), queryFn: getConnections })
 }
 
-export function useSetConnectionActive() {
+/** 캘린더 선택 다이얼로그가 열릴 때만 조회 — connectionId가 없으면(다이얼로그
+ * 닫힘) 아예 요청을 보내지 않는다. */
+export function useAvailableCalendars(connectionId) {
+  return useQuery({
+    queryKey: availableCalendarsKey(connectionId),
+    queryFn: () => getAvailableCalendars(connectionId),
+    enabled: Boolean(connectionId),
+  })
+}
+
+/** PATCH status — 일시 정지/재개(비파괴적). 확인창 없이 Toggle에서 즉시
+ * 호출된다(연동 해제와 다른 동작이라는 설명은 settingsApi.js 참조). */
+export function useSetConnectionStatus() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, connected }) => setConnectionActive(provider, connected),
+    mutationFn: ({ connectionId, status }) => setConnectionStatus(connectionId, status),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: connectionsKey() }),
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
@@ -181,12 +198,50 @@ export function useSetConnectionActive() {
 export function useReplaceSelectedCalendars() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, calendarIds }) => replaceSelectedCalendars(provider, calendarIds),
+    mutationFn: ({ connectionId, calendarIds }) => replaceSelectedCalendars(connectionId, calendarIds),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: connectionsKey() })
       toast({ tone: 'success', message: '저장했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+/** DELETE — 완전한 연동 해제(FIX-17). 호출부(CalendarConnectionSection)가
+ * 확인 다이얼로그 뒤에서만 mutate한다. */
+export function useDisconnectConnection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (connectionId) => disconnectConnection(connectionId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: connectionsKey() })
+      toast({ tone: 'success', message: '연동을 해제했습니다' })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+/**
+ * 신규 애플 연동 생성. onError에서 공통 토스트를 띄우지 않는다 —
+ * AppleConnectDialog가 422(폼 재표시)/502(재시도 버튼)/409(이미 연결됨)를
+ * 서로 다른 화면 상태로 직접 분기해야 하므로, 여기서 토스트 하나로 뭉개면
+ * 그 구분이 사라진다(팀장 지시의 핵심 요구사항).
+ */
+export function useCreateAppleConnection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: createAppleConnection,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: connectionsKey() }),
+  })
+}
+
+/** 신규 구글 연동 생성(OAuth 콜백 착지점 전용 — GoogleCalendarCallbackPage).
+ * 위 애플 훅과 같은 이유로 onError 토스트를 걸지 않는다. */
+export function useCreateGoogleConnection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: createGoogleConnection,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: connectionsKey() }),
   })
 }
 

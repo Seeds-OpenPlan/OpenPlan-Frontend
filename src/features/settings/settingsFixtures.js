@@ -1,10 +1,15 @@
 /*
-  DEV-ONLY in-memory mock backend for the settings screens the 07 API 명세서
-  does NOT define yet: 기본값(preferences)·제안(suggestions)·연동(connections)·
-  계정(account)·알림(notification-settings). [가정-확장] throughout this file —
-  see settingsApi.js's own header for the one rule this whole module follows
-  (isolate the guess so only the normalize/base-URL layer changes once BE
-  settles on a real shape).
+  DEV-ONLY in-memory mock backend for the settings screens. 기본값
+  (preferences)·제안(suggestions)·계정(account)·알림(notification-settings)은
+  07 API 명세서에 없는 [가정-확장]이다 — settingsApi.js's own header for the
+  one rule this whole module follows (isolate the guess so only the
+  normalize/base-URL layer changes once BE settles on a real shape). **연동
+  (connections)은 W6부터 예외** — external-calendar-connections 계약이 확정돼
+  이 mock도 그 모양(connectionId·status)을 그대로 흉내낸다(그 섹션 자신의
+  헤더 코멘트 참조). withDevFallback이 여전히 이 mock으로 폴백시켜 주는 것은
+  "계약이 정해졌다"는 것과 "실서버가 이 사이클에 붙어 있다"는 것이 별개이기
+  때문 — 애플 경로는 BE PR #33이 아직 로컬에 없어 dev에서 이 mock 없이는
+  전혀 시연할 수 없다.
 
   가용 시간 범위(요일별 창)·고정 일정·주차 예외 have a REAL contract already and
   are served by planApi.js/fixedScheduleApi.js's own mocks (planFixtures.js) —
@@ -49,34 +54,47 @@ const suggestion = {
   sampleSize: 3,
 }
 
-// --- 연동 (FIX-13~17): 캘린더 연동 — 오너 4차 리뷰로 Google/Apple 다시 독립 항목.
-// 라운드 2에서 "캘린더 연동" 단일 스위치로 합쳤던 것을 이 화면 한정으로 되돌림
-// (오너 재확인: round-1처럼 provider별로 각자 연결/해제·캘린더 선택을 갖는
-// 편이 맞다는 판단) — 독립 하위 화면(SettingsCalendarPage, 라운드 3)이라는
-// 배치 결정 자체는 유지되고, 그 화면이 보여주는 데이터 모델만 배열로 복귀.
+// --- 연동 (FIX-13~17 + 신규 연동 생성): external-calendar-connections 계약 정합 ---
+// W6(2026-08-23) 모델 교체: provider가 아니라 서버가 발급하는 connectionId가
+// 유일 키다 — 같은 provider를 해제 후 재연결하면 새 connectionId가 생기므로
+// 배열은 이제 "이미 수립된 연동만" 담는다(0~2개). GOOGLE은 기존 시나리오를
+// 그대로 시연할 수 있게 미리 연결된 상태로 시작하고, APPLE은 **의도적으로
+// 비워 둔다** — 새로 만든 [연동하기] → AppleConnectDialog 흐름을 아무 시드
+// 없이도 바로 밟아볼 수 있어야 이 사이클의 핵심 변경(신규 연동 생성)이
+// 검증된다.
 let connections = [
   {
+    connectionId: 'conn-google-demo',
     provider: 'GOOGLE',
-    label: 'Google 캘린더',
-    connected: true,
-    availableCalendars: [
-      { id: 'gcal-1', name: '기본 캘린더' },
-      { id: 'gcal-2', name: '업무' },
-      { id: 'gcal-3', name: '스터디 그룹' },
-    ],
+    status: 'CONNECTED',
+    accountIdentifier: 'user@gmail.com',
     selectedCalendarIds: ['gcal-1', 'gcal-2'],
   },
-  {
-    provider: 'APPLE',
-    label: 'Apple 캘린더',
-    connected: false,
-    availableCalendars: [
-      { id: 'ical-1', name: 'iCloud 캘린더' },
-      { id: 'ical-2', name: '가족 공유' },
-    ],
-    selectedCalendarIds: [],
-  },
 ]
+
+// getAvailableCalendars가 connectionId로 조회하는 provider별 캘린더 카탈로그.
+// 이전 라운드는 이 목록을 connections 배열 위에 얹어 뒀지만, 계약이 별도
+// GET .../{connectionId}/calendars 엔드포인트로 분리해 뒀으므로(팀장 지시 표)
+// 여기서도 별도 저장소로 둔다.
+const CALENDAR_CATALOG = {
+  GOOGLE: [
+    { id: 'gcal-1', name: '기본 캘린더' },
+    { id: 'gcal-2', name: '업무' },
+    { id: 'gcal-3', name: '스터디 그룹' },
+  ],
+  APPLE: [
+    { id: 'ical-1', name: 'iCloud 캘린더' },
+    { id: 'ical-2', name: '가족 공유' },
+  ],
+}
+
+let nextConnectionSeq = 1
+// DEV QA 트리거 전용 — 실서버 없이 502 "재시도" 버튼의 성공 경로까지 눈으로
+// 확인할 유일한 방법이라 이메일 한 값을 예약해 둔다(authFixtures.js가 특정
+// 데모 이메일로 로그인 실패 종류를 흉내내는 것과 같은 관례, 그 파일 87행 참조).
+// 이 appleId로 첫 제출은 502로 실패하고, 재시도(같은 값)는 성공한다.
+const FLAKY_APPLE_ID = 'flaky-gateway@icloud.com'
+const flakyRetried = new Set()
 
 // --- 계정 (ACCT-01/02) -----------------------------------------------------------
 let account = {
@@ -148,34 +166,141 @@ export const mockBackend = {
     return { connections: connections.map((c) => ({ ...c })) }
   },
 
-  // PATCH 연동 활성/비활성 (FIX-16 Toggle · FIX-17 해제). 해제 확인창은 화면
-  // 쪽 책임(사용자가 이미 "확인"을 누른 뒤에만 이 호출이 옴).
-  async setConnectionActive(provider, connected) {
-    await delay()
-    const conn = connections.find((c) => c.provider === provider)
+  // GET .../{connectionId}/calendars — provider 카탈로그에서 그대로 찾아준다
+  // (실서버는 실제 CalDAV/구글 API 왕복을 하겠지만, mock은 형태만 흉내낸다).
+  async getAvailableCalendars(connectionId) {
+    await delay(60)
+    const conn = connections.find((c) => c.connectionId === connectionId)
     if (!conn) {
-      const err = new Error('mock: unknown connection provider')
+      const err = new Error('mock: unknown connectionId')
       err.status = 404
       throw err
     }
-    conn.connected = connected
-    // 해제 시 선택 캘린더도 함께 비움 — "이후 반영되지 않습니다"의 실제 효과.
-    if (!connected) conn.selectedCalendarIds = []
+    return { calendars: (CALENDAR_CATALOG[conn.provider] ?? []).map((c) => ({ ...c })) }
+  },
+
+  // PATCH 연동 status (FIX-16 Toggle — 일시 정지/재개, 파괴적이지 않음).
+  // DELETE(연동 해제)와 다른 동작이라 여기서는 확인창을 거치지 않는다.
+  async setConnectionStatus(connectionId, status) {
+    await delay()
+    const conn = connections.find((c) => c.connectionId === connectionId)
+    if (!conn) {
+      const err = new Error('mock: unknown connectionId')
+      err.status = 404
+      throw err
+    }
+    conn.status = status
     return { ...conn }
   },
 
   // PUT 전체 교체 (FIX-15). 배열 자체를 그대로 덮어써 부분 패치를 허용하지 않음
   // — 정본 문구 그대로 "PUT 전체 교체".
-  async replaceSelectedCalendars(provider, calendarIds) {
+  async replaceSelectedCalendars(connectionId, calendarIds) {
     await delay()
-    const conn = connections.find((c) => c.provider === provider)
+    const conn = connections.find((c) => c.connectionId === connectionId)
     if (!conn) {
-      const err = new Error('mock: unknown connection provider')
+      const err = new Error('mock: unknown connectionId')
       err.status = 404
       throw err
     }
     conn.selectedCalendarIds = [...calendarIds]
     return { ...conn }
+  },
+
+  // DELETE .../{connectionId} (FIX-17 연동 해제 — 확인창은 화면 쪽 책임, 이미
+  // "확인"을 누른 뒤에만 이 호출이 옴). status 변경이 아니라 행 자체를 배열에서
+  // 제거한다 — "미연결"로 완전히 되돌아가는 유일한 경로.
+  async disconnectConnection(connectionId) {
+    await delay()
+    const idx = connections.findIndex((c) => c.connectionId === connectionId)
+    if (idx === -1) {
+      const err = new Error('mock: unknown connectionId')
+      err.status = 404
+      throw err
+    }
+    connections.splice(idx, 1)
+    return { connectionId }
+  },
+
+  /**
+   * POST /external-calendar-connections (신규 연동 생성). 세 가지 오류를
+   * 상태코드로 구분해 던진다 — settingsApi.js의 createConnection 헤더가
+   * 설명하듯, AppleConnectDialog가 이 셋을 서로 다른 화면으로 분기해야 하므로
+   * mock도 실서버와 같은 모양(상태코드)으로 실패해야 그 분기를 검증할 수
+   * 있다:
+   *   409 — 같은 provider가 이미 CONNECTED (E-EXT-004, 6주차 문서 명시)
+   *   422 — 애플 자격증명이 형식상 유효하지 않음(이메일 아님/앱 암호 형태
+   *         아님 — 흔히 일반 로그인 비밀번호를 그대로 입력하는 실패 패턴을
+   *         흉내낸다) · 구글 authCode/state 누락
+   *   502 — FLAKY_APPLE_ID로 첫 제출만 일부러 실패시켜, 재시도 버튼이 같은
+   *         입력으로 다시 보내면 성공하는 것까지 눈으로 확인할 수 있게 한다
+   */
+  async createConnection(body) {
+    await delay()
+    const { provider } = body
+
+    if (connections.some((c) => c.provider === provider && c.status === 'CONNECTED')) {
+      const err = new Error('mock: already connected')
+      err.code = 'E-EXT-004'
+      err.status = 409
+      throw err
+    }
+
+    if (provider === 'APPLE') {
+      const { appleId, appPassword } = body
+
+      if (appleId === FLAKY_APPLE_ID && !flakyRetried.has(appleId)) {
+        flakyRetried.add(appleId)
+        const err = new Error('mock: simulated gateway failure (first attempt only)')
+        err.status = 502
+        throw err
+      }
+
+      // 형태 검증만 흉내낸다 — 실제 CalDAV 핸드셰이크는 서버 몫. 이메일
+      // 전체 형식(로컬파트만 금지)과, 일반 비밀번호와 구분되는 앱 암호 형태
+      // (Apple이 발급하는 `xxxx-xxxx-xxxx-xxxx`, 소문자 4-4-4-4)를 확인한다.
+      const looksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(appleId ?? '')
+      const looksLikeAppPassword = /^[a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4}$/.test(appPassword ?? '')
+      if (!looksLikeEmail || !looksLikeAppPassword) {
+        const err = new Error('mock: invalid apple credentials')
+        err.code = 'E-EXT-002'
+        err.status = 422
+        throw err
+      }
+
+      const conn = {
+        connectionId: `conn-apple-${nextConnectionSeq++}`,
+        provider: 'APPLE',
+        status: 'CONNECTED',
+        accountIdentifier: appleId,
+        selectedCalendarIds: [],
+      }
+      connections.push(conn)
+      return { ...conn }
+    }
+
+    if (provider === 'GOOGLE') {
+      const { authCode, state } = body
+      if (!authCode || !state) {
+        const err = new Error('mock: missing oauth exchange params')
+        err.code = 'E-EXT-002'
+        err.status = 422
+        throw err
+      }
+      const conn = {
+        connectionId: `conn-google-${nextConnectionSeq++}`,
+        provider: 'GOOGLE',
+        status: 'CONNECTED',
+        accountIdentifier: 'user@gmail.com',
+        selectedCalendarIds: [],
+      }
+      connections.push(conn)
+      return { ...conn }
+    }
+
+    const err = new Error('mock: unknown provider')
+    err.status = 400
+    throw err
   },
 
   async getAccount() {
