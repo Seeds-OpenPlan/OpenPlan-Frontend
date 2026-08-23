@@ -32,7 +32,20 @@
 */
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
-import { mockDashboard } from './dashboardFixtures'
+
+/*
+  dashboardFixtures.js를 최상단 정적 import로 들이지 않는다 — authApi.js의
+  loadAuthMock()과 같은 이유(그 파일 헤더 참조): 정적 import는 실행 경로와
+  무관하게 번들러가 항상 포함시켜, DEV 전용 mock 데이터가 프로덕션 청크에도
+  그대로 실린다. 아래처럼 `import.meta.env.DEV` 분기 안에서만 동적 import를
+  호출하면, Vite가 빌드 시 그 값을 리터럴 false로 치환해 분기 전체가 도달
+  불가능해지고 번들러가 통째로 제거한다.
+*/
+async function loadDashboardMock() {
+  if (!import.meta.env.DEV) return null
+  const { mockDashboard } = await import('./dashboardFixtures')
+  return mockDashboard
+}
 
 /**
  * A section is present in the payload → pass it through as-is (including a
@@ -188,7 +201,7 @@ function normalizeDashboard(raw) {
 export function getDashboard() {
   return withDevFallback(
     () => apiClient.get('/dashboard'),
-    () => mockDashboard(),
+    async () => (await loadDashboardMock())(),
   ).then(normalizeDashboard)
 }
 

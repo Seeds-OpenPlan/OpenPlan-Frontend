@@ -20,9 +20,22 @@
 */
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
-import { mockBackend } from './settingsFixtures'
 import { unwrapList } from '../../api/unwrap'
 import { BASELINE_STRATEGY_TYPE } from '../plan/replanStrategies'
+
+/*
+  settingsFixtures.js를 최상단 정적 import로 들이지 않는다 — authApi.js의
+  loadAuthMock()과 같은 이유(그 파일 헤더 참조): 정적 import는 번들러가 실행
+  경로와 무관하게 항상 포함시켜, DEV 전용 mock 데이터가 프로덕션 청크에도
+  그대로 실린다. `import.meta.env.DEV` 분기 안에서만 동적 import를 호출하면
+  Vite가 빌드 시 그 값을 리터럴 false로 치환해 분기 전체가 도달 불가능해지고
+  번들러가 통째로 제거한다.
+*/
+async function loadSettingsMock() {
+  if (!import.meta.env.DEV) return null
+  const { mockBackend } = await import('./settingsFixtures')
+  return mockBackend
+}
 
 // 서버 enum엔 'BASELINE'이 없다 — 확정 계약(openapi-live-76c7009.yaml
 // Preferences.defaultReplanStrategy, :2320)은 `KEEP_CURRENT / MINIMAL_CHANGE /
@@ -87,7 +100,7 @@ function normalizePreferences(r) {
 export function getPreferences() {
   return withDevFallback(
     () => apiClient.get('/users/me/preferences'),
-    () => mockBackend.getPreferences(),
+    async () => (await loadSettingsMock()).getPreferences(),
   ).then(normalizePreferences)
 }
 
@@ -119,7 +132,7 @@ function putPreferences(patch) {
     }
     return withDevFallback(
       () => apiClient.put('/users/me/preferences', body),
-      () => mockBackend.updatePreferences(body),
+      async () => (await loadSettingsMock()).updatePreferences(body),
     ).then(normalizePreferences)
   })
 }
@@ -152,7 +165,7 @@ export function updateWeeklyAvailableMinutes(minutes) {
 export function getSuggestion() {
   return withDevFallback(
     () => apiClient.get('/users/me/preference-suggestions'),
-    () => mockBackend.getSuggestion(),
+    async () => (await loadSettingsMock()).getSuggestion(),
   ).then(normalizeSuggestion)
 }
 
@@ -209,7 +222,7 @@ export const CONNECTION_STATUS = { CONNECTED: 'CONNECTED', DISABLED: 'DISABLED' 
 export function getConnections() {
   return withDevFallback(
     () => apiClient.get('/external-calendar-connections'),
-    () => mockBackend.getConnections(),
+    async () => (await loadSettingsMock()).getConnections(),
     // Real: `data:[ExternalConnection]` (array). Mock: `{ connections: [...] }`.
   ).then((r) => unwrapList(r, 'connections').map(normalizeConnection))
 }
@@ -235,7 +248,7 @@ function normalizeConnection(c) {
 export function getAvailableCalendars(connectionId) {
   return withDevFallback(
     () => apiClient.get(`/external-calendar-connections/${connectionId}/calendars`),
-    () => mockBackend.getAvailableCalendars(connectionId),
+    async () => (await loadSettingsMock()).getAvailableCalendars(connectionId),
   ).then((r) => unwrapList(r, 'calendars'))
 }
 
@@ -250,7 +263,7 @@ export function getAvailableCalendars(connectionId) {
 export function setConnectionStatus(connectionId, status) {
   return withDevFallback(
     () => apiClient.patch(`/external-calendar-connections/${connectionId}`, { status }),
-    () => mockBackend.setConnectionStatus(connectionId, status),
+    async () => (await loadSettingsMock()).setConnectionStatus(connectionId, status),
   )
 }
 
@@ -268,7 +281,7 @@ export function setConnectionStatus(connectionId, status) {
 export function replaceSelectedCalendars(connectionId, selections) {
   return withDevFallback(
     () => apiClient.put(`/external-calendar-connections/${connectionId}/calendar-selections`, { selections }),
-    () => mockBackend.replaceSelectedCalendars(connectionId, selections),
+    async () => (await loadSettingsMock()).replaceSelectedCalendars(connectionId, selections),
   )
 }
 
@@ -281,7 +294,7 @@ export function replaceSelectedCalendars(connectionId, selections) {
 export function disconnectConnection(connectionId) {
   return withDevFallback(
     () => apiClient.delete(`/external-calendar-connections/${connectionId}`),
-    () => mockBackend.disconnectConnection(connectionId),
+    async () => (await loadSettingsMock()).disconnectConnection(connectionId),
   )
 }
 
@@ -294,14 +307,14 @@ export function disconnectConnection(connectionId) {
  * withDevFallback을 그대로 물려받는다(네트워크 오류·미구현 404만 mock으로
  * 흡수, 그 외 — 특히 422/502/409 — 는 그대로 던짐) — 애플 폼이 이 셋을 서로
  * 다른 화면 상태로 분기해야 하므로, 여기서 조용히 mock 성공으로 삼켜버리면
- * 그 분기 자체를 검증할 방법이 없어진다. mockBackend.createConnection이 같은
+ * 그 분기 자체를 검증할 방법이 없어진다. mock의 createConnection이 같은
  * 상태코드 모양(422/502/409)으로 던지는 것도 그래서다 — 실서버 대조 전까지
  * 이 화면의 유일한 확인 경로.
  */
 function createConnection(body) {
   return withDevFallback(
     () => apiClient.post('/external-calendar-connections', body),
-    () => mockBackend.createConnection(body),
+    async () => (await loadSettingsMock()).createConnection(body),
   )
 }
 
@@ -362,7 +375,7 @@ export function googleCalendarAuthorizationUrl(redirectUri) {
 export function getAccount() {
   return withDevFallback(
     () => apiClient.get('/users/me'),
-    () => mockBackend.getAccount(),
+    async () => (await loadSettingsMock()).getAccount(),
   )
 }
 
@@ -370,7 +383,7 @@ export function getAccount() {
 export function updateAccount(patch) {
   return withDevFallback(
     () => apiClient.patch('/users/me/profile', patch),
-    () => mockBackend.updateAccount(patch),
+    async () => (await loadSettingsMock()).updateAccount(patch),
   )
 }
 
@@ -390,7 +403,7 @@ export function updateAccount(patch) {
 export function deactivateAccount() {
   return withDevFallback(
     () => apiClient.delete('/users/me'),
-    () => mockBackend.deactivateAccount(),
+    async () => (await loadSettingsMock()).deactivateAccount(),
   )
 }
 
@@ -398,7 +411,7 @@ export function deactivateAccount() {
 export function reactivateAccount() {
   return withDevFallback(
     () => apiClient.post('/auth/reactivations'),
-    () => mockBackend.reactivateAccount(),
+    async () => (await loadSettingsMock()).reactivateAccount(),
   )
 }
 
@@ -408,7 +421,7 @@ export function reactivateAccount() {
 export function getNotificationSettings() {
   return withDevFallback(
     () => apiClient.get('/users/me/notification-settings'),
-    () => mockBackend.getNotificationSettings(),
+    async () => (await loadSettingsMock()).getNotificationSettings(),
   )
 }
 
@@ -420,6 +433,6 @@ export function getNotificationSettings() {
 export function patchNotificationSetting(key, enabled) {
   return withDevFallback(
     () => apiClient.patch('/users/me/notification-settings', { [key]: enabled }),
-    () => mockBackend.patchNotificationSetting(key, enabled),
+    async () => (await loadSettingsMock()).patchNotificationSetting(key, enabled),
   )
 }

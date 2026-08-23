@@ -10,8 +10,21 @@
 */
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
-import { mockBackend } from './notificationsFixtures'
 import { unwrapList } from '../../api/unwrap'
+
+/*
+  notificationsFixtures.js를 최상단 정적 import로 들이지 않는다 — authApi.js의
+  loadAuthMock()과 같은 이유(그 파일 헤더 참조): 정적 import는 번들러가 실행
+  경로와 무관하게 항상 포함시켜, DEV 전용 mock 데이터가 프로덕션 청크에도
+  그대로 실린다. `import.meta.env.DEV` 분기 안에서만 동적 import를 호출하면
+  Vite가 빌드 시 그 값을 리터럴 false로 치환해 분기 전체가 도달 불가능해지고
+  번들러가 통째로 제거한다.
+*/
+async function loadNotificationsMock() {
+  if (!import.meta.env.DEV) return null
+  const { mockBackend } = await import('./notificationsFixtures')
+  return mockBackend
+}
 
 /** Tolerates snake_case (server) or camelCase (mock) — same reasoning
  * planApi.js's normalizeBlock gives for why this one adapter absorbs the
@@ -32,7 +45,7 @@ function normalizeNotification(n) {
 export function getNotifications() {
   return withDevFallback(
     () => apiClient.get('/notifications'),
-    () => mockBackend.getNotifications(),
+    async () => (await loadNotificationsMock()).getNotifications(),
     // Real server: `data:[Notification]` (array). Mock: `{ notifications: [...] }`.
   ).then((r) => unwrapList(r, 'notifications').map(normalizeNotification))
 }
@@ -41,6 +54,6 @@ export function getNotifications() {
 export function markNotificationRead(notificationId) {
   return withDevFallback(
     () => apiClient.patch(`/notifications/${notificationId}/read`),
-    () => mockBackend.markNotificationRead(notificationId),
+    async () => (await loadNotificationsMock()).markNotificationRead(notificationId),
   ).then(normalizeNotification)
 }

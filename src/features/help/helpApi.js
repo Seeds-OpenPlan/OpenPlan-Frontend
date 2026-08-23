@@ -10,9 +10,22 @@
 */
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
-import { mockBackend } from './helpFixtures'
 import { unwrapList } from '../../api/unwrap'
 import { fetchAllPages } from '../../api/paging'
+
+/*
+  helpFixtures.js를 최상단 정적 import로 들이지 않는다 — authApi.js의
+  loadAuthMock()과 같은 이유(그 파일 헤더 참조): 정적 import는 번들러가 실행
+  경로와 무관하게 항상 포함시켜, DEV 전용 mock 데이터가 프로덕션 청크에도
+  그대로 실린다. `import.meta.env.DEV` 분기 안에서만 동적 import를 호출하면
+  Vite가 빌드 시 그 값을 리터럴 false로 치환해 분기 전체가 도달 불가능해지고
+  번들러가 통째로 제거한다.
+*/
+async function loadHelpMock() {
+  if (!import.meta.env.DEV) return null
+  const { mockBackend } = await import('./helpFixtures')
+  return mockBackend
+}
 
 /*
   실서버 대조 (2026-07-29, SupportController/SupportTicketResponse): the ticket
@@ -103,7 +116,7 @@ export function getTickets() {
   const fetchFirstPage = (page, size) =>
     withDevFallback(
       () => realCall(page, size),
-      () => mockBackend.getTickets().then((data) => ({ data, meta: null })),
+      async () => (await loadHelpMock()).getTickets().then((data) => ({ data, meta: null })),
     )
   return fetchAllPages(fetchFirstPage, realCall, (data) => unwrapList(data, 'tickets')).then((items) =>
     items.map(normalizeTicket),
@@ -115,7 +128,7 @@ export function getTickets() {
 export function getTicket(ticketId) {
   return withDevFallback(
     () => apiClient.get(`/support/tickets/${ticketId}`),
-    () => mockBackend.getTicket(ticketId),
+    async () => (await loadHelpMock()).getTicket(ticketId),
   ).then(normalizeTicket)
 }
 
@@ -128,7 +141,7 @@ export function createTicket({ title, body, category, email, attachments }) {
     // — `body` is its `content`, and email/attachments have nowhere to go yet
     // (they stay in the mock, which is the only store that keeps them).
     () => apiClient.post('/support/tickets', { category, title, content: body }),
-    () => mockBackend.createTicket({ title, body, category, email, attachments }),
+    async () => (await loadHelpMock()).createTicket({ title, body, category, email, attachments }),
   ).then(normalizeTicket)
 }
 
@@ -139,7 +152,7 @@ export function getFaqArticles(query) {
   return withDevFallback(
     // The server's search param is `keyword`; `query` was this file's guess.
     () => apiClient.get('/support/help-articles', { params: query ? { keyword: query } : undefined }),
-    () => mockBackend.getFaqArticles(query),
+    async () => (await loadHelpMock()).getFaqArticles(query),
     // Real: `data:[HelpArticle]` (array). Mock: `{ articles: [...] }`.
   ).then((r) => unwrapList(r, 'articles').map(normalizeFaqArticle))
 }
@@ -165,7 +178,7 @@ export function getAnnouncements() {
   const fetchFirstPage = (page, size) =>
     withDevFallback(
       () => realCall(page, size),
-      () => mockBackend.getAnnouncements().then((data) => ({ data, meta: null })),
+      async () => (await loadHelpMock()).getAnnouncements().then((data) => ({ data, meta: null })),
     )
   return fetchAllPages(fetchFirstPage, realCall, (data) => unwrapList(data, 'announcements')).then((items) =>
     items.map(normalizeAnnouncement),
@@ -177,6 +190,6 @@ export function getAnnouncements() {
 export function getAnnouncement(noticeId) {
   return withDevFallback(
     () => apiClient.get(`/announcements/${noticeId}`),
-    () => mockBackend.getAnnouncement(noticeId),
+    async () => (await loadHelpMock()).getAnnouncement(noticeId),
   ).then(normalizeAnnouncement)
 }

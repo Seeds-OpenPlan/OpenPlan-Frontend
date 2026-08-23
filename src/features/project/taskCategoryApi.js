@@ -23,8 +23,21 @@
   depend on either of those feature folders for one tiny wrapper.
 */
 import { apiClient } from '../../api/client'
-import { mockBackend } from './taskCategoryFixtures'
 import { unwrapList } from '../../api/unwrap'
+
+/*
+  taskCategoryFixtures.js를 최상단 정적 import로 들이지 않는다 — authApi.js의
+  loadAuthMock()과 같은 이유(그 파일 헤더 참조): 정적 import는 번들러가 실행
+  경로와 무관하게 항상 포함시켜, DEV 전용 mock 데이터가 프로덕션 청크에도
+  그대로 실린다. `import.meta.env.DEV` 분기 안에서만 동적 import를 호출하면
+  Vite가 빌드 시 그 값을 리터럴 false로 치환해 분기 전체가 도달 불가능해지고
+  번들러가 통째로 제거한다.
+*/
+async function loadTaskCategoryMock() {
+  if (!import.meta.env.DEV) return null
+  const { mockBackend } = await import('./taskCategoryFixtures')
+  return mockBackend
+}
 
 async function withDevFallback(realCall, mockCall) {
   try {
@@ -46,7 +59,7 @@ async function withDevFallback(realCall, mockCall) {
 export function getTaskCategories() {
   return withDevFallback(
     () => apiClient.get('/task-categories'),
-    () => mockBackend.getTaskCategories(),
+    async () => (await loadTaskCategoryMock()).getTaskCategories(),
   ).then((r) => unwrapList(r, 'categories'))
 }
 
@@ -59,7 +72,7 @@ export function getTaskCategories() {
 export function createTaskCategory(name) {
   return withDevFallback(
     () => apiClient.post('/task-categories', { name }),
-    () => mockBackend.createTaskCategory(name),
+    async () => (await loadTaskCategoryMock()).createTaskCategory(name),
   )
 }
 
@@ -73,6 +86,6 @@ export function createTaskCategory(name) {
 export function deleteTaskCategory(taskCategoryId) {
   return withDevFallback(
     () => apiClient.delete(`/task-categories/${taskCategoryId}`),
-    () => mockBackend.deleteTaskCategory(taskCategoryId),
+    async () => (await loadTaskCategoryMock()).deleteTaskCategory(taskCategoryId),
   )
 }

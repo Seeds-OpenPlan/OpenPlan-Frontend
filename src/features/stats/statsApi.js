@@ -12,9 +12,22 @@
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
 import { snapDuration } from '../plan/planTime'
-import { mockBackend } from './statsFixtures'
 import { TIME_BANDS } from './statsConstants'
 import { unwrapList } from '../../api/unwrap'
+
+/*
+  statsFixtures.js를 최상단 정적 import로 들이지 않는다 — authApi.js의
+  loadAuthMock()과 같은 이유(그 파일 헤더 참조): 정적 import는 번들러가 실행
+  경로와 무관하게 항상 포함시켜, DEV 전용 mock 데이터가 프로덕션 청크에도
+  그대로 실린다. `import.meta.env.DEV` 분기 안에서만 동적 import를 호출하면
+  Vite가 빌드 시 그 값을 리터럴 false로 치환해 분기 전체가 도달 불가능해지고
+  번들러가 통째로 제거한다.
+*/
+async function loadStatsMock() {
+  if (!import.meta.env.DEV) return null
+  const { mockBackend } = await import('./statsFixtures')
+  return mockBackend
+}
 
 /**
  * Returns `{ category, suggestedMinutes, sampleSize }`, or `null` when no
@@ -57,7 +70,7 @@ export function getCorrectionProposal(category) {
   if (!category) return Promise.resolve(null)
   return withDevFallback(
     () => apiClient.get('/stats/correction-proposals', { params: { categoryId: category } }),
-    () => mockBackend.getCorrectionProposal(category),
+    async () => (await loadStatsMock()).getCorrectionProposal(category),
   ).then((r) =>
     r ? { category, suggestedMinutes: snapDuration(r.proposedEstimatedMinutes), sampleSize: r.sampleSize } : r,
   )
@@ -93,7 +106,7 @@ function isEmptyPayload(raw) {
 export function getStatsSummaries(period) {
   return withDevFallback(
     () => apiClient.get('/stats/summaries', { params: { period } }),
-    () => mockBackend.getStatsSummaries(period),
+    async () => (await loadStatsMock()).getStatsSummaries(period),
   ).then((raw) => normalizeSummaries(raw, period))
 }
 
@@ -143,7 +156,7 @@ function normalizeSummaries(raw, period) {
 export function getStatsDeviations(groupBy, period) {
   return withDevFallback(
     () => apiClient.get('/stats/deviations', { params: { groupBy, period } }),
-    () => mockBackend.getStatsDeviations(groupBy, period),
+    async () => (await loadStatsMock()).getStatsDeviations(groupBy, period),
   ).then((raw) => unwrapList(raw, 'rows').map(normalizeDeviationGroup))
 }
 
@@ -176,7 +189,7 @@ function normalizeDeviationGroup(g) {
 export function getStatsTimePatterns(period) {
   return withDevFallback(
     () => apiClient.get('/stats/time-patterns', { params: { period } }),
-    () => mockBackend.getStatsTimePatterns(period),
+    async () => (await loadStatsMock()).getStatsTimePatterns(period),
   ).then((raw) => normalizeTimePatterns(raw))
 }
 
