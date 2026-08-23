@@ -28,14 +28,21 @@ export function GoogleCalendarCallbackPage() {
   const authCode = searchParams.get('authCode')
   const state = searchParams.get('state')
 
-  useEffect(() => {
-    if (firedRef.current) return
-    if (!authCode || !state) return
-    firedRef.current = true
+  // 최초 시도(effect)와 502 뒤 [다시 시도] 버튼이 같은 mutate 호출을 공유한다
+  // (Thomas 리뷰 MAJOR fix — 이전엔 재시도 쪽에만 onSuccess가 빠져 있어, 재시도가
+  // 성공해도 이동하지 않고 화면이 영영 스켈레톤에 갇혔다). 한 함수로 묶어 두 곳이
+  // 다시 갈라지지 않게 한다.
+  const attemptConnect = () =>
     createConnection.mutate(
       { authCode, state, redirectUri: GOOGLE_CALENDAR_REDIRECT_URI },
       { onSuccess: () => navigate('/settings/calendar', { replace: true }) },
     )
+
+  useEffect(() => {
+    if (firedRef.current) return
+    if (!authCode || !state) return
+    firedRef.current = true
+    attemptConnect()
     // authCode/state는 URL이 이미 결정한 값 — 매 렌더 재계산해도 같은 값이라
     // deps에서 의도적으로 뺀다(firedRef가 실제 1회 실행을 보장).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -63,11 +70,7 @@ export function GoogleCalendarCallbackPage() {
           isDuplicate ? '다른 Google 계정으로 다시 시도해 주세요.' : '잠시 후 다시 시도해 주세요.'
         }
         actionLabel={isDuplicate ? '설정으로 돌아가기' : '다시 시도'}
-        onAction={
-          isDuplicate
-            ? () => navigate('/settings/calendar', { replace: true })
-            : () => createConnection.mutate({ authCode, state, redirectUri: GOOGLE_CALENDAR_REDIRECT_URI })
-        }
+        onAction={isDuplicate ? () => navigate('/settings/calendar', { replace: true }) : attemptConnect}
       />
     )
   }

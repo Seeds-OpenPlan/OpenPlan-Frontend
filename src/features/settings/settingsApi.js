@@ -22,6 +22,26 @@ import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
 import { mockBackend } from './settingsFixtures'
 import { unwrapList } from '../../api/unwrap'
+import { BASELINE_STRATEGY_TYPE } from '../plan/replanStrategies'
+
+// 서버 enum엔 'BASELINE'이 없다 — 확정 계약(openapi-live-76c7009.yaml
+// Preferences.defaultReplanStrategy, :2320)은 `KEEP_CURRENT / MINIMAL_CHANGE /
+// DEADLINE_FIRST / WORKLOAD_BALANCE / null` 다섯 값뿐이다. `BASELINE`은
+// replanStrategies.js가 재계획 **모달** 전용으로 만든 클라이언트 전용
+// sentinel이다(그 파일 자신의 헤더 — "BASELINE never reaches the server").
+// 그런데 이 설정 화면(SettingsDefaultsPage)이 같은 카탈로그를 기본값 라디오
+// 값으로도 재사용하면서 그 문자열을 그대로 PUT에 실어 보내고 있었다 — 실서버가
+// 모르는 값을 받는 경계 버그(W6 실측 감사, 2026-08-24, 아직 누구도 실측하지
+// 못한 경로 — 이 필드가 null이 아닌 실제 저장 왕복은 아직 한 번도 실서버에서
+// 확인된 적이 없었다). 이 파일의 read/write 경계(normalizePreferences/
+// putPreferences) 딱 두 곳에서만 번역해서, 화면·replanStrategies.js 양쪽은 이
+// 존재 자체를 몰라도 되게 한다.
+function toClientStrategy(v) {
+  return v === 'KEEP_CURRENT' ? BASELINE_STRATEGY_TYPE : v
+}
+function toServerStrategy(v) {
+  return v === BASELINE_STRATEGY_TYPE ? 'KEEP_CURRENT' : v
+}
 
 // --- 기본값 + 가용 시간 (FIX-10~12, W6 계약 정합 2026-08-23) ----------------------
 //
@@ -56,7 +76,7 @@ import { unwrapList } from '../../api/unwrap'
 function normalizePreferences(r) {
   return {
     defaultEstimatedMinutes: r?.defaultEstimatedMinutes ?? null,
-    defaultReplanStrategy: r?.defaultReplanStrategy ?? null,
+    defaultReplanStrategy: toClientStrategy(r?.defaultReplanStrategy ?? null),
     weeklyAvailableMinutes: r?.weeklyAvailableMinutes ?? null,
   }
 }
@@ -88,7 +108,15 @@ export function getWeeklyAvailableMinutes() {
  */
 function putPreferences(patch) {
   return getPreferences().then((current) => {
-    const body = { ...current, ...patch }
+    const body = {
+      ...current,
+      ...patch,
+      // read-modify-write 병합 뒤 이 필드 하나만 다시 서버 enum으로 되짚어
+      // 번역한다 — `current`(GET 직후 normalizePreferences를 거친 값)도,
+      // `patch`(화면이 그대로 넘기는 BASELINE 값)도 둘 다 클라이언트 표기라
+      // `{...current, ...patch}` 만으로는 절대 서버 표기가 되지 않는다.
+      defaultReplanStrategy: toServerStrategy(patch.defaultReplanStrategy ?? current.defaultReplanStrategy),
+    }
     return withDevFallback(
       () => apiClient.put('/users/me/preferences', body),
       () => mockBackend.updatePreferences(body),
@@ -116,16 +144,40 @@ export function updateWeeklyAvailableMinutes(minutes) {
  * (팀장 지시): 이전 `/users/me/preferences/suggestions`에서 주소만 바뀌었다
  * — 계약(openapi-live-76c7009.yaml)엔 아직 `x-implementation-status:
  * not-implemented`로 남아 있어([미구현], 서버 미제공) 응답을 못 받을 때는
- * 지금처럼 mock 폴백으로 흡수한다. 실제로 뜨면 `{ suggestedStrategy, reason,
- * sampleSize }` 또는 이력 부족 시 `null`(오류 아님)을 기대한다 — 그 "제안
- * 없음" 상태는 stats의 getCorrectionProposal처럼 계속 재현 가능해야 하므로
- * 가짜 값으로 덮지 않는다.
+ * 지금처럼 mock 폴백으로 흡수한다. 이력 부족 시 `null`(오류 아님)을 기대한다 —
+ * 그 "제안 없음" 상태는 stats의 getCorrectionProposal처럼 계속 재현 가능해야
+ * 하므로 가짜 값으로 덮지 않는다(아래 normalizeSuggestion이 null을 그대로
+ * 통과시키는 이유).
  */
 export function getSuggestion() {
   return withDevFallback(
     () => apiClient.get('/users/me/preference-suggestions'),
     () => mockBackend.getSuggestion(),
-  )
+  ).then(normalizeSuggestion)
+}
+
+/**
+ * PreferenceSuggestion 정규화 (W6 실측 감사, 2026-08-24 — 이 필드는 실서버가
+ * 아직 [미구현]이라 지금까지 실측 대상이 아니었다). 확정 계약(위 openapi-live
+ * PreferenceSuggestion, :2321)이 주는 필드는 `suggestedReplanStrategy` /
+ * `suggestedEstimatedMinutes` / `reason` 셋뿐이다 — `sampleSize`는 계약에
+ * 아예 없다. 이 DEV mock은 그 계약이 확정되기 전 이름(`suggestedStrategy`)과
+ * 존재하지 않는 필드(`sampleSize`)로 만들어져 있었다. 실서버가 이 엔드포인트를
+ * 실제로 열면 화면이 `suggestion.suggestedStrategy`(항상 undefined)를 읽어
+ * 제안 칩이 "undefined회 선택했습니다"를 보여주는 채로 조용히 깨졌을 것이다 —
+ * 여기서 필드명을 확정 계약 쪽으로 맞추고, `sampleSize`는 (DEV mock에만 있는
+ * 값이므로) 없으면 null로 떨어뜨려 화면이 그 유무로 문구를 분기하게 한다
+ * (SettingsDefaultsPage 참고). `suggestedReplanStrategy`도 defaultReplanStrategy
+ * 와 같은 enum을 쓸 것으로 보여 위 toClientStrategy를 함께 태운다.
+ */
+function normalizeSuggestion(r) {
+  if (r == null) return null
+  return {
+    suggestedReplanStrategy: toClientStrategy(r.suggestedReplanStrategy ?? r.suggestedStrategy ?? null),
+    suggestedEstimatedMinutes: r.suggestedEstimatedMinutes ?? null,
+    reason: r.reason ?? null,
+    sampleSize: r.sampleSize ?? null, // DEV mock 전용 — 확정 계약엔 없는 필드
+  }
 }
 
 // --- 연동 (FIX-13~17 + 신규 연동 생성) — external-calendar-connections 계약 정합 ---
@@ -159,7 +211,19 @@ export function getConnections() {
     () => apiClient.get('/external-calendar-connections'),
     () => mockBackend.getConnections(),
     // Real: `data:[ExternalConnection]` (array). Mock: `{ connections: [...] }`.
-  ).then((r) => unwrapList(r, 'connections'))
+  ).then((r) => unwrapList(r, 'connections').map(normalizeConnection))
+}
+
+/**
+ * ExternalConnection 정규화 (Thomas 리뷰 BLOCKER, 2026-08-24 — 계약 원문
+ * openapi-live-76c7009.yaml :2340). 실 필드는 `selectedCalendars:
+ * [{externalCalendarId, name}]`이다 — 화면·이 파일 전체가 그동안 존재하지
+ * 않는 `selectedCalendarIds`(문자열 배열)를 읽고 있었다. 값이 없어도(방금
+ * 연동해 아직 아무 캘린더도 안 고른 상태) 항상 배열로 떨어뜨려, 소비하는
+ * 쪽마다 `?? []`를 반복하지 않게 한다.
+ */
+function normalizeConnection(c) {
+  return { ...c, selectedCalendars: c?.selectedCalendars ?? [] }
 }
 
 /**
@@ -194,11 +258,17 @@ export function setConnectionStatus(connectionId, status) {
  * PUT /external-calendar-connections/{connectionId}/calendar-selections
  * (FIX-15 캘린더 선택 편집). Full replace, per the spec's own "PUT 전체 교체"
  * wording — never a partial add/remove call.
+ *
+ * `selections`는 `[{externalCalendarId, name}]` — id 배열이 아니다(Thomas 리뷰
+ * BLOCKER, 계약 원문 :698). **`name`도 필수**라는 점이 중요하다: id만으로는
+ * 이 body를 만들 수 없으므로, 호출부(CalendarSelectDialog)는 캘린더 목록
+ * 조회 결과에서 선택된 항목의 id·name을 함께 들고 있다가 저장 시점에 그대로
+ * 넘긴다 — 여기서 별도로 이름을 조회하거나 지어내지 않는다.
  */
-export function replaceSelectedCalendars(connectionId, calendarIds) {
+export function replaceSelectedCalendars(connectionId, selections) {
   return withDevFallback(
-    () => apiClient.put(`/external-calendar-connections/${connectionId}/calendar-selections`, { calendarIds }),
-    () => mockBackend.replaceSelectedCalendars(connectionId, calendarIds),
+    () => apiClient.put(`/external-calendar-connections/${connectionId}/calendar-selections`, { selections }),
+    () => mockBackend.replaceSelectedCalendars(connectionId, selections),
   )
 }
 

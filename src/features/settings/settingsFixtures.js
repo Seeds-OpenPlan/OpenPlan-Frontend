@@ -50,8 +50,13 @@ let preferences = {
 // 선택 전 자동 적용 금지(C-2)는 화면(Hook) 쪽 책임 — 이 mock은 그냥 제안값만 준다.
 // null이면 "제안 없음" 상태(이력 부족 등)를 그대로 보여줘야 하므로, 대상 자체를 지우지
 // 않는다(getCorrectionProposal의 "없음 그룹" 처리와 같은 이유).
+// 필드명은 확정 계약(PreferenceSuggestion — settingsApi.js의 normalizeSuggestion
+// 헤더 참고, W6 실측 감사 2026-08-24)에 맞췄다: `suggestedReplanStrategy`가 정본
+// 이름이고, `sampleSize`는 계약에 없는 이 mock만의 데모용 필드다(정규화 계층이
+// 그 사실을 알고 있으니 여기서는 그대로 둔다).
 const suggestion = {
-  suggestedStrategy: 'DEADLINE_FIRST',
+  suggestedReplanStrategy: 'DEADLINE_FIRST',
+  suggestedEstimatedMinutes: null,
   reason: '최근 재계획에서 마감 우선안을 3회 선택했습니다',
   sampleSize: 3,
 }
@@ -64,29 +69,37 @@ const suggestion = {
 // 비워 둔다** — 새로 만든 [연동하기] → AppleConnectDialog 흐름을 아무 시드
 // 없이도 바로 밟아볼 수 있어야 이 사이클의 핵심 변경(신규 연동 생성)이
 // 검증된다.
+// 필드명은 확정 계약(ExternalConnection.selectedCalendars, Thomas 리뷰 BLOCKER —
+// openapi-live-76c7009.yaml :2340)에 맞췄다: `[{externalCalendarId, name}]`이지
+// `selectedCalendarIds`(문자열 배열)가 아니다. mock이 계약과 다른 모양이라
+// 이 필드명 버그가 dev에서 한 번도 실행되지 않았던 것이 이번 사이클 결함들의
+// 공통 뿌리였다 — 다시 벌어지지 않도록 mock도 실제 응답 모양을 그대로 흉내낸다.
 let connections = [
   {
     connectionId: 'conn-google-demo',
     provider: 'GOOGLE',
     status: 'CONNECTED',
     accountIdentifier: 'user@gmail.com',
-    selectedCalendarIds: ['gcal-1', 'gcal-2'],
+    selectedCalendars: [
+      { externalCalendarId: 'gcal-1', name: '기본 캘린더' },
+      { externalCalendarId: 'gcal-2', name: '업무' },
+    ],
   },
 ]
 
 // getAvailableCalendars가 connectionId로 조회하는 provider별 캘린더 카탈로그.
 // 이전 라운드는 이 목록을 connections 배열 위에 얹어 뒀지만, 계약이 별도
 // GET .../{connectionId}/calendars 엔드포인트로 분리해 뒀으므로(팀장 지시 표)
-// 여기서도 별도 저장소로 둔다.
+// 여기서도 별도 저장소로 둔다. 필드명은 위와 같은 이유로 `externalCalendarId`다.
 const CALENDAR_CATALOG = {
   GOOGLE: [
-    { id: 'gcal-1', name: '기본 캘린더' },
-    { id: 'gcal-2', name: '업무' },
-    { id: 'gcal-3', name: '스터디 그룹' },
+    { externalCalendarId: 'gcal-1', name: '기본 캘린더' },
+    { externalCalendarId: 'gcal-2', name: '업무' },
+    { externalCalendarId: 'gcal-3', name: '스터디 그룹' },
   ],
   APPLE: [
-    { id: 'ical-1', name: 'iCloud 캘린더' },
-    { id: 'ical-2', name: '가족 공유' },
+    { externalCalendarId: 'ical-1', name: 'iCloud 캘린더' },
+    { externalCalendarId: 'ical-2', name: '가족 공유' },
   ],
 }
 
@@ -160,6 +173,8 @@ export const mockBackend = {
 
   // GET .../{connectionId}/calendars — provider 카탈로그에서 그대로 찾아준다
   // (실서버는 실제 CalDAV/구글 API 왕복을 하겠지만, mock은 형태만 흉내낸다).
+  // 계약이 각 항목에 `selected`(이 연동에서 지금 선택된 캘린더인지)를 함께
+  // 준다 — connections 목록의 selectedCalendars와 대조해 여기서 계산한다.
   async getAvailableCalendars(connectionId) {
     await delay(60)
     const conn = connections.find((c) => c.connectionId === connectionId)
@@ -168,7 +183,13 @@ export const mockBackend = {
       err.status = 404
       throw err
     }
-    return { calendars: (CALENDAR_CATALOG[conn.provider] ?? []).map((c) => ({ ...c })) }
+    const selectedIds = new Set(conn.selectedCalendars.map((c) => c.externalCalendarId))
+    return {
+      calendars: (CALENDAR_CATALOG[conn.provider] ?? []).map((c) => ({
+        ...c,
+        selected: selectedIds.has(c.externalCalendarId),
+      })),
+    }
   },
 
   // PATCH 연동 status (FIX-16 Toggle — 일시 정지/재개, 파괴적이지 않음).
@@ -186,8 +207,10 @@ export const mockBackend = {
   },
 
   // PUT 전체 교체 (FIX-15). 배열 자체를 그대로 덮어써 부분 패치를 허용하지 않음
-  // — 정본 문구 그대로 "PUT 전체 교체".
-  async replaceSelectedCalendars(connectionId, calendarIds) {
+  // — 정본 문구 그대로 "PUT 전체 교체". `selections`는 이미 호출부(settingsApi.js)
+  // 가 계약 모양(`{externalCalendarId, name}`)으로 넘겨준다 — 여기서 다시
+  // 변형하지 않는다.
+  async replaceSelectedCalendars(connectionId, selections) {
     await delay()
     const conn = connections.find((c) => c.connectionId === connectionId)
     if (!conn) {
@@ -195,7 +218,7 @@ export const mockBackend = {
       err.status = 404
       throw err
     }
-    conn.selectedCalendarIds = [...calendarIds]
+    conn.selectedCalendars = [...selections]
     return { ...conn }
   },
 
@@ -265,7 +288,7 @@ export const mockBackend = {
         provider: 'APPLE',
         status: 'CONNECTED',
         accountIdentifier: appleId,
-        selectedCalendarIds: [],
+        selectedCalendars: [],
       }
       connections.push(conn)
       return { ...conn }
@@ -284,7 +307,7 @@ export const mockBackend = {
         provider: 'GOOGLE',
         status: 'CONNECTED',
         accountIdentifier: 'user@gmail.com',
-        selectedCalendarIds: [],
+        selectedCalendars: [],
       }
       connections.push(conn)
       return { ...conn }

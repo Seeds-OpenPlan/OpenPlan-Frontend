@@ -97,9 +97,11 @@ export function OnboardingCalendarStep({ onFinish, onBack, finishing }) {
   // W6: connections는 이제 provider가 아니라 connectionId로 식별되는, "이미
   // 수립된 연동만" 담은 배열이다 — connected 불리언 대신 status 문자열을 본다
   // (settingsApi.js getConnections 헤더 참조). 이 온보딩 단계 자체(3단계 반영
-  // 방식 선택)는 손대지 않는다 — 이 한 줄만 새 모델에 맞춘다.
+  // 방식 선택)는 손대지 않는다 — 이 한 줄만 새 모델에 맞춘다. 필드명도
+  // `selectedCalendars`가 정본이다(Thomas 리뷰 BLOCKER, 계약 원문 :2340 —
+  // `selectedCalendarIds`는 실서버에 없는 이름이었다).
   const activeProvider = connections.find(
-    (conn) => conn.status === 'CONNECTED' && conn.selectedCalendarIds.length > 0,
+    (conn) => conn.status === 'CONNECTED' && conn.selectedCalendars.length > 0,
   )?.provider
 
   return (

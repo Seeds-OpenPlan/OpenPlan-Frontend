@@ -207,7 +207,9 @@ export function useSetConnectionStatus() {
 export function useReplaceSelectedCalendars() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ connectionId, calendarIds }) => replaceSelectedCalendars(connectionId, calendarIds),
+    // `selections`: `[{externalCalendarId, name}]` — settingsApi.replaceSelectedCalendars
+    // 자신의 헤더 참고(계약이 요구하는 모양, id 배열이 아니다).
+    mutationFn: ({ connectionId, selections }) => replaceSelectedCalendars(connectionId, selections),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: connectionsKey() })
       toast({ tone: 'success', message: '저장했습니다' })

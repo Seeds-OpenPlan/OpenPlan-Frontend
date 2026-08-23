@@ -35,15 +35,22 @@ function CalendarSelectDialog({ connection, onClose, onSubmit, submitting }) {
   const firstCheckboxRef = useRef(null)
   // W6: 선택 가능한 캘린더는 connections 응답에 얹혀 오지 않는다 — 다이얼로그가
   // 열릴 때 그 자리에서 GET .../{connectionId}/calendars로 따로 불러온다
-  // (settingsApi.js getAvailableCalendars 헤더 참조).
+  // (settingsApi.js getAvailableCalendars 헤더 참조). 이 목록의 각 항목이
+  // `{externalCalendarId, name, selected}`다(계약 원문, Thomas 리뷰 BLOCKER) —
+  // `id`가 아니다. 초기 선택 상태는 `connection.selectedCalendars`(connections
+  // 목록에서 이미 받아 온 값, 이 다이얼로그가 열리는 시점엔 항상 로드돼 있다)
+  // 에서 즉시 시드한다 — calendarsQuery가 아직 로딩 중이어도 체크박스가 빈
+  // 채로 깜빡였다가 채워지지 않는다.
   const calendarsQuery = useAvailableCalendars(connection.connectionId)
-  const [selected, setSelected] = useState(() => new Set(connection.selectedCalendarIds))
+  const [selected, setSelected] = useState(
+    () => new Set(connection.selectedCalendars.map((c) => c.externalCalendarId)),
+  )
 
-  const toggle = (id) => {
+  const toggle = (externalCalendarId) => {
     setSelected((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(externalCalendarId)) next.delete(externalCalendarId)
+      else next.add(externalCalendarId)
       return next
     })
   }
@@ -55,13 +62,13 @@ function CalendarSelectDialog({ connection, onClose, onSubmit, submitting }) {
   ) : (
     <ul className="flex flex-col gap-1">
       {(calendarsQuery.data ?? []).map((cal, i) => (
-        <li key={cal.id}>
+        <li key={cal.externalCalendarId}>
           <label className="flex items-center gap-3 rounded-control px-2 py-2 hover:bg-surface-sunken">
             <input
               ref={i === 0 ? firstCheckboxRef : undefined}
               type="checkbox"
-              checked={selected.has(cal.id)}
-              onChange={() => toggle(cal.id)}
+              checked={selected.has(cal.externalCalendarId)}
+              onChange={() => toggle(cal.externalCalendarId)}
             />
             <span className="text-label text-text">{cal.name}</span>
           </label>
@@ -89,7 +96,17 @@ function CalendarSelectDialog({ connection, onClose, onSubmit, submitting }) {
           size="md"
           loading={submitting}
           disabled={calendarsQuery.isLoading}
-          onClick={() => onSubmit(Array.from(selected))}
+          // PUT body는 id뿐 아니라 name도 요구한다(계약 원문, replaceSelectedCalendars
+          // 헤더 참고) — id만 들고 있던 `selected` Set으로는 그 body를 만들 수
+          // 없어, 지금 로드돼 있는 calendarsQuery.data에서 선택된 항목의
+          // {externalCalendarId, name}을 그대로 뽑아 넘긴다.
+          onClick={() =>
+            onSubmit(
+              (calendarsQuery.data ?? [])
+                .filter((cal) => selected.has(cal.externalCalendarId))
+                .map((cal) => ({ externalCalendarId: cal.externalCalendarId, name: cal.name })),
+            )
+          }
         >
           저장
         </Button>
@@ -174,7 +191,7 @@ export function CalendarConnectionSection() {
   const disconnect = useDisconnectConnection()
 
   const [disconnectTarget, setDisconnectTarget] = useState(null) // {connectionId, label} | null
-  const [calendarEditTarget, setCalendarEditTarget] = useState(null) // {connectionId, label, selectedCalendarIds} | null
+  const [calendarEditTarget, setCalendarEditTarget] = useState(null) // {connectionId, label, selectedCalendars} | null
   const [connectingProvider, setConnectingProvider] = useState(null) // 'APPLE' | null
 
   if (query.isLoading) return <LoadingSkeleton preset="listRow" count={2} />
@@ -245,7 +262,7 @@ export function CalendarConnectionSection() {
               {conn && isActive && (
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
                   <span className="text-caption text-text-muted">
-                    {conn.selectedCalendarIds.length}개 캘린더 선택됨
+                    {conn.selectedCalendars.length}개 캘린더 선택됨
                   </span>
                   <div className="flex gap-2">
                     <Button
@@ -287,9 +304,9 @@ export function CalendarConnectionSection() {
           connection={calendarEditTarget}
           onClose={() => setCalendarEditTarget(null)}
           submitting={replaceCalendars.isPending}
-          onSubmit={(calendarIds) =>
+          onSubmit={(selections) =>
             replaceCalendars.mutate(
-              { connectionId: calendarEditTarget.connectionId, calendarIds },
+              { connectionId: calendarEditTarget.connectionId, selections },
               { onSuccess: () => setCalendarEditTarget(null) },
             )
           }

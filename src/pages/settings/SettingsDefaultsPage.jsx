@@ -77,7 +77,9 @@ function SettingsDefaultsPage() {
   const suggestion = suggestionQuery.data
   // C-2: 선택 전에는 어떤 값도 자동 적용하지 않는다 — 이미 그 값이 선택돼 있으면
   // "적용" 칩 자체가 할 일이 없으므로 숨긴다(제안이 곧 현재 선택과 같은 경우).
-  const showSuggestionChip = suggestion && suggestion.suggestedStrategy !== selected
+  // 필드명(suggestedReplanStrategy)은 settingsApi.normalizeSuggestion이 확정
+  // 계약에 맞춰 정규화해 준 것 — 여기서 다시 mock 시절 이름을 알 필요 없다.
+  const showSuggestionChip = suggestion && suggestion.suggestedReplanStrategy !== selected
 
   const handleSave = () => {
     if (!isDirty || updatePreferences.isPending) return
@@ -123,14 +125,20 @@ function SettingsDefaultsPage() {
       </fieldset>
 
       {/* RB-FIX-01 제안 칩 — 클릭해야만 선택에 반영(C-2), 화면 진입만으로는 절대
-          자동 적용되지 않는다(이 칩이 안 보여도 selected는 preferences 원본 그대로). */}
+          자동 적용되지 않는다(이 칩이 안 보여도 selected는 preferences 원본 그대로).
+          문구는 두 소스 중 하나다: `sampleSize`가 있으면(DEV mock 전용 필드,
+          settingsApi.normalizeSuggestion 헤더 참고) 기존 "N회 선택했습니다" 문장을
+          쓰고, 없으면(실서버가 언젠가 보낼 진짜 모양 — 계약엔 sampleSize가 없다)
+          서버가 준 `reason` 설명을 그대로 보여준다. 실서버가 이 엔드포인트를 열어도
+          "undefined회 선택했습니다" 같은 깨진 문구가 뜨지 않게 하는 분기다. */}
       {showSuggestionChip && (
         <div className="flex items-center justify-between gap-3 rounded-card border border-brand-100 bg-brand-50 px-3 py-2">
           <p className="text-caption text-brand-700">
-            최근 재계획에서 {replanStrategyCatalog[suggestion.suggestedStrategy]?.label ?? suggestion.suggestedStrategy}
-            을(를) {suggestion.sampleSize}회 선택했습니다
+            {suggestion.sampleSize != null
+              ? `최근 재계획에서 ${replanStrategyCatalog[suggestion.suggestedReplanStrategy]?.label ?? suggestion.suggestedReplanStrategy}을(를) ${suggestion.sampleSize}회 선택했습니다`
+              : suggestion.reason}
           </p>
-          <Button variant="secondary" size="sm" onClick={() => setSelected(suggestion.suggestedStrategy)}>
+          <Button variant="secondary" size="sm" onClick={() => setSelected(suggestion.suggestedReplanStrategy)}>
             적용하려면 선택
           </Button>
         </div>
