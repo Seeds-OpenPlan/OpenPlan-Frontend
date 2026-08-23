@@ -21,6 +21,7 @@ import SettingsFixedSchedulesPage from '../pages/settings/SettingsFixedSchedules
 import SettingsTaskCategoriesPage from '../pages/settings/SettingsTaskCategoriesPage'
 import SettingsAccountPage from '../pages/settings/SettingsAccountPage'
 import SettingsCalendarPage from '../pages/settings/SettingsCalendarPage'
+import GoogleCalendarCallbackPage from '../pages/settings/GoogleCalendarCallbackPage'
 import SettingsNotificationsPage from '../pages/settings/SettingsNotificationsPage'
 import SettingsSupportPage from '../pages/settings/SettingsSupportPage'
 import SettingsNoticesPage from '../pages/settings/SettingsNoticesPage'
@@ -206,6 +207,9 @@ export const router = createBrowserRouter([
           { path: 'task-categories', Component: SettingsTaskCategoriesPage }, // W3 SC-01 — 태스크 카테고리 프리셋 CRUD
           { path: 'account', Component: SettingsAccountPage }, // ACCT-01/02
           { path: 'calendar', Component: SettingsCalendarPage }, // FIX-13~17
+          // GOOGLE_CALENDAR_CALLBACK_PATH(settingsApi.js)와 반드시 같은
+          // 문자열이어야 한다 — TODO(redirect-uri) 상수가 이 경로를 가리킨다.
+          { path: 'calendar/google-callback', Component: GoogleCalendarCallbackPage }, // FIX-14 구글 콜백 착지점
           { path: 'notifications', Component: SettingsNotificationsPage }, // NOTI-01
           // ST-F1-15 owner feedback #D — "지원"/"공지" 목록은 최상위로 튕겨
           // 나가지 않고 다른 설정 항목처럼 이 2-pane 디테일에 머문다.

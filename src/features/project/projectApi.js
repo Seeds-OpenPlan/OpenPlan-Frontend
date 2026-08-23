@@ -400,30 +400,103 @@ export function getProjectStructureWarnings(projectId) {
   ).then((r) => unwrapList(r, 'issues'))
 }
 
+// --- 태스크 구조화 초안 (RB-PROJ-01, W6 계약 정합 2026-08-23) ---------------------
+//
+// W6 PATH CORRECTION (팀장 지시, 근거: 오민아 실서버 실측 목록 ①-B): 주소가
+// `/task-structuring-drafts` → `/structuring-drafts`로 바뀌었을 뿐 아니라
+// "초안 확정" 흐름 자체가 통째로 달라졌다. 이전엔 배치 하나에 draftId
+// 하나(POST 응답 `{draftId, tasks}`)가 붙고 `POST .../{draftId}/apply`가 그
+// draftId + 선택한 taskDraftId 목록만 받아 확정했지만, 실제 계약은:
+//   1) POST /projects/{id}/structuring-drafts → `data: [StructuringDraft]`.
+//      배치 전체를 묶는 draftId가 없다 — 제안 항목 하나하나가 자기 자신의
+//      draftId를 갖는다(`{draftId, title, proposedEstimatedMinutes,
+//      proposedPriority, reason}`).
+//   2) 확정은 전용 "apply" 엔드포인트가 아니라 범용 일괄 생성
+//      `POST /projects/{id}/tasks/bulk`다. 몸체는 TaskInput 배열이고, 항목별
+//      `draftId`를 함께 실으면 서버가 "이 태스크는 이 제안에서 채택됐다"로
+//      마킹한다(is_adopted).
+//
+// 🔴 실질적 함의: apply 시점에 서버가 요구하는 건 taskDraftId만이 아니라
+// title/estimatedMinutes(필수)를 포함한 TaskInput 전체다. 그런데 이 화면
+// (TaskStructuringDraft.jsx — 컴포넌트 소유자가 다름, 이 파일 밖)의 "선택
+// 항목 저장"은 지금도 체크된 항목의 taskDraftId 목록(`selectedTaskIds`)만
+// 넘긴다 — 사용자가 행에서 고친 title/estimatedMinutes/priority는 애초에
+// apply 호출에 실리지 않는다(이 갭은 이번 변경 이전부터 있던 것이라 새로
+// 만든 문제는 아니다 — §보고 대상). 그 좁은 인터페이스를 유지한 채로도 새
+// 계약을 만족시키려면 각 제안의 TaskInput을 draftId로 다시 찾아낼 수 있어야
+// 하므로, createStructuringDraft가 돌려준 제안들을 이 모듈 안에서만 사는
+// 세션 캐시(draftId → 제안 필드)에 잠깐 보관해 뒀다가 apply 시점에
+// selectedTaskIds로 되찾아 쓴다 — 호출부(useProjectData.js/
+// TaskStructuringDraft.jsx)의 함수 시그니처는 손대지 않는다.
+const draftProposalsByDraftId = new Map()
+
 /**
- * OP-PROJ-DRAFT-CREATE → POST /projects/{id}/task-structuring-drafts
- * (RB-PROJ-01). Returns { draftId, tasks: [...] }.
+ * OP-PROJ-DRAFT-CREATE → POST /projects/{id}/structuring-drafts (RB-PROJ-01).
+ * 위 섹션 헤더 참조. 반환 모양은 기존 호출부가 읽는 `{ draftId, tasks:
+ * [{taskDraftId, title, estimatedMinutes, priority}] }`을 그대로 유지한다 —
+ * `taskDraftId`가 이제 서버가 준 진짜(항목별) draftId다. `draftId`(배치
+ * 전체를 가리키던 옛 필드)는 REAL 응답엔 없어 `undefined`로 남는다 — 호출부가
+ * 이 값을 다시 apply에 넘기긴 하지만 아래 applyStructuringDraft는 더 이상
+ * 그 값을 쓰지 않는다(selectedTaskIds 자체가 항목별 draftId라서).
  */
 export function createStructuringDraft(projectId, body) {
   return withDevFallback(
-    () => apiClient.post(`/projects/${projectId}/task-structuring-drafts`, body),
+    () => apiClient.post(`/projects/${projectId}/structuring-drafts`, body),
     () => mockBackend.createStructuringDraft(projectId, body),
-  )
+  ).then((r) => {
+    // Real: 배열 그대로(`data: [StructuringDraft]`). Mock: 옛 배치 모양
+    // `{draftId, tasks: [...]}` — DEV 전용 폴백이라 아직 새 계약으로
+    // 포팅하지 않았다(§보고).
+    const items = Array.isArray(r) ? r : (r?.tasks ?? [])
+    const tasks = items.map((t) => {
+      const taskDraftId = t.draftId ?? t.taskDraftId
+      const normalized = {
+        taskDraftId,
+        title: t.title,
+        estimatedMinutes: t.proposedEstimatedMinutes ?? t.estimatedMinutes ?? 60,
+        priority: t.proposedPriority ?? t.priority ?? null,
+        reason: t.reason ?? null,
+      }
+      draftProposalsByDraftId.set(taskDraftId, normalized)
+      return normalized
+    })
+    return { draftId: undefined, tasks }
+  })
 }
 
 /**
- * OP-PROJ-DRAFT-APPLY → POST /projects/{id}/task-structuring-drafts/{draftId}/apply.
- * Body: { selectedTaskIds, mergePolicy }. Returns { createdTaskIds }.
+ * OP-PROJ-DRAFT-APPLY → POST /projects/{id}/tasks/bulk, body `{ tasks: [{
+ * ...TaskInput, draftId }] }`(선택된 제안마다 하나씩). `draftId` 인자는
+ * 실서버 경로에서 더 이상 쓰이지 않는다(위 섹션 헤더 참조 — 호환을 위해
+ * 시그니처만 남겨 둔다). `selectedTaskIds`(=제안 draftId 목록)를 위
+ * 세션 캐시로 TaskInput으로 되살린다 — 캐시에 없는 id는 조용히 건너뛴다
+ * (방어적: 같은 브라우저 세션이 만든 draftId만 selectedTaskIds에 오를 수
+ * 있어 정상 흐름에서는 발생하지 않는다).
  */
 export function applyStructuringDraft(projectId, draftId, selectedTaskIds) {
   return withDevFallback(
-    () =>
-      apiClient.post(`/projects/${projectId}/task-structuring-drafts/${draftId}/apply`, {
-        selectedTaskIds,
-        mergePolicy: 'APPEND',
-      }),
+    () => {
+      const tasks = selectedTaskIds
+        .map((id) => {
+          const proposal = draftProposalsByDraftId.get(id)
+          if (!proposal) return null
+          return {
+            title: proposal.title,
+            estimatedMinutes: snapDuration(proposal.estimatedMinutes ?? 60),
+            priority: clampPriority(proposal.priority, null),
+            draftId: id,
+          }
+        })
+        .filter(Boolean)
+      return apiClient.post(`/projects/${projectId}/tasks/bulk`, { tasks })
+    },
     () => mockBackend.applyStructuringDraft(projectId, draftId, selectedTaskIds),
-  )
+  ).then((r) => {
+    // 적용이 끝난 제안은 세션 캐시에서 지워 무한히 쌓이지 않게 한다.
+    selectedTaskIds.forEach((id) => draftProposalsByDraftId.delete(id))
+    // Real: `data: [Task]`(배열). Mock: `{ createdTaskIds: [...] }`.
+    return { createdTaskIds: Array.isArray(r) ? r.map((t) => t.taskId) : (r?.createdTaskIds ?? []) }
+  })
 }
 
 /** OP-PROJ-WBS → GET /projects/{id}/wbs (§PROJ.3 계획 탭). Returns { nodes }. */
@@ -448,11 +521,23 @@ export function getProjectWbs(projectId) {
   )
 }
 
-/** OP-TASK-SCHEDULE → PATCH /tasks/{taskId}/schedule (PROJ-14 WBS 바 드래그
- * commit — day-only, no time-of-day). Body: { plannedStartDate, plannedEndDate }. */
+/**
+ * OP-TASK-SCHEDULE → PUT /tasks/{taskId}/wbs-range (PROJ-14 WBS 바 드래그
+ * commit — day-only, no time-of-day, 업서트).
+ *
+ * W6 PATH CORRECTION (팀장 지시, 2026-08-23): 주소·메서드·바디 키 셋 다
+ * 바뀌었다 — 이전 `PATCH /tasks/{taskId}/schedule`
+ * `{ plannedStartDate, plannedEndDate }`에서 `PUT
+ * /tasks/{taskId}/wbs-range` `{ startDate, endDate }`로. 이 함수의 공개
+ * 시그니처(인자 이름 `plannedStartDate`/`plannedEndDate`)는 그대로 둔다 —
+ * WBS 화면 전체가 이 이름을 이미 쓰고 있어(useUpdateTaskSchedule의 낙관적
+ * 갱신·mockBackend 등) 호출부를 고칠 이유가 없고, 서버로 나가는 바디 키만
+ * 여기서 `startDate`/`endDate`로 번역한다. 실패 시 계약이 명시하는 422
+ * (E-WBS-001 종료일 < 시작일)는 그대로 상위로 전달된다.
+ */
 export function updateTaskSchedule(taskId, { plannedStartDate, plannedEndDate }) {
   return withDevFallback(
-    () => apiClient.patch(`/tasks/${taskId}/schedule`, { plannedStartDate, plannedEndDate }),
+    () => apiClient.put(`/tasks/${taskId}/wbs-range`, { startDate: plannedStartDate, endDate: plannedEndDate }),
     () => mockBackend.updateTaskSchedule(taskId, { plannedStartDate, plannedEndDate }),
   )
 }

@@ -316,7 +316,8 @@ export function useProjectStructureWarnings(projectId) {
   })
 }
 
-/** POST /projects/{id}/task-structuring-drafts (RB-PROJ-01). NOT a useQuery —
+/** POST /projects/{id}/structuring-drafts (RB-PROJ-01, W6 주소 정정 —
+ * projectApi.createStructuringDraft 자신의 헤더 참조). NOT a useQuery —
  * this is a "generate a new draft" write, never cached, mirroring
  * useReplanOptions/usePlanValidation's own reasoning for staying a plain
  * mutation. */
@@ -326,8 +327,10 @@ export function useCreateStructuringDraft() {
   })
 }
 
-/** POST .../task-structuring-drafts/{draftId}/apply. Success replaces the
- * EmptyState with the real task list (PROJ-17 결과문 재사용 — "주간 계획 배치 대상"). */
+/** POST /projects/{id}/tasks/bulk (W6 계약 정합 — 이전엔 전용 apply
+ * 엔드포인트였다, projectApi.applyStructuringDraft 자신의 헤더 참조). Success
+ * replaces the EmptyState with the real task list (PROJ-17 결과문 재사용 —
+ * "주간 계획 배치 대상"). */
 export function useApplyStructuringDraft() {
   const queryClient = useQueryClient()
   return useMutation({

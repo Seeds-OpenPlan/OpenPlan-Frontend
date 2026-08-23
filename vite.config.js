@@ -17,8 +17,15 @@ export default defineConfig({
     // 소셜 로그인도 이 프록시를 탄다: 브라우저가 /api/v1/auth/oauth/{provider}로
     // 문서 이동하면 프록시가 실서버로 넘기고, 서버의 302가 그대로 브라우저에
     // 돌아와 제공자 인가 페이지로 나간다(LoginPage.handleSocialSelect 참조).
+    // 🔴 target이 https인 이유 (2026-08-23 실측): 실서버 nginx가 http를
+    // https로 301 강제하도록 바뀌었다. target을 http로 두면 프록시가 데이터
+    // 대신 301을 돌려주고, 301은 네트워크 오류도 404 E-COM-004도 아니라서
+    // withDevFallback의 mock 폴백조차 안 걸린다 — 화면이 통째로 실패한다.
+    // secure:false는 인증서 검증을 끄는 것: 도메인이 아직 없어 인증서가 raw
+    // IP(13.208.66.211)에 대해 발급돼 검증이 실패한다. 도메인이 붙으면 이
+    // 옵션은 지워야 한다.
     proxy: {
-      '/api': { target: 'http://13.208.66.211', changeOrigin: true },
+      '/api': { target: 'https://13.208.66.211', changeOrigin: true, secure: false },
     },
   },
 })

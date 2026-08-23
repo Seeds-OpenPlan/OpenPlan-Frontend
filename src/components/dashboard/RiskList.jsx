@@ -3,9 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { Badge } from '../common/Badge'
 import { ErrorState } from '../common/ErrorState'
 import { CheckCircleIcon } from '../common/statusIcons'
-import { compareBySeverity, severityLabels } from '../../features/plan/violationMessages'
+import { severityLabels } from '../../features/plan/violationMessages'
 import { resolveIssueCopy } from '../../features/dashboard/dashboardIssueCopy'
-import { resolveAction } from '../../features/dashboard/actionRouting'
+import { resolveActionLabel } from '../../features/dashboard/actionRouting'
 
 /*
   S5 · 먼저 확인할 내용 — DASH-03·04에 더해 S2 우선 행동(DASH-02·RB-DASH-01)까지
@@ -17,42 +17,76 @@ import { resolveAction } from '../../features/dashboard/actionRouting'
   노출되므로, 목록 맨 위에서 강조만 한다.
 
   강조는 색만으로 하지 않는다(NFR-017) — severity 배지 옆에 "우선 행동" 배지를
-  병기하고, isPriority 행은 테두리로도 구분한다. `priorityAction`과 `risks`가
-  서로 다른 문제일 수도 있어(맨 위에 별도 항목으로 추가) `id`가 겹칠 때만(서버가
-  실제로 같은 리소스를 가리키는 경우) 같은 행에 강조만 얹는다 — 계약이 없어 이
-  dedup은 방어적 조치일 뿐이다.
+  병기하고, isPriority 행은 테두리로도 구분한다.
 
   dashboard-redesign delta (오너 목업, round 2 — 컴팩트화): 각 행을 여러 줄
   (배지+source 줄, 본문 줄, 별도 액션 버튼)에서 한 줄 [severity 배지] [내용
-  텍스트(truncate)] [우선 행동 배지]로 압축했다. `risk.source`(예: "주간
-  계획") 표시와 행별 액션 Button은 빠졌다 — 대신 행 전체가 버튼이 되어 클릭하면
-  기존에 그 Button이 하던 이동(`resolveAction`의 route)을 그대로 수행한다.
-  ImpactList의 "행 전체가 Link" 패턴(`-mx-2 ... px-2` 오프셋)과 같은 자리에서
-  같은 트릭을 쓰되, 목적지가 외부 라우트 하나로 고정되지 않고 서버가 준
-  actionType마다 달라 Link 대신 `navigate()`를 호출하는 네이티브 <button>이다.
-  route가 없는 행(서버가 이 build가 모르는 actionType을 보낸 경우)은 여전히
-  비인터랙티브 <div>로 남는다 — "갈 곳 없는 버튼"보다 "문제만 알려주는 텍스트"가
-  낫다는 기존 판단은 그대로다.
+  텍스트(truncate)] [우선 행동 배지]로 압축했다. 행 전체가 버튼이 되어 클릭하면
+  서버가 준 경로로 이동한다.
+
+  계약 정합 delta (W6, 2026-08-23 — DashboardView): 예전엔 `priorityAction`과
+  `risks[]` 행이 같은 `id`를 공유한다는 mock의 가정으로 dedup했다. 실제 계약엔
+  둘 다 `id`가 없다 — `priorityAction`은 `{actionType, reason, routePath}`,
+  `riskIssues[]` 행은 `{riskType, count, description, routePath}`뿐이라 공유
+  식별자로 매칭할 방법이 없어졌다. 대신 `actionType`↔`riskType`의 의미적 대응
+  (아래 ACTION_TYPE_TO_RISK_TYPE)으로 dedup한다 — 이것도 결정문에 없는 판단값
+  (같은 문제를 가리킨다는 계약상 보장은 없음, 예전 dedup과 동일하게 "방어적
+  조치"일 뿐) — 매칭되지 않는 actionType(RESOLVE_OVERLAP 등, riskType 4종에
+  대응이 없음)은 그냥 최상단 별도 행으로 추가한다. `routePath`는 이제 서버가
+  둘 다 직접 주므로, actionRouting.js의 `to()` 빌더는 더 이상 없다 — 클릭 시
+  그 값으로 바로 이동한다(라우트가 없는 행은 여전히 비인터랙티브 <div>).
 */
+
+// priorityAction.actionType → 대응하는 riskIssues[].riskType. 매칭되는 게
+// 없는 actionType(RESOLVE_OVERLAP · REPLACE_TODAY_INCOMPLETE · RESOLVE_CAPACITY)
+// 은 이 표에 없다 — dedup 시도 없이 별도 행으로 취급된다.
+const ACTION_TYPE_TO_RISK_TYPE = {
+  RESOLVE_FIXED_CONFLICT: 'FIXED_CONFLICT',
+  PLACE_UNASSIGNED: 'UNASSIGNED_TASKS',
+  FIX_OUT_OF_WBS: 'OUT_OF_WBS',
+  HANDLE_DEADLINE: 'DEADLINE_SOON',
+}
+
+// severity 랭크만 필요한 로컬 비교자 — violationMessages.compareBySeverity는
+// PLAN-24~27의 `code` 기반이라(위 헤더 참고, 이 화면 데이터엔 code가 없다)
+// 여기선 이미 resolveIssueCopy가 유도해 둔 severity 문자열로 직접 정렬한다.
+const severityRank = (severity) => (severity === 'blocking' ? 0 : 1)
+
 export function RiskList({ error = false, onRetry, priorityAction = null, risks = [] }) {
   const navigate = useNavigate()
 
   const sorted = useMemo(() => {
     const base = Array.isArray(risks) ? risks : []
-    if (!priorityAction) return [...base].sort(compareBySeverity)
+    const withKey = base.map((r) => ({ ...r, _key: r.riskType }))
 
-    const matchIndex = priorityAction.id ? base.findIndex((r) => r.id === priorityAction.id) : -1
-    const withPriority =
-      matchIndex >= 0
-        ? base.map((r, i) => (i === matchIndex ? { ...r, isPriority: true } : r))
-        : [{ ...priorityAction, isPriority: true }, ...base]
+    let merged
+    if (!priorityAction) {
+      merged = withKey.map((r) => ({ ...r, isPriority: false }))
+    } else {
+      const matchType = ACTION_TYPE_TO_RISK_TYPE[priorityAction.actionType]
+      const matchIndex = matchType ? withKey.findIndex((r) => r.riskType === matchType) : -1
+      merged =
+        matchIndex >= 0
+          ? // 매칭된 행엔 priorityAction의 actionType도 얹어 둔다 — 렌더
+            // 단계의 actionLabel(sr-only 보조 텍스트)이 이 필드로 라벨을
+            // 찾으므로, 매칭 여부와 무관하게 항상 같은 정보를 준다.
+            withKey.map((r, i) => ({
+              ...r,
+              isPriority: i === matchIndex,
+              ...(i === matchIndex ? { actionType: priorityAction.actionType } : {}),
+            }))
+          : [
+              { ...priorityAction, _key: 'priority-action', isPriority: true },
+              ...withKey.map((r) => ({ ...r, isPriority: false })),
+            ]
+    }
 
     // 우선 행동은 severity와 무관하게 항상 맨 위 — RB-DASH-01이 이미 "최고
-    // 우선순위 규칙"으로 골라준 결과이므로, 나머지는 기존 차단>경고 정렬 그대로.
-    return [...withPriority].sort((a, b) => {
+    // 우선순위 규칙"으로 골라준 결과이므로, 나머지는 차단>경고 정렬 그대로.
+    return [...merged].sort((a, b) => {
       if (a.isPriority && !b.isPriority) return -1
       if (!a.isPriority && b.isPriority) return 1
-      return compareBySeverity(a, b)
+      return severityRank(resolveIssueCopy(a).severity) - severityRank(resolveIssueCopy(b).severity)
     })
   }, [risks, priorityAction])
 
@@ -66,8 +100,9 @@ export function RiskList({ error = false, onRetry, priorityAction = null, risks 
   }
 
   // 통합된 긍정 카드 자리(구 AC-3): 우선 행동도 없고 나열할 위험도 없을 때만 —
-  // 즉 정말로 "아무 문제 없음"일 때만 보여준다. 위험은 있는데 우선 행동만
-  // 없는 경우(RB-DASH-01의 "둘 이상 동시 존재" 조건 미충족)는 목록이 비어
+  // 즉 정말로 "아무 문제 없음"일 때만 보여준다(priorityAction: null은 오류가
+  // 아니라 이 긍정 상태 자체를 뜻한다 — dashboardApi.js가 undefined와 구분해서
+  // 그대로 통과시킨다). 위험은 있는데 우선 행동만 없는 경우는 목록이 비어
   // 있지 않으므로 그대로 나열한다.
   if (!priorityAction && sorted.length === 0) {
     return (
@@ -90,12 +125,18 @@ export function RiskList({ error = false, onRetry, priorityAction = null, risks 
       <ul className="mt-2 divide-y divide-border">
         {sorted.map((risk) => {
           const copy = resolveIssueCopy(risk)
-          const route = resolveAction(risk.actionType, risk.actionParams)
+          const to = risk.routePath || null
+          // priorityAction 파생 행에만 actionType이 있다 — 그 라벨을 sr-only로
+          // 앞세워 스크린 리더 사용자가 "무엇을 하는 이동인지" 시각 사용자보다
+          // 덜 알게 되지 않도록 한다(일반 riskIssues 행은 actionType이 계약에
+          // 없어 라벨을 못 붙인다 — badge + description 텍스트만으로도 이미
+          // 충분히 설명적이라 생략).
+          const actionLabel = risk.isPriority ? resolveActionLabel(risk.actionType) : null
           // 행 전체 클릭 타깃의 공통 클래스 — route가 있을 때만 hover/focus
           // 상태를 얹는다(정말로 클릭 가능한 행만 그렇게 보이도록).
           const rowClass = [
             '-mx-2 flex w-full items-center gap-2 rounded-control px-2 py-2.5 text-left transition-colors',
-            route
+            to
               ? 'hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring'
               : '',
             risk.isPriority ? 'border border-brand-200 bg-brand-50/60' : '',
@@ -106,14 +147,15 @@ export function RiskList({ error = false, onRetry, priorityAction = null, risks 
                 tone={copy.severity === 'blocking' ? 'danger' : 'warning'}
                 label={severityLabels[copy.severity]}
               />
+              {actionLabel && <span className="sr-only">{actionLabel} — </span>}
               <span className="min-w-0 flex-1 truncate text-label font-medium text-text">{copy.text}</span>
               {risk.isPriority && <Badge tone="brand" label="우선 행동" />}
             </>
           )
           return (
-            <li key={risk.id}>
-              {route ? (
-                <button type="button" className={rowClass} onClick={() => navigate(route.to)}>
+            <li key={risk._key}>
+              {to ? (
+                <button type="button" className={rowClass} onClick={() => navigate(to)}>
                   {rowContent}
                 </button>
               ) : (

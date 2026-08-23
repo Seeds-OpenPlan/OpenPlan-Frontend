@@ -52,7 +52,30 @@
   바꾸면 된다(LoginPage 주석 참조).
 */
 import { apiClient } from '../../api/client'
-import { authMockBackend } from './authFixtures'
+
+/*
+  authFixtures.js(데모 계정 4종, 비밀번호 전부 "password123")를 여기서 더 이상
+  최상단 정적 import로 들이지 않는다 (W6 실서버 정합, 실측 2026-08-23).
+
+  이전에는 `import { authMockBackend } from './authFixtures'`처럼 파일 맨 위에서
+  정적으로 불러왔다 — 아래 `withAuthDevFallback`가 실제로 그 값을 쓰는 시점을
+  `import.meta.env.DEV`로 감싸더라도, 정적 import 자체는 "이 코드 경로가 실행되는가"
+  와 무관하게 번들러가 항상 해석·포함시킨다. 그 결과 프로덕션 빌드에도
+  authFixtures.js 전체(데모 비밀번호 문자열 포함)가 그대로 실렸고, 배포된 JS
+  번들에서 "password123"이 grep으로 확인됐다.
+
+  해결책은 아래 `loadAuthMock()`처럼 동적 `import()`를 `import.meta.env.DEV` 분기
+  안에서만 호출하는 것 — Vite는 빌드 시 `import.meta.env.DEV`를 리터럴
+  boolean(false)로 치환하므로, 프로덕션 빌드에서는 그 분기 전체(동적 import 호출
+  포함)가 도달 불가능한 코드로 판정되어 번들러가 통째로 제거한다. dev 서버에서는
+  그대로 `true`라 기존과 동일하게 동작한다 — 데모 계정으로 로그인하던 mock
+  폴백 흐름은 깨지지 않는다.
+*/
+async function loadAuthMock() {
+  if (!import.meta.env.DEV) return null
+  const { authMockBackend } = await import('./authFixtures')
+  return authMockBackend
+}
 
 /**
  * AUTH-ONLY dev fallback. Starts from planApi.js's `withDevFallback` rule
@@ -93,7 +116,13 @@ async function withAuthDevFallback(realCall, mockCall) {
     // 바로 그것. 404 E-COM-004 분기는 남긴다: 아직 라우트 자체가 없는
     // 엔드포인트(예: 재활성화)를 위한, 이 저장소 전체의 공통 규칙이다.
     const shouldFallback = error?.isNetwork || isUnimplementedEndpoint
-    if (import.meta.env.DEV && shouldFallback) return mockCall()
+    if (import.meta.env.DEV && shouldFallback) {
+      // authMockBackend를 여기서 비로소 로드한다(loadAuthMock 헤더 참조) —
+      // mockCall이 그것을 인자로 받아 쓰도록 호출부(login/signup/... 아래) 전부
+      // `(authMockBackend) => ...` 형태로 통일했다.
+      const authMockBackend = await loadAuthMock()
+      return mockCall(authMockBackend)
+    }
     throw error
   }
 }
@@ -140,7 +169,7 @@ export function oauthStartUrl(provider) {
 export function login(email, password) {
   return withAuthDevFallback(
     () => apiClient.post('/auth/sessions', { email, password }, UNAUTHENTICATED),
-    () => authMockBackend.login(email, password),
+    (authMockBackend) => authMockBackend.login(email, password),
   )
 }
 
@@ -166,7 +195,7 @@ export function login(email, password) {
 export function signup({ email, password, termsAgreed }) {
   return withAuthDevFallback(
     () => apiClient.post('/users', { email, password, termsAgreed }, UNAUTHENTICATED),
-    () => authMockBackend.signup({ email, password, termsAgreed }),
+    (authMockBackend) => authMockBackend.signup({ email, password, termsAgreed }),
   )
 }
 
@@ -174,7 +203,7 @@ export function signup({ email, password, termsAgreed }) {
 export function verifyEmail(token) {
   return withAuthDevFallback(
     () => apiClient.post('/auth/email-verifications/confirmation', { token }, UNAUTHENTICATED),
-    () => authMockBackend.verifyEmail(token),
+    (authMockBackend) => authMockBackend.verifyEmail(token),
   )
 }
 
@@ -182,7 +211,7 @@ export function verifyEmail(token) {
 export function resendVerificationEmail(email) {
   return withAuthDevFallback(
     () => apiClient.post('/auth/email-verifications', { email }, UNAUTHENTICATED),
-    () => authMockBackend.resendVerificationEmail(email),
+    (authMockBackend) => authMockBackend.resendVerificationEmail(email),
   )
 }
 
@@ -190,7 +219,7 @@ export function resendVerificationEmail(email) {
 export function requestPasswordReset(email) {
   return withAuthDevFallback(
     () => apiClient.post('/auth/password-resets', { email }, UNAUTHENTICATED),
-    () => authMockBackend.requestPasswordReset(email),
+    (authMockBackend) => authMockBackend.requestPasswordReset(email),
   )
 }
 
@@ -212,7 +241,7 @@ export function requestPasswordReset(email) {
 export function confirmPasswordReset({ token, password }) {
   return withAuthDevFallback(
     () => apiClient.patch(`/auth/password-resets/${token}`, { newPassword: password }, UNAUTHENTICATED),
-    () => authMockBackend.confirmPasswordReset({ token, password }),
+    (authMockBackend) => authMockBackend.confirmPasswordReset({ token, password }),
   )
 }
 
@@ -229,7 +258,7 @@ export function confirmPasswordReset({ token, password }) {
 export function logout() {
   return withAuthDevFallback(
     () => apiClient.delete('/auth/session', UNAUTHENTICATED),
-    () => authMockBackend.logout(),
+    (authMockBackend) => authMockBackend.logout(),
   )
 }
 
@@ -243,6 +272,6 @@ export function logout() {
 export function reactivate(email) {
   return withAuthDevFallback(
     () => apiClient.post('/auth/reactivations', { email }, UNAUTHENTICATED),
-    () => authMockBackend.reactivate(email),
+    (authMockBackend) => authMockBackend.reactivate(email),
   )
 }

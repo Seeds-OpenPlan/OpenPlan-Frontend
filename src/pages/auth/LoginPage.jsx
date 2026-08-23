@@ -104,12 +104,28 @@ export function LoginPage() {
   return (
     <AuthShell
       footer={
-        <span>
-          계정이 없으신가요?{' '}
-          <Link to="/signup" className="font-medium text-brand-600 hover:underline">
-            회원가입
+        <div className="flex flex-col items-center gap-2">
+          <span>
+            계정이 없으신가요?{' '}
+            <Link to="/signup" className="font-medium text-brand-600 hover:underline">
+              회원가입
+            </Link>
+          </span>
+          {/*
+            SCR-LANDING 진입 링크 (W6, 2026-08-23). 이전엔 이 화면으로 가는 링크가
+            어디에도 없어 주소를 직접 쳐야만 도달했다 — 카카오 재심사 반려 사유
+            ("정확히 어떤 서비스인지 확인할 수 있도록 이용 동선을 포함한 사이트
+            화면을 첨부") 대응. `underline`을 hover 조건 없이 항상 켜 둔다 — 위
+            "회원가입" 링크와 달리 색(text-brand-600)만으로 링크임을 알리지 않고
+            밑줄로도 이중 신호를 준다(WCAG 1.4.1 색 단독 의존 회피).
+          */}
+          <Link
+            to="/landing"
+            className="text-caption text-text-muted underline underline-offset-2 hover:text-text"
+          >
+            OpenPlan이 처음이신가요? 서비스 소개 보기
           </Link>
-        </span>
+        </div>
       }
     >
       {socialCallbackError && (

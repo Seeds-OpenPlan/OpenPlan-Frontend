@@ -20,11 +20,18 @@ import { DEVIATION_GROUP_BYS } from '../../features/stats/statsConstants'
   useTaskCategories, ST-F1-09 AC-1과 동일 소스 — W3부터는 실 /task-categories
   프리셋이라 StatisticsPage가 그 목록의 `.name`만 뽑아 넘긴다, 이 컴포넌트
   자신은 여전히 문자열 배열만 받는다); any canonical category absent OR
-  present with `sampleSize: 0` in the current groupBy=category response is
+  present with `hasData: false` in the current groupBy=CATEGORY response is
   "미사용".
+
+  [버그 수정 2026-08] 이 컴포넌트는 원래 각 row의 `sampleSize`(표본 개수)를
+  기대했는데, 정본 DeviationReport.rows엔 그런 필드가 없다 — 대신
+  `deviationRate`가 nullable이라 statsApi.js가 그걸 boolean `hasData`로 바꿔
+  넘긴다(가짜 개수를 지어내지 않기 위해서, statsApi.js normalizeDeviationGroup
+  주석 참고). 아래 로직은 `sampleSize > 0`/`=== 0` 자리를 그대로 `hasData`로
+  바꾼 것뿐, 판정 흐름 자체는 바뀌지 않았다.
 */
 export function DeviationPanel({ groupBy, onGroupByChange, deviations = [], categories = [] }) {
-  const maxAbs = Math.max(1, ...deviations.filter((d) => d.sampleSize > 0).map((d) => Math.abs(d.deviationMinutes)))
+  const maxAbs = Math.max(1, ...deviations.filter((d) => d.hasData).map((d) => Math.abs(d.deviationMinutes)))
 
   // `deviations.length > 0` guard: an EMPTY deviations list already renders
   // its own "비교할 수 있는 편차 데이터가 없습니다" message below — without this
@@ -32,10 +39,10 @@ export function DeviationPanel({ groupBy, onGroupByChange, deviations = [], cate
   // (no row to find a match in), stacking a second, redundant hint under the
   // first one instead of just the one message that already covers it.
   const unusedCategories =
-    groupBy === 'category' && deviations.length > 0
+    groupBy === 'CATEGORY' && deviations.length > 0
       ? categories.filter((cat) => {
           const row = deviations.find((d) => d.label === cat)
-          return !row || row.sampleSize === 0
+          return !row || !row.hasData
         })
       : []
 
@@ -56,7 +63,7 @@ export function DeviationPanel({ groupBy, onGroupByChange, deviations = [], cate
       ) : (
         <ul className="mt-3 flex flex-col gap-3">
           {deviations.map((d) => {
-            const noData = d.sampleSize === 0
+            const noData = !d.hasData
             const ratio = noData ? 0 : Math.min(Math.abs(d.deviationMinutes) / maxAbs, 1)
             return (
               <li key={d.key ?? d.label}>
@@ -72,9 +79,10 @@ export function DeviationPanel({ groupBy, onGroupByChange, deviations = [], cate
                 </div>
                 {/* 값의 부호(+/-)가 이미 의미를 전달하므로 막대는 색이 아니라
                     길이로만 크기를 보조한다 — ImpactList의 미니 바와 같은
-                    "decorative, aria-hidden" 취급. sampleSize 0인 행은 막대
-                    자체를 그리지 않는다(길이 0인 막대는 "편차 0"으로 오독될
-                    수 있어서 — 텍스트로만 "기록 없음"을 전달한다). */}
+                    "decorative, aria-hidden" 취급. hasData가 false인(=deviationRate
+                    가 null인) 행은 막대 자체를 그리지 않는다(길이 0인 막대는
+                    "편차 0"으로 오독될 수 있어서 — 텍스트로만 "기록 없음"을
+                    전달한다). */}
                 {!noData && (
                   <div aria-hidden="true" className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-neutral-200">
                     <div className="h-full rounded-full bg-neutral-800" style={{ width: `${ratio * 100}%` }} />

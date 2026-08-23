@@ -6,25 +6,76 @@ import { Toggle } from '../common/Toggle'
 import { LoadingSkeleton } from '../common/LoadingSkeleton'
 import { ErrorState } from '../common/ErrorState'
 import { GoogleGIcon, AppleGlyphIcon } from './settingsIcons'
+import { AppleConnectDialog } from './AppleConnectDialog'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
-import { useConnections, useSetConnectionActive, useReplaceSelectedCalendars } from '../../features/settings/useSettings'
+import {
+  useConnections,
+  useAvailableCalendars,
+  useSetConnectionStatus,
+  useReplaceSelectedCalendars,
+  useDisconnectConnection,
+} from '../../features/settings/useSettings'
+import {
+  CONNECTION_STATUS,
+  GOOGLE_CALENDAR_REDIRECT_URI,
+  googleCalendarAuthorizationUrl,
+} from '../../features/settings/settingsApi'
 
+// PROVIDER_ICON — 이미 정본(서버가 화면에 맞춰졌다, 6주차 문서 §0). 이 상수
+// 자체는 W6 connectionId 전환과 무관하게 그대로 둔다.
 const PROVIDER_ICON = { GOOGLE: GoogleGIcon, APPLE: AppleGlyphIcon }
+const PROVIDERS = [
+  { provider: 'GOOGLE', label: 'Google 캘린더' },
+  { provider: 'APPLE', label: 'Apple 캘린더' },
+]
 
 function CalendarSelectDialog({ connection, onClose, onSubmit, submitting }) {
   const isDesktop = useIsDesktop()
   const titleId = useId()
   const firstCheckboxRef = useRef(null)
-  const [selected, setSelected] = useState(new Set(connection.selectedCalendarIds))
+  // W6: 선택 가능한 캘린더는 connections 응답에 얹혀 오지 않는다 — 다이얼로그가
+  // 열릴 때 그 자리에서 GET .../{connectionId}/calendars로 따로 불러온다
+  // (settingsApi.js getAvailableCalendars 헤더 참조). 이 목록의 각 항목이
+  // `{externalCalendarId, name, selected}`다(계약 원문, Thomas 리뷰 BLOCKER) —
+  // `id`가 아니다. 초기 선택 상태는 `connection.selectedCalendars`(connections
+  // 목록에서 이미 받아 온 값, 이 다이얼로그가 열리는 시점엔 항상 로드돼 있다)
+  // 에서 즉시 시드한다 — calendarsQuery가 아직 로딩 중이어도 체크박스가 빈
+  // 채로 깜빡였다가 채워지지 않는다.
+  const calendarsQuery = useAvailableCalendars(connection.connectionId)
+  const [selected, setSelected] = useState(
+    () => new Set(connection.selectedCalendars.map((c) => c.externalCalendarId)),
+  )
 
-  const toggle = (id) => {
+  const toggle = (externalCalendarId) => {
     setSelected((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(externalCalendarId)) next.delete(externalCalendarId)
+      else next.add(externalCalendarId)
       return next
     })
   }
+
+  const listBody = calendarsQuery.isLoading ? (
+    <LoadingSkeleton preset="listRow" count={2} />
+  ) : calendarsQuery.isError ? (
+    <ErrorState variant="inline" onAction={() => calendarsQuery.refetch()} />
+  ) : (
+    <ul className="flex flex-col gap-1">
+      {(calendarsQuery.data ?? []).map((cal, i) => (
+        <li key={cal.externalCalendarId}>
+          <label className="flex items-center gap-3 rounded-control px-2 py-2 hover:bg-surface-sunken">
+            <input
+              ref={i === 0 ? firstCheckboxRef : undefined}
+              type="checkbox"
+              checked={selected.has(cal.externalCalendarId)}
+              onChange={() => toggle(cal.externalCalendarId)}
+            />
+            <span className="text-label text-text">{cal.name}</span>
+          </label>
+        </li>
+      ))}
+    </ul>
+  )
 
   const body = (
     <div className="flex flex-col gap-4">
@@ -33,27 +84,30 @@ function CalendarSelectDialog({ connection, onClose, onSubmit, submitting }) {
       </h2>
       <p className="text-caption text-text-muted">
         선택한 캘린더의 일정만 이번 주 계획에 반영됩니다. 저장하면 전체 목록이 지금 선택으로 교체됩니다.
+        선택한 캘린더가 없으면 일정을 가져오지 않습니다.
       </p>
-      <ul className="flex flex-col gap-1">
-        {connection.availableCalendars.map((cal, i) => (
-          <li key={cal.id}>
-            <label className="flex items-center gap-3 rounded-control px-2 py-2 hover:bg-surface-sunken">
-              <input
-                ref={i === 0 ? firstCheckboxRef : undefined}
-                type="checkbox"
-                checked={selected.has(cal.id)}
-                onChange={() => toggle(cal.id)}
-              />
-              <span className="text-label text-text">{cal.name}</span>
-            </label>
-          </li>
-        ))}
-      </ul>
+      {listBody}
       <div className="mt-1 flex justify-end gap-2">
         <Button variant="secondary" size="md" onClick={onClose}>
           취소
         </Button>
-        <Button variant="primary" size="md" loading={submitting} onClick={() => onSubmit(Array.from(selected))}>
+        <Button
+          variant="primary"
+          size="md"
+          loading={submitting}
+          disabled={calendarsQuery.isLoading}
+          // PUT body는 id뿐 아니라 name도 요구한다(계약 원문, replaceSelectedCalendars
+          // 헤더 참고) — id만 들고 있던 `selected` Set으로는 그 body를 만들 수
+          // 없어, 지금 로드돼 있는 calendarsQuery.data에서 선택된 항목의
+          // {externalCalendarId, name}을 그대로 뽑아 넘긴다.
+          onClick={() =>
+            onSubmit(
+              (calendarsQuery.data ?? [])
+                .filter((cal) => selected.has(cal.externalCalendarId))
+                .map((cal) => ({ externalCalendarId: cal.externalCalendarId, name: cal.name })),
+            )
+          }
+        >
           저장
         </Button>
       </div>
@@ -113,45 +167,49 @@ function DisconnectConfirmDialog({ connection, onClose, onConfirm, submitting })
 }
 
 /*
-  CalendarConnectionSection — 연동 (FIX-13~17). 독립 하위 화면(SettingsCalendarPage,
-  오너 리뷰 3차)의 본문. Google/Apple은 각자 독립된 연결/해제 토글과 캘린더
-  선택을 갖는다 — round-1과 같은 모양([가정-확장] connections 배열,
-  settingsFixtures.js). 라운드 2에서 한 번 "캘린더 연동" 단일 스위치로 합쳤다가,
-  오너 4차 리뷰로 이 화면 한정 정정됐다: provider 선택이라는 부가 개념 자체가
-  실사용에서 헷갈린다는 판단.
+  CalendarConnectionSection — 연동 (FIX-13~17 + 신규 연동 생성). 독립 하위
+  화면(SettingsCalendarPage)의 본문이자 온보딩 캘린더 단계(OnboardingCalendarStep)
+  가 그대로 재사용하는 컴포넌트 — 두 화면이 같은 연동 상태를 공유한다.
 
-  두 개의 독립 오버레이 상태(disconnectTarget/calendarEditTarget)는 "정확히
-  하나만 열려 있다"는 이 코드베이스의 공통 규약을 그대로 따른다(어느 provider의
-  다이얼로그인지는 그 안에 담긴 connection 객체 하나로 결정된다).
+  W6 재설계 (팀장 지시, 근거: 6주차 작업내용 문서 §0): 서버는 이제 "이미
+  수립된 연동"만 돌려준다(0~2개, connectionId 키). 화면은 여전히 provider별
+  2행 고정을 보여줘야 하므로(디자인 목업 §SET.5), 고정된 PROVIDERS 목록과
+  서버 응답을 이 컴포넌트가 직접 대조해 "미연결" 행을 합성한다 — 미연결 행은
+  [연동하기] 버튼 하나만 갖고, 연결된 행은 기존과 같은 Toggle + 캘린더 선택 +
+  연동 해제를 갖는다.
+
+  Toggle과 [연동 해제]가 이제 분리된 두 동작이다(이전엔 Toggle을 끄는 것 자체가
+  해제 확인창을 띄웠다): 계약이 PATCH status(일시 정지/재개, 비파괴적)와
+  DELETE(자격증명 삭제, 파괴적)를 별도 엔드포인트로 나눠 둬서, Toggle은
+  확인 없이 즉시 저장하고 진짜 "해제"만 확인창을 거친다(디자인 목업도 두
+  버튼을 나란히 보여준다 — "가져올 캘린더 선택" / "연동 해제").
 */
 export function CalendarConnectionSection() {
   const query = useConnections()
-  const setActive = useSetConnectionActive()
+  const setStatus = useSetConnectionStatus()
   const replaceCalendars = useReplaceSelectedCalendars()
+  const disconnect = useDisconnectConnection()
 
-  const [disconnectTarget, setDisconnectTarget] = useState(null) // connection | null
-  const [calendarEditTarget, setCalendarEditTarget] = useState(null) // connection | null
+  const [disconnectTarget, setDisconnectTarget] = useState(null) // {connectionId, label} | null
+  const [calendarEditTarget, setCalendarEditTarget] = useState(null) // {connectionId, label, selectedCalendars} | null
+  const [connectingProvider, setConnectingProvider] = useState(null) // 'APPLE' | null
 
   if (query.isLoading) return <LoadingSkeleton preset="listRow" count={2} />
   if (query.isError) return <ErrorState variant="section" onAction={() => query.refetch()} />
 
   const connections = query.data ?? []
-
-  const handleToggle = (conn, next) => {
-    if (next) {
-      setActive.mutate({ provider: conn.provider, connected: true })
-    } else {
-      setDisconnectTarget(conn) // FIX-17 — off는 확인 후에만 실제로 호출
-    }
-  }
+  const connectionFor = (provider) => connections.find((c) => c.provider === provider)
 
   return (
     <>
       <ul className="flex flex-col gap-3">
-        {connections.map((conn) => {
-          const Icon = PROVIDER_ICON[conn.provider]
+        {PROVIDERS.map(({ provider, label }) => {
+          const Icon = PROVIDER_ICON[provider]
+          const conn = connectionFor(provider)
+          const isActive = conn?.status === CONNECTION_STATUS.CONNECTED
+
           return (
-            <li key={conn.provider} className="rounded-card border border-border p-4">
+            <li key={provider} className="rounded-card border border-border p-4">
               <div className="flex items-center gap-3">
                 <span
                   aria-hidden="true"
@@ -160,24 +218,70 @@ export function CalendarConnectionSection() {
                   <Icon size={20} />
                 </span>
                 <span className="flex flex-1 flex-col">
-                  <span className="text-label font-medium text-text">{conn.label}</span>
-                  <span className="text-caption text-text-muted">외부 일정 연동</span>
-                </span>
-                <Toggle
-                  checked={conn.connected}
-                  onChange={(next) => handleToggle(conn, next)}
-                  ariaLabel={`${conn.label} 연동`}
-                />
-              </div>
-              {conn.connected && (
-                <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
+                  <span className="text-label font-medium text-text">{label}</span>
                   <span className="text-caption text-text-muted">
-                    {conn.selectedCalendarIds.length}개 캘린더 선택됨
+                    {conn ? (conn.accountIdentifier ?? '외부 일정 연동') : '미연결'}
                   </span>
-                  <Button variant="secondary" size="sm" onClick={() => setCalendarEditTarget(conn)}>
-                    캘린더 선택 편집
+                </span>
+
+                {conn ? (
+                  <Toggle
+                    checked={isActive}
+                    onChange={(next) =>
+                      setStatus.mutate({
+                        connectionId: conn.connectionId,
+                        status: next ? CONNECTION_STATUS.CONNECTED : CONNECTION_STATUS.DISABLED,
+                      })
+                    }
+                    ariaLabel={`${label} 연동`}
+                  />
+                ) : provider === 'APPLE' ? (
+                  <Button variant="secondary" size="sm" onClick={() => setConnectingProvider('APPLE')}>
+                    연동하기
                   </Button>
+                ) : (
+                  // 구글은 서버가 발급하는 인가 주소로 페이지 전체가 이동한다
+                  // (프론트에서 조립하지 않는 이유는 googleCalendarAuthorizationUrl
+                  // 헤더 참조). redirectUri가 아직 TODO라 그 값이 채워지기
+                  // 전까지는 시작 자체를 막는다 — settingsApi.js
+                  // GOOGLE_CALENDAR_REDIRECT_URI 헤더 참조.
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={!GOOGLE_CALENDAR_REDIRECT_URI}
+                    disabledReason={!GOOGLE_CALENDAR_REDIRECT_URI ? '콜백 주소 등록 후 제공됩니다' : undefined}
+                    onClick={() => {
+                      window.location.href = googleCalendarAuthorizationUrl(GOOGLE_CALENDAR_REDIRECT_URI)
+                    }}
+                  >
+                    연동하기
+                  </Button>
+                )}
+              </div>
+
+              {conn && isActive && (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                  <span className="text-caption text-text-muted">
+                    {conn.selectedCalendars.length}개 캘린더 선택됨
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setCalendarEditTarget({ ...conn, label })}
+                    >
+                      가져올 캘린더 선택
+                    </Button>
+                    <Button variant="danger" size="sm" onClick={() => setDisconnectTarget({ ...conn, label })}>
+                      연동 해제
+                    </Button>
+                  </div>
                 </div>
+              )}
+              {conn && !isActive && (
+                <p className="mt-2 border-t border-border pt-3 text-caption text-text-muted">
+                  이 캘린더의 일정은 주간 계획에 반영되지 않습니다.
+                </p>
               )}
             </li>
           )
@@ -188,12 +292,9 @@ export function CalendarConnectionSection() {
         <DisconnectConfirmDialog
           connection={disconnectTarget}
           onClose={() => setDisconnectTarget(null)}
-          submitting={setActive.isPending}
+          submitting={disconnect.isPending}
           onConfirm={() =>
-            setActive.mutate(
-              { provider: disconnectTarget.provider, connected: false },
-              { onSuccess: () => setDisconnectTarget(null) },
-            )
+            disconnect.mutate(disconnectTarget.connectionId, { onSuccess: () => setDisconnectTarget(null) })
           }
         />
       )}
@@ -203,14 +304,16 @@ export function CalendarConnectionSection() {
           connection={calendarEditTarget}
           onClose={() => setCalendarEditTarget(null)}
           submitting={replaceCalendars.isPending}
-          onSubmit={(calendarIds) =>
+          onSubmit={(selections) =>
             replaceCalendars.mutate(
-              { provider: calendarEditTarget.provider, calendarIds },
+              { connectionId: calendarEditTarget.connectionId, selections },
               { onSuccess: () => setCalendarEditTarget(null) },
             )
           }
         />
       )}
+
+      {connectingProvider === 'APPLE' && <AppleConnectDialog onClose={() => setConnectingProvider(null)} />}
     </>
   )
 }

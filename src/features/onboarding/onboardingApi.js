@@ -12,7 +12,20 @@
 */
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
-import { onboardingMockBackend } from './onboardingFixtures'
+
+/*
+  onboardingFixtures.js를 최상단 정적 import로 들이지 않는다 — authApi.js의
+  loadAuthMock()과 같은 이유(그 파일 헤더 참조): 정적 import는 번들러가 실행
+  경로와 무관하게 항상 포함시켜, DEV 전용 mock 데이터가 프로덕션 청크에도
+  그대로 실린다. `import.meta.env.DEV` 분기 안에서만 동적 import를 호출하면
+  Vite가 빌드 시 그 값을 리터럴 false로 치환해 분기 전체가 도달 불가능해지고
+  번들러가 통째로 제거한다.
+*/
+async function loadOnboardingMock() {
+  if (!import.meta.env.DEV) return null
+  const { onboardingMockBackend } = await import('./onboardingFixtures')
+  return onboardingMockBackend
+}
 
 /*
   PROGRESS SHAPE (실서버 대조 2026-07-29 — OnboardingProgressResponse). The two
@@ -103,7 +116,7 @@ function progressFlagsFrom(patch) {
 export function getOnboardingProgress() {
   return withDevFallback(
     () => apiClient.get('/users/me/onboarding-progress'),
-    () => onboardingMockBackend.getProgress(),
+    async () => (await loadOnboardingMock()).getProgress(),
   ).then(normalizeProgress)
 }
 
@@ -128,7 +141,7 @@ export function updateOnboardingProgress(patch) {
     },
     // The mock store models the FE's own shape (profile included), so it keeps
     // receiving the untranslated patch.
-    () => onboardingMockBackend.patchProgress(patch),
+    async () => (await loadOnboardingMock()).patchProgress(patch),
   ).then(normalizeProgress)
 }
 
@@ -137,7 +150,7 @@ export function updateOnboardingProgress(patch) {
 export function getImportCandidates(provider) {
   return withDevFallback(
     () => apiClient.get('/onboarding/import-candidates', { params: { provider } }),
-    () => onboardingMockBackend.getImportCandidates(provider),
+    async () => (await loadOnboardingMock()).getImportCandidates(provider),
   )
 }
 
@@ -146,6 +159,6 @@ export function getImportCandidates(provider) {
 export function submitImportDecisions(provider, decisions) {
   return withDevFallback(
     () => apiClient.post('/onboarding/import-decisions', { provider, decisions }),
-    () => onboardingMockBackend.submitImportDecisions(provider, decisions),
+    async () => (await loadOnboardingMock()).submitImportDecisions(provider, decisions),
   )
 }

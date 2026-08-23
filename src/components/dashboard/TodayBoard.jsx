@@ -20,9 +20,12 @@ import { toast } from '../../hooks/useToasts'
     relabeled "전체 보기 →" — same /weekly destination, just relocated.
   - `dateLabel` (예: "5월 6일 화요일") no longer renders here at all — the
     dashboard's own PageHeader already shows the week caption, so this was a
-    second on-screen date for the same info (오너 지적, round 2). The data
-    field itself still arrives from the API/fixtures; this component simply
-    stops consuming it now — no prop, no render.
+    second on-screen date for the same info (오너 지적, round 2). Originally
+    this was "still arrives from the API, component just stops consuming it";
+    since then the real `DashboardView` contract (W6, 2026-08-23) confirmed
+    `todayBoard` never had a `dateLabel` field to begin with — so this is now
+    simply a field that doesn't exist, not one this component chooses to
+    ignore. No prop, no render, nothing upstream to keep in sync either.
   - [취소] button added — NOT beside [기록] (round-2 오너 정정: an unlogged
     item only offers [기록]; [취소] appears once an item IS logged, replacing
     the plain "완료" text-only state with "완료" + a way to undo it). Its

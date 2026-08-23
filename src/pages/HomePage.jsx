@@ -53,12 +53,12 @@ function DashboardPage() {
   const weekLabel = weekLabelKO(currentWeekStartISO())
   const planStatusLabel = data ? (PLAN_STATUS_LABELS[data.planStatus] ?? PLAN_STATUS_LABELS.DRAFT) : null
 
-  const submitExecLog = ({ actualMinutes, memo }) => {
+  const submitExecLog = ({ actualMinutes, result, memo }) => {
     if (!execLog) return
     const { block } = execLog
     const endedAt = new Date(new Date(block.startAt).getTime() + actualMinutes * 60000).toISOString()
     logExecution.mutate(
-      { taskId: block.taskId, body: { startedAt: block.startAt, endedAt, actualMinutes, memo } },
+      { taskId: block.taskId, body: { startedAt: block.startAt, endedAt, actualMinutes, result, memo } },
       {
         onSuccess: () => {
           setJustLoggedIds((prev) => new Set(prev).add(block.planBlockId))

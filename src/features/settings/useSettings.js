@@ -24,8 +24,12 @@ import {
   updatePreferences,
   getSuggestion,
   getConnections,
-  setConnectionActive,
+  getAvailableCalendars,
+  setConnectionStatus,
   replaceSelectedCalendars,
+  disconnectConnection,
+  createAppleConnection,
+  createGoogleConnection,
   getAccount,
   updateAccount,
   deactivateAccount,
@@ -50,6 +54,13 @@ export function useUpdateWeeklyAvailableMinutes() {
     mutationFn: updateWeeklyAvailableMinutes,
     onSuccess: (data) => {
       queryClient.setQueryData(weeklyAvailableMinutesKey(), data)
+      // W6: 가용 시간·기본값은 이제 같은 서버 리소스(/users/me/preferences)를
+      // 공유한다(settingsApi.js 헤더 참조) — 이 캐시(weeklyAvailableMinutesKey)만
+      // 갱신하면 기본값 화면이 이미 열어 둔 preferencesKey 캐시는 이 쓰기를
+      // 모른 채 stale하게 남는다. invalidate로 그 화면이 다음에 읽을 때 최신
+      // 세 필드를 다시 받게 한다(즉시 반영이 급한 화면이 아니라 setQueryData
+      // 대신 invalidate로 충분하다).
+      queryClient.invalidateQueries({ queryKey: preferencesKey() })
       toast({ tone: 'success', message: '가용 시간을 저장했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
@@ -155,24 +166,39 @@ export function useUpdatePreferences() {
     mutationFn: updatePreferences,
     onSuccess: (data) => {
       queryClient.setQueryData(preferencesKey(), data)
+      // W6: 반대 방향 무효화 — 위 useUpdateWeeklyAvailableMinutes의 같은 주석 참조.
+      queryClient.invalidateQueries({ queryKey: weeklyAvailableMinutesKey() })
       toast({ tone: 'success', message: '기본값을 저장했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
 }
 
-// --- 연동 (FIX-13~17) — Google/Apple 독립 (오너 4차 리뷰로 2차의 단일 병합 정정) ---
+// --- 연동 (FIX-13~17 + 신규 연동 생성) — connectionId 기준 (W6 계약 정합) -------
 
 export const connectionsKey = () => ['connections']
+export const availableCalendarsKey = (connectionId) => ['connections', connectionId, 'calendars']
 
 export function useConnections() {
   return useQuery({ queryKey: connectionsKey(), queryFn: getConnections })
 }
 
-export function useSetConnectionActive() {
+/** 캘린더 선택 다이얼로그가 열릴 때만 조회 — connectionId가 없으면(다이얼로그
+ * 닫힘) 아예 요청을 보내지 않는다. */
+export function useAvailableCalendars(connectionId) {
+  return useQuery({
+    queryKey: availableCalendarsKey(connectionId),
+    queryFn: () => getAvailableCalendars(connectionId),
+    enabled: Boolean(connectionId),
+  })
+}
+
+/** PATCH status — 일시 정지/재개(비파괴적). 확인창 없이 Toggle에서 즉시
+ * 호출된다(연동 해제와 다른 동작이라는 설명은 settingsApi.js 참조). */
+export function useSetConnectionStatus() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, connected }) => setConnectionActive(provider, connected),
+    mutationFn: ({ connectionId, status }) => setConnectionStatus(connectionId, status),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: connectionsKey() }),
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
@@ -181,12 +207,52 @@ export function useSetConnectionActive() {
 export function useReplaceSelectedCalendars() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, calendarIds }) => replaceSelectedCalendars(provider, calendarIds),
+    // `selections`: `[{externalCalendarId, name}]` — settingsApi.replaceSelectedCalendars
+    // 자신의 헤더 참고(계약이 요구하는 모양, id 배열이 아니다).
+    mutationFn: ({ connectionId, selections }) => replaceSelectedCalendars(connectionId, selections),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: connectionsKey() })
       toast({ tone: 'success', message: '저장했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+/** DELETE — 완전한 연동 해제(FIX-17). 호출부(CalendarConnectionSection)가
+ * 확인 다이얼로그 뒤에서만 mutate한다. */
+export function useDisconnectConnection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (connectionId) => disconnectConnection(connectionId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: connectionsKey() })
+      toast({ tone: 'success', message: '연동을 해제했습니다' })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+/**
+ * 신규 애플 연동 생성. onError에서 공통 토스트를 띄우지 않는다 —
+ * AppleConnectDialog가 422(폼 재표시)/502(재시도 버튼)/409(이미 연결됨)를
+ * 서로 다른 화면 상태로 직접 분기해야 하므로, 여기서 토스트 하나로 뭉개면
+ * 그 구분이 사라진다(팀장 지시의 핵심 요구사항).
+ */
+export function useCreateAppleConnection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: createAppleConnection,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: connectionsKey() }),
+  })
+}
+
+/** 신규 구글 연동 생성(OAuth 콜백 착지점 전용 — GoogleCalendarCallbackPage).
+ * 위 애플 훅과 같은 이유로 onError 토스트를 걸지 않는다. */
+export function useCreateGoogleConnection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: createGoogleConnection,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: connectionsKey() }),
   })
 }
 
@@ -209,12 +275,28 @@ export function useUpdateAccount() {
   })
 }
 
+/**
+ * W6 PATH CORRECTION (settingsApi.deactivateAccount 자신의 헤더 참고): 실
+ * DELETE /users/me는 `{ recoverableUntil }` 하나만 돌려준다 — mock(DEV
+ * fallback)은 여전히 `{ ...account, status, deactivatedAt }` 전체를 돌려준다.
+ * 두 모양이 다르므로 응답을 캐시에 그대로 덮어쓰지 않고(예전엔 그렇게
+ * 했었다 — 실서버로 붙는 순간 name/email 등 나머지 계정 필드가 통째로
+ * 사라졌을 것이다) 기존 캐시 위에 안전하게 병합한다. `status`/
+ * `deactivatedAt`은 UserProfile 계약 자체에 없는 필드라([가정-확장] 그대로,
+ * settingsApi.js 주석 참조) 실서버 응답에 그 키가 없으면 여기서 직접
+ * 채워 넣는다.
+ */
 export function useDeactivateAccount() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: deactivateAccount,
     onSuccess: (data) => {
-      queryClient.setQueryData(accountKey(), data)
+      queryClient.setQueryData(accountKey(), (curr) => ({
+        ...curr,
+        ...data,
+        status: data?.status ?? 'DEACTIVATED',
+        deactivatedAt: data?.deactivatedAt ?? curr?.deactivatedAt ?? new Date().toISOString(),
+      }))
       toast({ tone: 'info', message: '계정을 비활성화했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
