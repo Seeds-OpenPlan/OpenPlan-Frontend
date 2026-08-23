@@ -43,26 +43,29 @@ export function getCorrectionProposal(category) {
 // --- ST-F1-11: 수행 통계 -----------------------------------------------------
 
 // A resolved payload counts as "no data" when it isn't a real object — this
-// covers BOTH shapes an empty read can arrive in: `null`/`undefined` (a mock
-// or an already-unwrapped envelope with nothing in `data`), and `''` (what
-// apiClient's response interceptor hands back for a real 204 with an empty
-// body, per the 07 API 명세서's own "204: 조회 기간 내 통계 없음" branch for
-// /stats/summaries). Treating both the same way means AC-4's empty state is
-// ready the moment the real backend starts sending 204s — no adapter change.
+// still covers `null`/`undefined`/`''` as a LEGACY defensive branch (a bare
+// 204 would resolve through axios as an empty body). Kept as a fallback only:
+// [버그 수정 2026-08] the real server does NOT 204 here — it answers 200 with a
+// `empty: true` flag inside the body (curl-확인, 정본 openapi-live-76c7009.yaml
+// StatsSummary.empty). Before this fix `isEmptyPayload` was the ONLY empty
+// check, so a real "이력 0" response (a normal object, just `empty: true`)
+// fell through to the "has data" branch below and rendered a card grid full of
+// nulls instead of AC-4's EmptyState — see `normalizeSummaries`'s own use of
+// `raw.empty` for the actual signal now used.
 function isEmptyPayload(raw) {
   return !raw || typeof raw !== 'object'
 }
 
 /**
  * OP-STATS-SUMMARIES → GET /stats/summaries?period= (ST-F1-11 AC-1 · AC-4).
- * `period` is one of STATS_PERIODS' values (statsConstants.js).
+ * `period` is one of STATS_PERIODS' values (statsConstants.js) — already the
+ * wire enum (WEEKLY/MONTHLY), so it is passed straight through with no
+ * translation layer.
  *
- * AC-4's "이력 0" is NOT a client-invented flag — it IS the 204 branch the 07
- * API 명세서 documents for this exact endpoint. A 204 resolves through axios
- * (2xx never rejects) as an empty body, so `isEmptyPayload` catches it here and
- * normalizes to `hasHistory: false` with every section nulled out, instead of
- * `StatisticsPage` having to separately guess "were all these zeros, or was
- * there nothing to measure?" from zeroed numbers alone.
+ * AC-4's "이력 0" reads off `raw.empty` (see normalizeSummaries) — the 204
+ * branch below (`isEmptyPayload`) stays only as a defensive fallback in case a
+ * future backend revision reintroduces it; the real contract as measured now
+ * always returns 200.
  */
 export function getStatsSummaries(period) {
   return withDevFallback(
@@ -71,78 +74,81 @@ export function getStatsSummaries(period) {
   ).then((raw) => normalizeSummaries(raw, period))
 }
 
+// StatsSummary(계약)엔 completionRate/totalEstimatedMinutes/totalActualMinutes/
+// varianceRate/empty 5개 필드뿐이다("SC-06 유지 4종" — summary 주석 참고) —
+// projectInvestments/delayedTasks/delayedTaskCount는 계약에 아예 없어서, 그
+// 값을 읽던 화면(ProjectInvestmentList/DelayedTaskList, SummaryCards의 "지연
+// 태스크" 카드)은 통째로 뺐다(StatisticsPage.jsx/SummaryCards.jsx 참고) — 없는
+// 데이터를 0이나 빈 배열로 채워 "실적이 0"처럼 보이게 하지 않기 위해서다.
 function normalizeSummaries(raw, period) {
-  if (isEmptyPayload(raw)) {
+  if (isEmptyPayload(raw) || raw.empty) {
     return {
       period,
       hasHistory: false,
       completionRate: null,
-      totalTime: null,
-      avgDeviation: null,
-      delayedTaskCount: null,
-      projectInvestments: [],
-      delayedTasks: [],
+      totalEstimatedMinutes: null,
+      totalActualMinutes: null,
+      varianceRate: null,
     }
   }
   return {
     period,
     hasHistory: true,
     completionRate: raw.completionRate ?? null,
-    totalTime: raw.totalTime ?? null,
-    avgDeviation: raw.avgDeviation ?? null,
-    delayedTaskCount: raw.delayedTaskCount ?? null,
-    projectInvestments: raw.projectInvestments ?? [],
-    delayedTasks: raw.delayedTasks ?? [],
+    totalEstimatedMinutes: raw.totalEstimatedMinutes ?? null,
+    totalActualMinutes: raw.totalActualMinutes ?? null,
+    varianceRate: raw.varianceRate ?? null,
   }
 }
 
 /**
  * OP-STATS-DEVIATIONS → GET /stats/deviations?groupBy=&period= (ST-F1-11 AC-2).
+ * `groupBy`/`period` are both required wire enums (계약: PROJECT|CATEGORY,
+ * WEEKLY|MONTHLY — statsConstants.js's DEVIATION_GROUP_BYS/STATS_PERIODS
+ * already store those exact values, so no translation layer needed here).
  *
- * ENDPOINT NOTE [가정-확장]: the 07 API 명세서 documents this route with NO query
- * params and a single flat `{plannedTime, actualTime}` pair (one aggregate, not
- * a breakdown) — too thin for AC-2's "프로젝트별/카테고리별 목록" toggle.
- * `groupBy`/`period` are added here as the FE-adopted contract, the same
- * "adopt the shape the screen needs now, reconcile against real Swagger later"
- * move dashboardApi.js's own header documents for `/dashboard`.
+ * [버그 수정 2026-08] DeviationReport(정본)의 실제 envelope key는 `rows`, 이
+ * 함수가 원래 읽던 `groups`가 아니다 — 실 서버에서는 항상 빈 배열로 읽혀
+ * 편차 패널이 "비교할 수 있는 편차 데이터가 없습니다"만 보여 줬다(콘솔 에러도
+ * 없어 발견이 늦어짐). `unwrapList`가 배열-vs-객체 envelope 방어는 그대로 하되
+ * 키 이름만 고쳤다.
  *
- * Every group the server sends back is passed through AS-IS, including a
- * `sampleSize: 0` row (e.g. a category nobody has ever logged a task under) —
- * this function does not filter anything out, which is what keeps AC-2's
- * "'없음' 그룹도 표시" true structurally instead of by a special case here.
+ * Every row the server sends back is passed through AS-IS — this function does
+ * not filter anything out, which is what keeps AC-2's "'없음' 그룹도 표시" true
+ * structurally instead of by a special case here.
  */
 export function getStatsDeviations(groupBy, period) {
   return withDevFallback(
     () => apiClient.get('/stats/deviations', { params: { groupBy, period } }),
     () => mockBackend.getStatsDeviations(groupBy, period),
-    // Real: `DeviationReport{rows:[...]}` shape not yet adopted here — but the
-    // array-vs-`{groups}` envelope defense is the same shared concern, so it
-    // goes through the one helper instead of a hand-rolled duplicate check.
-  ).then((raw) => unwrapList(raw, 'groups').map(normalizeDeviationGroup))
+  ).then((raw) => unwrapList(raw, 'rows').map(normalizeDeviationGroup))
 }
 
+// DeviationReport.rows(계약)엔 sampleSize가 없다 — 대신 `deviationRate`가
+// nullable이고, 그 그룹에 실적이 하나도 없을 때 null로 온다(completionRate가
+// 같은 방식으로 "기록 없음"을 표시하는 것과 같은 계약 관례). 그래서 예전처럼
+// "표본 개수" 흉내를 내는 숫자를 지어내는 대신 `hasData` boolean 하나로 그
+// 신호를 그대로 옮긴다 — DeviationPanel.jsx도 이 이름으로 맞춰 고쳤다.
 function normalizeDeviationGroup(g) {
   return {
-    key: g.key ?? g.category ?? g.projectId ?? null,
-    label: g.label ?? g.name ?? '없음',
+    key: g.groupId ?? g.groupName ?? null,
+    label: g.groupName ?? '없음',
     deviationMinutes: g.deviationMinutes ?? 0,
-    sampleSize: g.sampleSize ?? 0,
+    hasData: g.deviationRate !== null && g.deviationRate !== undefined,
   }
 }
 
 /**
  * OP-STATS-TIMEPATTERNS → GET /stats/time-patterns?period= (ST-F1-11 AC-3).
  *
- * ENDPOINT NOTE [가정-확장]: same `period` extension as getStatsDeviations
- * above; the 07 API 명세서's sample body only shows `efficiencyByHour: []` with
- * no documented element shape, so `{hour, completedCount, totalCount}` per
- * entry is this adapter's own assumption pending a real Swagger definition.
- *
- * The 4구간(새벽/오전/오후/야간) aggregation happens HERE, not on the server
- * (팀리드 결정: "4구간 완료율은 FE에서 집계") — time-patterns stays the raw
- * per-hour source of truth, and TIME_BANDS (statsConstants.js) is the single
- * place the hour→band mapping lives, so changing the split later is a one-file
- * edit, not a hunt through every consumer.
+ * [버그 수정 2026-08] 이전 어댑터는 서버가 시간별 원자료(`efficiencyByHour`)를
+ * 주고 FE가 4구간으로 합산한다고 가정했다 — 정본 TimePatternReport를 다시
+ * 확인해 보니 실제로는 서버가 이미 DAWN/MORNING/AFTERNOON/NIGHT 4개 slot으로
+ * 집계해서 준다(`slots: [{slot, totalCount, completedCount, completionRate}]`).
+ * per-hour 합산 로직 자체가 없는 필드를 읽고 있었던 것 — 지금은 그 4개
+ * slot을 TIME_BANDS(statsConstants.js)의 `slot` enum으로 그대로 찾아 매핑만
+ * 한다. 구간 경계를 바꾸는 일은 이제 백엔드 쪽 변경이다(그래서 statsConstants.js
+ * 쪽 주석도 "이 파일만 고쳐서는 안 된다"로 갱신함).
  */
 export function getStatsTimePatterns(period) {
   return withDevFallback(
@@ -152,27 +158,17 @@ export function getStatsTimePatterns(period) {
 }
 
 function normalizeTimePatterns(raw) {
-  const byHour = new Map((raw?.efficiencyByHour ?? []).map((e) => [e.hour, e]))
+  const bySlot = new Map((raw?.slots ?? []).map((s) => [s.slot, s]))
   const bands = TIME_BANDS.map((band) => {
-    let completed = 0
-    let total = 0
-    for (const hour of band.hours) {
-      const entry = byHour.get(hour)
-      if (entry) {
-        completed += entry.completedCount ?? 0
-        total += entry.totalCount ?? 0
-      }
-    }
+    const entry = bySlot.get(band.slot)
     return {
       key: band.key,
       label: band.label,
-      // `total === 0` means this band has NO tracked executions at all — AC-3
-      // requires that to read as "기록 없음", visibly different from a real 0%
-      // (a band WITH executions that all happened to be missed). `rate: null`
-      // is the one signal TimeBandChart needs to tell the two apart; it never
-      // has to re-derive "no data" from a suspiciously-round 0 itself.
-      rate: total > 0 ? Math.round((completed / total) * 100) : null,
-      totalCount: total,
+      // 서버가 `completionRate: null`로 이미 "기록 없음"을 표시해 준다(AC-3의
+      // "무데이터 구간은 0%와 명확히 구분" 요구를 서버가 계약으로 보장) — FE가
+      // totalCount로 다시 판정할 필요가 없다, 그대로 옮기기만 한다.
+      rate: entry?.completionRate ?? null,
+      totalCount: entry?.totalCount ?? 0,
     }
   })
   return { bands, summary: summarizeTimeBands(bands) }

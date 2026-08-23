@@ -3,8 +3,6 @@ import { ErrorState } from '../components/common/ErrorState'
 import { EmptyState } from '../components/common/EmptyState'
 import { StatsToggle } from '../components/stats/StatsToggle'
 import { SummaryCards, SummaryCardsSkeleton } from '../components/stats/SummaryCards'
-import { ProjectInvestmentList, ProjectInvestmentListSkeleton } from '../components/stats/ProjectInvestmentList'
-import { DelayedTaskList, DelayedTaskListSkeleton } from '../components/stats/DelayedTaskList'
 import { TimeBandChart, TimeBandChartSkeleton } from '../components/stats/TimeBandChart'
 import { DeviationPanel, DeviationPanelSkeleton } from '../components/stats/DeviationPanel'
 import { useStatsSummaries, useStatsDeviations, useStatsTimePatterns } from '../features/stats/useStats'
@@ -14,7 +12,6 @@ import {
   DEFAULT_STATS_PERIOD,
   DEFAULT_DEVIATION_GROUP_BY,
 } from '../features/stats/statsConstants'
-import { useIsDesktop } from '../hooks/useMediaQuery'
 
 /*
   ST-F1-11 orchestrator (RB-STAT-01/03 표면, Desktop.Status.png/Mobile.Status.png
@@ -44,9 +41,21 @@ import { useIsDesktop } from '../hooks/useMediaQuery'
   branch below) — its OWN isLoading (true only before its very first
   successful fetch; `useStatsDeviations`'s `keepPreviousData` keeps it false on
   every later groupBy/period change) decides Skeleton vs. real panel there.
+
+  [버그 수정 2026-08] 이 화면은 원래 ProjectInvestmentList("이번 주 투입")·
+  DelayedTaskList("지연 발생 태스크") 두 목록을 좌측 메인 컬럼에, TimeBandChart·
+  DeviationPanel을 우측 320px 사이드바에 두는 2단 레이아웃(TwoColumnLayout,
+  useIsDesktop)이었다 — 그런데 그 두 목록이 읽던 `projectInvestments`/
+  `delayedTasks`는 정본 StatsSummary에 없는 필드다(statsApi.js normalizeSummaries
+  주석 참고). 없는 데이터를 보여주는 척 대신 두 목록 컴포넌트 자체를 화면에서
+  뺐고, 그 결과 메인 컬럼이 통째로 비므로 "메인 + 좁은 사이드바" 2단 구조를
+  유지할 이유가 없어졌다 — 남은 두 섹션(시간대 차트 · 편차 분석)을 데스크톱에서
+  나란히 2열로, 모바일에서 세로로 쌓는 단순 grid로 바꿨다(TwoColumnLayout/
+  useIsDesktop 삭제). Desktop.Status.png 정본과는 이제 다른 배치이지만, 백엔드가
+  낼 수 없는 데이터를 위해 빈 컬럼을 그대로 둘 수는 없었다 — 디자인 재검토가
+  필요하면 팀리드/Jonnathan에게 별도 보고.
 */
 function StatisticsPage() {
-  const isDesktop = useIsDesktop()
   const [period, setPeriod] = useState(DEFAULT_STATS_PERIOD)
   const [groupBy, setGroupBy] = useState(DEFAULT_DEVIATION_GROUP_BY)
 
@@ -85,31 +94,24 @@ function StatisticsPage() {
   }
 
   if (isLoading) {
-    const mainSkeleton = [
-      <ProjectInvestmentListSkeleton key="pil" />,
-      <DelayedTaskListSkeleton key="dtl" />,
-    ]
-    const asideSkeleton = [<TimeBandChartSkeleton key="tbc" />, <DeviationPanelSkeleton key="dp" />]
     return (
       <div className="flex flex-col gap-6">
         {header}
         <SummaryCardsSkeleton />
-        <TwoColumnLayout
-          isDesktop={isDesktop}
-          mobileOrder={[...mainSkeleton, ...asideSkeleton]}
-          desktopMain={mainSkeleton}
-          desktopAside={asideSkeleton}
-        />
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+          <TimeBandChartSkeleton />
+          <DeviationPanelSkeleton />
+        </div>
       </div>
     )
   }
 
   const summaries = summariesQuery.data
 
-  // AC-4 이력 0 빈 상태 — 오류가 아니다(§07 API 명세서 /stats/summaries의 204
-  // "조회 기간 내 통계 없음" 분기, statsApi.js normalizeSummaries 참고). 카드·
-  // 목록·차트·편차 패널을 전부 EmptyState 하나로 대체하되 헤더(제목+기간
-  // 토글)는 유지한다 — 사용자가 다른 기간을 시도해 볼 수 있어야 하기 때문.
+  // AC-4 이력 0 빈 상태 — 오류가 아니다(실 서버는 200 + `empty:true`로 알린다,
+  // statsApi.js normalizeSummaries 참고). 카드·차트·편차 패널을 전부 EmptyState
+  // 하나로 대체하되 헤더(제목+기간 토글)는 유지한다 — 사용자가 다른 기간을
+  // 시도해 볼 수 있어야 하기 때문.
   if (!summaries.hasHistory) {
     return (
       <div className="flex flex-col gap-6">
@@ -134,67 +136,38 @@ function StatisticsPage() {
   // itself is unchanged.
   const categories = (categoriesQuery.data ?? []).map((c) => c.name)
 
-  const mainNodes = [
-    <ProjectInvestmentList key="pil" projects={summaries.projectInvestments} />,
-    <DelayedTaskList key="dtl" tasks={summaries.delayedTasks} />,
-  ]
-  // deviationsQuery는 페이지 로딩 게이트 밖에 있으므로(위 헤더 주석) 여기서
-  // 그 자신의 isLoading을 직접 보고 스켈레톤/실패널을 고른다 — 첫 로딩(true)
-  // 에서만 스켈레톤이고, groupBy를 바꿔 새 키로 재요청하는 동안은
-  // keepPreviousData 덕에 isLoading이 false로 유지돼 이전 목록이 그대로 보인다.
-  const asideNodes = [
-    <TimeBandChart key="tbc" bands={timePatterns.bands} summary={timePatterns.summary} />,
-    deviationsQuery.isLoading ? (
-      <DeviationPanelSkeleton key="dp" />
-    ) : (
-      <DeviationPanel
-        key="dp"
-        groupBy={groupBy}
-        onGroupByChange={setGroupBy}
-        deviations={deviations}
-        categories={categories}
-      />
-    ),
-  ]
-
   return (
     <div className="flex flex-col gap-6">
       {header}
       <SummaryCards
         period={period}
         completionRate={summaries.completionRate}
-        totalTime={summaries.totalTime}
-        avgDeviation={summaries.avgDeviation}
-        delayedTaskCount={summaries.delayedTaskCount}
+        totalEstimatedMinutes={summaries.totalEstimatedMinutes}
+        totalActualMinutes={summaries.totalActualMinutes}
+        varianceRate={summaries.varianceRate}
       />
-      <TwoColumnLayout
-        isDesktop={isDesktop}
-        mobileOrder={[...mainNodes, ...asideNodes]}
-        desktopMain={mainNodes}
-        desktopAside={asideNodes}
-      />
+      {/* ProjectInvestmentList/DelayedTaskList가 빠지며 남은 두 섹션만 있어
+          (위 헤더 주석의 [버그 수정 2026-08]) 데스크톱은 2열, 모바일은 1열로
+          쌓는 단순 grid를 쓴다 — deviationsQuery는 페이지 로딩 게이트 밖에
+          있으므로(위 헤더 주석) 여기서 그 자신의 isLoading을 직접 보고
+          스켈레톤/실패널을 고른다: 첫 로딩(true)에서만 스켈레톤이고, groupBy를
+          바꿔 새 키로 재요청하는 동안은 keepPreviousData 덕에 isLoading이
+          false로 유지돼 이전 목록이 그대로 보인다. */}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <TimeBandChart bands={timePatterns.bands} summary={timePatterns.summary} />
+        {deviationsQuery.isLoading ? (
+          <DeviationPanelSkeleton />
+        ) : (
+          <DeviationPanel
+            groupBy={groupBy}
+            onGroupByChange={setGroupBy}
+            deviations={deviations}
+            categories={categories}
+          />
+        )}
+      </div>
     </div>
   )
-}
-
-/*
-  DashboardPage(HomePage.jsx)와 같은 이유로 같은 모양을 이 파일에도 그대로
-  둔다 — 두 독립된 flex 컬럼(그리드 row 공유 없음)이라야 한쪽이 길어져도
-  다른 쪽 다음 카드가 밀리지 않고, 모바일/데스크톱 순서 분기는 JS(useIsDesktop)
-  에서 한다(자세한 이유는 HomePage.jsx의 TwoColumnLayout 주석 참고 — 페이지마다
-  반복되는 이 트레이드오프는 팀리드가 이미 확인한 사항이라 공용화하지 않고
-  그대로 둔다).
-*/
-function TwoColumnLayout({ isDesktop, mobileOrder, desktopMain, desktopAside }) {
-  if (isDesktop) {
-    return (
-      <div className="flex flex-row items-start gap-6">
-        <div className="flex min-w-0 flex-1 flex-col gap-6">{desktopMain}</div>
-        <div className="flex w-80 shrink-0 flex-col gap-6">{desktopAside}</div>
-      </div>
-    )
-  }
-  return <div className="flex flex-col gap-6">{mobileOrder}</div>
 }
 
 export default StatisticsPage

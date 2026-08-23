@@ -5,32 +5,39 @@
   re-declaring its own copy of "what a period/band/group IS".
 */
 
-// AC-1 기간 토글. `value` is the wire param sent as `?period=`; `label` is the
-// exact button text from the Desktop.Status.png reference (정본) — order matters,
-// it is also the toggle's left-to-right button order.
+// AC-1 기간 토글. `value`는 그대로 `?period=` 쿼리값으로 나가는 wire enum이다
+// (정본 openapi-live-76c7009.yaml의 `period: WEEKLY|MONTHLY`). `label`은
+// Desktop.Status.png의 버튼 문구 — 순서가 곧 토글의 좌→우 버튼 순서다.
+//
+// [버그 수정 2026-08] 원래 4개(이번 주/이번 달/최근 3개월/전체)였으나 실 계약은
+// WEEKLY/MONTHLY 두 값만 받는다(그 외 값은 422 E-COM-009). '최근 3개월'·'전체'는
+// 서버가 낼 방법이 없는 기간이라 버튼 자체를 없앴다 — 버튼을 남겨 두면 누르는
+// 순간 요청이 실패한다. 백엔드가 나중에 두 기간을 추가 지원하면 이 배열에 항목만
+// 되돌리면 된다(statsApi.js/statsFixtures.js는 이미 WEEKLY/MONTHLY 값을 그대로
+// wire 파라미터로 쓰므로 이 배열 밖은 손댈 필요 없음).
 export const STATS_PERIODS = [
-  { value: 'week', label: '이번 주' },
-  { value: 'month', label: '이번 달' },
-  { value: 'last3months', label: '최근 3개월' },
-  { value: 'all', label: '전체' },
+  { value: 'WEEKLY', label: '이번 주' },
+  { value: 'MONTHLY', label: '이번 달' },
 ]
-export const DEFAULT_STATS_PERIOD = 'week'
+export const DEFAULT_STATS_PERIOD = 'WEEKLY'
 
-// AC-2 편차 토글 (프로젝트별/카테고리별).
+// AC-2 편차 토글 (프로젝트별/카테고리별). value는 `?groupBy=`로 나가는 wire enum
+// (계약: PROJECT|CATEGORY, 전부 대문자 — 소문자로 보내면 422).
 export const DEVIATION_GROUP_BYS = [
-  { value: 'project', label: '프로젝트별' },
-  { value: 'category', label: '카테고리별' },
+  { value: 'PROJECT', label: '프로젝트별' },
+  { value: 'CATEGORY', label: '카테고리별' },
 ]
-export const DEFAULT_DEVIATION_GROUP_BY = 'project'
+export const DEFAULT_DEVIATION_GROUP_BY = 'PROJECT'
 
 // AC-3 4구간 (RB-STAT-03 원문 정의: 새벽 00~05:59 · 오전 06~11:59 · 오후
-// 12~17:59 · 야간 18~23:59). `hours` lists every hour-of-day that folds into the
-// band — statsApi.js's time-patterns aggregator sums each band's hours from the
-// raw per-hour payload, so THIS array is the one place the hour→band split
-// lives; changing the boundary is a one-line edit here.
+// 12~17:59 · 야간 18~23:59). `slot`은 TimePatternReport.slots[].slot의 wire enum
+// (DAWN/MORNING/AFTERNOON/NIGHT) — 실 서버가 이미 이 4구간으로 집계해서 보내주므로
+// (statsApi.js의 예전 주석과 달리, per-hour 원자료를 FE가 직접 합산하지 않는다),
+// 여기 남은 역할은 그 enum 값을 화면 라벨/렌더 순서에 매핑하는 것뿐이다. 경계
+// 자체를 바꾸는 건 이제 백엔드 쪽 변경이라 이 파일만 고쳐서는 안 된다.
 export const TIME_BANDS = [
-  { key: 'dawn', label: '새벽', hours: [0, 1, 2, 3, 4, 5] },
-  { key: 'morning', label: '오전', hours: [6, 7, 8, 9, 10, 11] },
-  { key: 'afternoon', label: '오후', hours: [12, 13, 14, 15, 16, 17] },
-  { key: 'night', label: '야간', hours: [18, 19, 20, 21, 22, 23] },
+  { key: 'dawn', label: '새벽', slot: 'DAWN' },
+  { key: 'morning', label: '오전', slot: 'MORNING' },
+  { key: 'afternoon', label: '오후', slot: 'AFTERNOON' },
+  { key: 'night', label: '야간', slot: 'NIGHT' },
 ]

@@ -1667,7 +1667,12 @@ export const mockBackend = {
     }
   },
 
-  // POST /tasks/{taskId}/execution-records — PLAN-15 실제 시간 기록 (write-only).
+  // POST /tasks/{taskId}/execution-logs — PLAN-15 실제 시간 기록 (write-only).
+  // 계약대로 `body`에 `result`(COMPLETED/DELAYED/ABORTED)가 항상 실려 온다는
+  // 전제 — taskApi.postExecutionRecord가 더 이상 기본값을 채워 넣지 않으므로
+  // (통계 오염 방지), 이 목도 계약과 같은 모양을 유지하려면 값이 없을 때
+  // 조용히 채워 넣지 않고 그대로 저장해야 한다(= real 서버가 422로 거부할
+  // 상황을 목이 대신 감춰서는 안 된다).
   async logExecution(taskId, body) {
     await delay(150)
     const executionRecordId = nextId('exec')
