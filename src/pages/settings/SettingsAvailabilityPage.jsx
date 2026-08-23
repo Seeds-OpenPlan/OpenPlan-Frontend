@@ -220,6 +220,39 @@ function snapToHalfHour(minutes) {
   return Math.max(0, Math.round(minutes / 30) * 30)
 }
 
+/*
+  아직 한 번도 가용 시간을 저장하지 않은 계정을 위한 7행 시드 (W6 실서버 실측
+  2026-08-24). 실서버는 그런 계정에 `{ patterns: [] }`를 준다 — 아래 목록이
+  `draft.map(...)`으로 그려지므로 빈 배열이면 요일 행이 하나도 안 나오고,
+  사용자는 "처음 설정하러 들어왔는데 설정할 UI가 없는" 상태가 된다.
+
+  전부 `isActive: false`로 시드한다 — 사용자가 선언하지 않은 가용 시간을
+  화면이 대신 만들어 주지 않기 위함이다(켜는 것은 사용자 몫). 시간대는 서버
+  직렬화가 쓰는 것과 같은 09:00-18:00 기본값으로, planApi.serializeAvailability
+  의 주석("off day가 null로 직렬화되지 않도록 하는 같은 기본값")과 맞춘다.
+*/
+const DEFAULT_DAY_START_MINUTES = 9 * 60
+const DEFAULT_DAY_END_MINUTES = 18 * 60
+
+function defaultWeekPatterns() {
+  return WEEKDAY_KEYS.map((weekday) => ({
+    weekday,
+    startMinutes: DEFAULT_DAY_START_MINUTES,
+    endMinutes: DEFAULT_DAY_END_MINUTES,
+    isActive: false,
+  }))
+}
+
+/*
+  서버 응답을 화면이 다루는 기준값으로 바꾼다 — 빈 목록이면 기본 7행.
+  시드(초기 draft)와 dirty 비교 기준 양쪽이 **같은 함수**를 거쳐야 한다:
+  한쪽만 기본값을 적용하면 화면에 들어서자마자 "저장 안 된 변경"으로 잡히거나,
+  반대로 진짜 변경을 못 잡는다.
+*/
+function rangeBaselineOf(serverPatterns) {
+  return serverPatterns.length > 0 ? serverPatterns : defaultWeekPatterns()
+}
+
 function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
   const query = useAvailability()
   const saveAvailability = useSaveAvailability()
@@ -232,6 +265,10 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
   const [expandedDay, setExpandedDay] = useState(null)
   const [commonApplyInvalid, setCommonApplyInvalid] = useState(false) // 공통 행의 마지막 시도가 거부됐는지(아래 참고)
   const [capacityHours, setCapacityHours] = useState(null) // 가용 시간(phase 1), seeded once below
+  // 시드 여부를 값(capacityHours)이 아니라 별도 플래그로 판정한다 — 아래
+  // 시드 블록의 주석 참조(서버가 null을 주는 계정에서 값만으로는 "아직 안
+  // 받았다"와 "받았는데 값이 없다"를 구분할 수 없다).
+  const [capacitySeeded, setCapacitySeeded] = useState(false)
 
   // Seed the draft the moment the query first resolves — done DURING render
   // (not inside a useEffect) per the "adjust state during render, don't
@@ -239,10 +276,20 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
   // self-limiting (it can only ever fire once, ever), so there is no
   // cascading-render risk an effect's own extra render/commit cycle would add.
   if (query.data && draft === null) {
-    setDraft(query.data)
+    // 서버가 빈 목록을 주면(=아직 한 번도 저장 안 한 계정) 7행 기본값으로
+    // 시드한다 — defaultWeekPatterns 헤더 참조.
+    setDraft(rangeBaselineOf(query.data))
   }
-  if (capacityQuery.data != null && capacityHours === null) {
-    setCapacityHours(capacityQuery.data / 60)
+  // 🔴 `capacityQuery.data != null`을 시드 조건으로 걸면 안 된다 (W6 실서버
+  // 실측 2026-08-23). 서버는 가용 시간을 아직 안 정한 계정에 200과 함께
+  // `weeklyAvailableMinutes: null`을 준다 — 그러면 이 블록이 영원히 건너뛰어져
+  // capacityHours가 null로 남고, 아래 카드의 `loading` prop이 계속 참이라
+  // 입력이 영영 로딩 상태에 갇힌다. 즉 처음 값을 넣어야 할 사용자가 바로 그
+  // 이유로 아무것도 못 넣는다.
+  // 쿼리가 "끝났는지"로 판정하고, 값이 없으면 0시간으로 시드한다.
+  if (!capacityQuery.isLoading && !capacitySeeded) {
+    setCapacityHours((capacityQuery.data ?? 0) / 60)
+    setCapacitySeeded(true)
   }
 
   // Thomas 리뷰 MAJOR fix — commonStart/commonEnd를 별도 state로 얼려 두지
@@ -259,11 +306,21 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
     [draft],
   )
 
-  const rangeDirty = draft !== null && query.data != null && JSON.stringify(draft) !== JSON.stringify(query.data)
+  // dirty 기준을 raw 서버 응답이 아니라 rangeBaselineOf(=시드와 같은 규칙)로
+  // 잡는다 — 빈 목록을 기본 7행으로 시드한 직후에 화면이 곧바로 "저장 안 된
+  // 변경"으로 잡혀 이탈 경고가 뜨는 것을 막는다. state가 아니라 파생값인
+  // 이유: 저장 성공 시 onMutate가 query 캐시를 draft로 낙관 갱신하고, 그
+  // 갱신이 그대로 여기에 반영돼야 rangeDirty가 자연히 false로 떨어진다
+  // (handleSave 주석의 그 메커니즘 — state로 얼려 두면 깨진다).
+  const rangeBaseline = query.data == null ? null : rangeBaselineOf(query.data)
+  const rangeDirty =
+    draft !== null && rangeBaseline !== null && JSON.stringify(draft) !== JSON.stringify(rangeBaseline)
+  // 서버 값이 없을 때(null)를 0으로 취급해 비교한다 — `capacityQuery.data != null`
+  // 을 조건으로 걸면 값이 아직 없는 계정에서 dirty가 영원히 거짓이라, 사용자가
+  // 처음 값을 입력해도 저장 버튼이 열리지 않는다(위 시드 블록과 같은 원인).
+  // 시드 직후에는 capacityHours가 (data ?? 0)/60이라 dirty=false로 시작한다.
   const capacityDirty =
-    capacityHours !== null &&
-    capacityQuery.data != null &&
-    snapToHalfHour(capacityHours * 60) !== capacityQuery.data
+    capacitySeeded && snapToHalfHour(capacityHours * 60) !== (capacityQuery.data ?? 0)
   // 두 draft(요일별 범위 · 가용 시간)를 하나의 dirty 신호로 합친다 — 이유는
   // WeeklyAvailableTimeCard 주석 참고(별도 effect가 서로의 markClean을
   // 덮어쓰는 경합을 막는다).
@@ -414,7 +471,7 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
         onSave={handleSaveCapacity}
         saving={updateCapacity.isPending}
         dirty={capacityDirty}
-        loading={capacityQuery.isLoading || capacityHours === null}
+        loading={capacityQuery.isLoading || !capacitySeeded}
         error={capacityQuery.isError}
         onRetry={() => capacityQuery.refetch()}
         hideSave={embedded}

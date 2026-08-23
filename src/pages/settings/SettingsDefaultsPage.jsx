@@ -35,11 +35,22 @@ function SettingsDefaultsPage() {
   const markClean = useAppStore((s) => s.markClean)
 
   const [selected, setSelected] = useState(null)
+  // 🔴 시드 완료 여부를 `selected === null`로 판정하면 안 된다 (W6 실서버 실측
+  // 2026-08-23). 서버는 기본 전략을 아직 안 정한 계정에 `defaultReplanStrategy:
+  // null`을 준다 — 그러면 setSelected(null)이 되어 종료 조건이 영원히 참으로
+  // 남고, 렌더마다 다시 setState를 불러 무한 리렌더로 이 화면이 통째로 죽었다
+  // (데스크톱에서 /settings가 이 화면으로 리다이렉트하므로 "설정에 들어가면
+  // 문제가 발생했습니다"로 보였다). 목 데이터는 항상 전략 값을 갖고 있어서
+  // 이 결함이 실서버에 붙기 전까지 드러나지 않았다.
+  // 시드 여부는 값과 분리된 별도 플래그로 판정한다 — null도 "정상적으로 시드된
+  // 값"(=아직 아무 안도 고르지 않음)이기 때문이다.
+  const [seeded, setSeeded] = useState(false)
 
   // Seed during render, not in an effect — see SettingsAvailabilityPage's own
-  // comment on this exact pattern (`selected === null` makes it self-limiting).
-  if (preferencesQuery.data && selected === null) {
+  // comment on this exact pattern (`seeded` makes it self-limiting).
+  if (preferencesQuery.data && !seeded) {
     setSelected(preferencesQuery.data.defaultReplanStrategy)
+    setSeeded(true)
   }
 
   const isDirty =
@@ -53,7 +64,10 @@ function SettingsDefaultsPage() {
   }, [isDirty, markDirty, markClean])
   useEffect(() => () => markClean(), [markClean])
 
-  if (preferencesQuery.isLoading || selected === null) {
+  // `selected === null`이 아니라 `!seeded`로 판정한다 — 아직 아무 안도 고르지
+  // 않은 계정(서버가 null을 주는 경우)에서 selected는 정상적으로 null이며,
+  // 그걸 "로딩 중"으로 오해하면 화면이 영영 스켈레톤에 머문다.
+  if (preferencesQuery.isLoading || !seeded) {
     return <LoadingSkeleton preset="card" />
   }
   if (preferencesQuery.isError) {
