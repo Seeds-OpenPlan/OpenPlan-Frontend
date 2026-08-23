@@ -31,13 +31,36 @@ import { unwrapList } from '../../api/unwrap'
  * keeps the chip's OWN displayed label ("최근 … 편차 반영: N분") consistent
  * with what actually gets applied, rather than showing one number and
  * setting another.
+ *
+ * [W6 리뷰 M2 수정] 응답 필드는 정본(openapi-live-76c7009.yaml)의
+ * `CorrectionProposal.proposedEstimatedMinutes`로 읽는다 — 이전엔 계약에 없는
+ * `r.suggestedMinutes`를 읽고 있어서 이 함수는 항상
+ * `snapDuration(undefined)`를 반환했다(BE가 404라 mock으로만 가려져 있었을
+ * 뿐, 회귀는 아니었지만 이 엔드포인트가 실제로 열리는 순간 바로 터졌을 코드).
+ * 이 함수 자체의 반환 모양(`{category, suggestedMinutes, sampleSize}`)은
+ * TaskEditModal이 그대로 의존하고 있어(소유 경로 밖) 바꾸지 않는다 —
+ * 여기서 계약 이름을 읽어 그 모양으로만 다시 조립한다.
+ *
+ * 쿼리 파라미터도 `category`(계약에 없음) → `categoryId`로 이름만 맞췄다.
+ * 다만 주의: 정본 스키마는 `categoryId`를 UUID로 정의하는데, 이 함수의
+ * `category` 인자는 실제로는 카테고리 "표시명" 문자열이다(TaskEditModal이
+ * `selectedCategoryName`을 넘긴다 — 그 파일 441~447행 주석 참고, "이 [가정—
+ * 확장] 엔드포인트는 categoryId가 아니라 이름으로 그룹화한다"는 전제가 계약
+ * 확인 이전부터 있었다). 이름만 `categoryId`로 바꾸고 값은 여전히 이름을
+ * 보내는 채로 둔 것은 절반의 정합일 뿐이다 — 이 엔드포인트는 BE
+ * 미구현(x-implementation-status: not-implemented)이라 지금은 무해하지만,
+ * 실제로 구현되면 이름 기반 그룹화 전제 자체(TaskEditModal/StatisticsPage
+ * 세 곳에 퍼져 있음, 이 함수의 소유 경로 밖)를 categoryId 기반으로 다시
+ * 설계해야 한다 — 리드에게 별도 보고.
  */
 export function getCorrectionProposal(category) {
   if (!category) return Promise.resolve(null)
   return withDevFallback(
-    () => apiClient.get('/stats/correction-proposals', { params: { category } }),
+    () => apiClient.get('/stats/correction-proposals', { params: { categoryId: category } }),
     () => mockBackend.getCorrectionProposal(category),
-  ).then((r) => (r ? { ...r, suggestedMinutes: snapDuration(r.suggestedMinutes) } : r))
+  ).then((r) =>
+    r ? { category, suggestedMinutes: snapDuration(r.proposedEstimatedMinutes), sampleSize: r.sampleSize } : r,
+  )
 }
 
 // --- ST-F1-11: 수행 통계 -----------------------------------------------------

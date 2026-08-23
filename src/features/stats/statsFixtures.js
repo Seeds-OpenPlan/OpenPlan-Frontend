@@ -21,11 +21,15 @@
 const MOCK_LATENCY_MS = 60
 const delay = (ms = MOCK_LATENCY_MS) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// category -> { suggestedMinutes, sampleSize }. suggestedMinutes is what the
-// chip offers to fill the 예상시간 field with on click (never automatically).
+// category -> CorrectionProposal(계약) 그대로의 모양. [W6 리뷰 M2 수정] 이전엔
+// 계약에 없는 `suggestedMinutes` 키를 썼다 — statsApi.js가 정본 필드명
+// (`proposedEstimatedMinutes`)으로 읽도록 고쳤으니 mock도 같은 모양으로
+// 맞춘다(실 서버가 이 라우트를 열었을 때 dev에서 처음 보는 모양이 아니게).
+// `proposedEstimatedMinutes`는 statsApi.js의 getCorrectionProposal이 5분
+// 단위로 스냅해 "제안 칩" 클릭 시 예상시간 필드에 그대로 채운다.
 const PROPOSALS = {
-  코딩테스트: { suggestedMinutes: 75, sampleSize: 6 },
-  취업준비: { suggestedMinutes: 100, sampleSize: 4 },
+  코딩테스트: { proposedEstimatedMinutes: 75, basis: '해당 카테고리 최근 편차율 +25% 반영', sampleSize: 6 },
+  취업준비: { proposedEstimatedMinutes: 100, basis: '해당 카테고리 최근 편차율 +20% 반영', sampleSize: 4 },
   // 자기계발: intentionally absent.
 }
 
@@ -132,7 +136,10 @@ export const mockBackend = {
     await delay()
     const entry = PROPOSALS[category]
     if (!entry) return null
-    return { category, ...entry }
+    // 계약(CorrectionProposal)엔 category 필드가 없다 — 위 PROPOSALS를 그대로
+    // 반환한다(호출자가 어떤 category로 찾았는지는 statsApi.js가 이미 알고
+    // 있으므로 응답에 되돌려 받을 필요가 없다).
+    return { ...entry }
   },
 
   async getStatsSummaries(period) {

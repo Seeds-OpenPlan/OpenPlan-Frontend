@@ -93,6 +93,13 @@ function normalizeStatusBoard(statusBoard) {
 function normalizeTodayItem(item) {
   return {
     id: item.planBlockId,
+    // DashboardView.todayBoard.items의 `title`이 정규화에서 빠져 있었다 —
+    // TodayBoard.jsx:107이 `{item.title}`을 그대로 렌더하므로 이 필드가 없으면
+    // 모든 행이 시간만 보이고 제목이 항상 undefined였다(W6 리뷰 B1). 계약에
+    // 있는 필드라 `?? ''` 같은 임의 폴백을 씌우지 않는다 — 서버가 언젠가 정말
+    // title을 안 보내는 경우가 생기면 그 결손이 화면에 그대로 드러나야 다음
+    // 회귀도 이번처럼 즉시 눈에 띈다.
+    title: item.title,
     timeLabel: formatTimeKO(item.startAt),
     // 서버는 항목 종류를 별도 필드로 안 준다 — taskId가 없는 행은 애초에 붙을
     // 태스크가 없는 고정 일정 행이라는 뜻이므로(같은 전제를 TodayBoard.jsx의
