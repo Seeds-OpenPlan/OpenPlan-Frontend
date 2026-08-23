@@ -54,6 +54,13 @@ export function useUpdateWeeklyAvailableMinutes() {
     mutationFn: updateWeeklyAvailableMinutes,
     onSuccess: (data) => {
       queryClient.setQueryData(weeklyAvailableMinutesKey(), data)
+      // W6: 가용 시간·기본값은 이제 같은 서버 리소스(/users/me/preferences)를
+      // 공유한다(settingsApi.js 헤더 참조) — 이 캐시(weeklyAvailableMinutesKey)만
+      // 갱신하면 기본값 화면이 이미 열어 둔 preferencesKey 캐시는 이 쓰기를
+      // 모른 채 stale하게 남는다. invalidate로 그 화면이 다음에 읽을 때 최신
+      // 세 필드를 다시 받게 한다(즉시 반영이 급한 화면이 아니라 setQueryData
+      // 대신 invalidate로 충분하다).
+      queryClient.invalidateQueries({ queryKey: preferencesKey() })
       toast({ tone: 'success', message: '가용 시간을 저장했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
@@ -159,6 +166,8 @@ export function useUpdatePreferences() {
     mutationFn: updatePreferences,
     onSuccess: (data) => {
       queryClient.setQueryData(preferencesKey(), data)
+      // W6: 반대 방향 무효화 — 위 useUpdateWeeklyAvailableMinutes의 같은 주석 참조.
+      queryClient.invalidateQueries({ queryKey: weeklyAvailableMinutesKey() })
       toast({ tone: 'success', message: '기본값을 저장했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
@@ -264,12 +273,28 @@ export function useUpdateAccount() {
   })
 }
 
+/**
+ * W6 PATH CORRECTION (settingsApi.deactivateAccount 자신의 헤더 참고): 실
+ * DELETE /users/me는 `{ recoverableUntil }` 하나만 돌려준다 — mock(DEV
+ * fallback)은 여전히 `{ ...account, status, deactivatedAt }` 전체를 돌려준다.
+ * 두 모양이 다르므로 응답을 캐시에 그대로 덮어쓰지 않고(예전엔 그렇게
+ * 했었다 — 실서버로 붙는 순간 name/email 등 나머지 계정 필드가 통째로
+ * 사라졌을 것이다) 기존 캐시 위에 안전하게 병합한다. `status`/
+ * `deactivatedAt`은 UserProfile 계약 자체에 없는 필드라([가정-확장] 그대로,
+ * settingsApi.js 주석 참조) 실서버 응답에 그 키가 없으면 여기서 직접
+ * 채워 넣는다.
+ */
 export function useDeactivateAccount() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: deactivateAccount,
     onSuccess: (data) => {
-      queryClient.setQueryData(accountKey(), data)
+      queryClient.setQueryData(accountKey(), (curr) => ({
+        ...curr,
+        ...data,
+        status: data?.status ?? 'DEACTIVATED',
+        deactivatedAt: data?.deactivatedAt ?? curr?.deactivatedAt ?? new Date().toISOString(),
+      }))
       toast({ tone: 'info', message: '계정을 비활성화했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),

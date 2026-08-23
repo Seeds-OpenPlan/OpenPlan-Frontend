@@ -1,16 +1,18 @@
 /*
-  OP functions for the ST-F1-12 설정 screens. 기본값(preferences)·제안
-  (suggestions)·계정(account)·알림(notification-settings)은 여전히 07 API
-  명세서에 없는 [가정-확장]이다(개별 플래그, 일방적 확정 아님). **연동
-  (connections)만 예외** — W6(2026-08-23)에 `/external-calendar-connections`
-  계약이 확정돼 [가정-확장] 딱지를 뗐다(그 섹션 자신의 헤더 코멘트 참조).
+  OP functions for the ST-F1-12 설정 screens. 계정(account, deactivate 제외)·
+  알림(notification-settings)은 여전히 07 API 명세서에 없는 [가정-확장]이다
+  (개별 플래그, 일방적 확정 아님). **연동(connections)·기본값+가용 시간
+  (preferences)·계정 비활성화는 예외** — W6(2026-08-23)에 그 계약들이 확정돼
+  [가정-확장] 딱지를 뗐다(각 섹션 자신의 헤더 코멘트 참조).
 
   가용 시간 범위·고정 일정·주차 예외 already have a REAL contract
   (ST-B1-09/ST-B2-12/13) and are NOT re-declared here — screens read those
   straight from `features/plan/planApi.js` and
   `features/plan/fixedScheduleApi.js`. "가용 시간"(사용자 입력 주간 목표치,
-  아래 §가용 시간 섹션)은 그 REAL 계약에 없는 필드라 여기 [가정-확장]으로 산다
-  (오너 결정 2026-07-25 — phase 1, 설정 화면 한정).
+  아래 §기본값+가용 시간 섹션)은 그 REAL availabilities 계약과는 별개 필드지만,
+  W6부터는 `/users/me/preferences`라는 REAL 리소스의 일부다(더 이상
+  [가정-확장] 아님 — 오너 결정 2026-07-25가 정한 "범위 합과 다른 개념"이라는
+  구분 자체는 그대로 유지).
 
   Reuses planApi's withDevFallback (the one shared mock-fallback rule — see
   that function's own header) rather than redefining it a third/fourth time,
@@ -21,55 +23,107 @@ import { withDevFallback } from '../plan/planApi'
 import { mockBackend } from './settingsFixtures'
 import { unwrapList } from '../../api/unwrap'
 
-// --- 가용 시간 (사용자 입력, phase 1) ------------------------------------------------
-// [가정-확장] — ST-B1-09 availabilities 계약엔 없는 필드. 실 Swagger 확정 시
-// 이 리소스 경로/모양이 통째로 바뀔 수 있어 별도 엔드포인트로 분리해 둔다
-// (기존 /users/me/availabilities와는 무관 — 가용 시간 범위 patterns를 건드리지
-// 않는다).
+// --- 기본값 + 가용 시간 (FIX-10~12, W6 계약 정합 2026-08-23) ----------------------
+//
+// W6 PATH CORRECTION (팀장 지시, 근거: 오민아 실서버 실측 목록 ①-B): 가용
+// 시간(사용자 입력 주간 목표치)과 기본값(예상 시간 기본값·재계획 전략
+// 기본값)은 이전엔 서로 다른 [가정-확장] 엔드포인트 — GET/PUT
+// `/users/me/availability-target`(가용 시간 전용) vs GET/PATCH
+// `/users/me/preferences`(기본값 전용) — 로 나뉘어 있었지만, 실제로는
+// `/users/me/preferences` 하나의 REAL 리소스가 세 필드를 함께 들고 있다:
+// `{ defaultEstimatedMinutes, defaultReplanStrategy, weeklyAvailableMinutes }`.
+//
+// 🔴 가용 시간 저장이 막혀 있던 원인이 이것이다(8/23 실서버 로그 실측): 가용
+// 시간 화면이 먼저 (더 이상 존재하지 않는) `availability-target`을 GET해
+// 404를 받고, 그 뒤로 진짜 저장 PUT조차 서버에 나가지 못했다.
+//
+// 🔴 PUT은 전체 교체다(정본 문구). 세 필드 중 하나만 바꿔도 나머지 둘을 함께
+// 싣지 않으면 서버가 그 값들을 null로 지운다 — 그래서 모든 쓰기가
+// `putPreferences`(먼저 GET으로 현재 세 필드를 받고 그 위에 patch를 얹어
+// PUT하는 read-modify-write) 하나를 거친다.
+//
+// 기존에 이 리소스를 쓰던 두 화면(가용 시간 화면·기본값 화면)은 이미
+// `getWeeklyAvailableMinutes`/`updateWeeklyAvailableMinutes`와
+// `getPreferences`/`updatePreferences`라는 서로 다른 함수 이름 4개로 나뉘어
+// 있었다 — 그 네 함수의 시그니처(인자·반환 모양)는 그대로 두고 내부만 이
+// 하나의 공유 리소스로 합친다. 화면·훅(useSettings.js) 어느 쪽도 호출
+// 형태를 바꿀 필요가 없다.
 
-/** GET /users/me/availability-target ([가정-확장]). Returns `{ weeklyAvailableMinutes }`. */
-export function getWeeklyAvailableMinutes() {
-  return withDevFallback(
-    () => apiClient.get('/users/me/availability-target'),
-    () => mockBackend.getWeeklyAvailableMinutes(),
-  ).then((r) => r?.weeklyAvailableMinutes)
+/** GET 응답을 세 필드 다 갖춘 모양으로 고정한다 — 서버가 아직 값이 없는
+ * 필드를 아예 생략해 보내도(신규 사용자 등) `undefined`가 아니라 `null`로
+ * 떨어지게 해, merge(`{...current, ...patch}`)가 실수로 필드를 빠뜨리지
+ * 않도록 한다. */
+function normalizePreferences(r) {
+  return {
+    defaultEstimatedMinutes: r?.defaultEstimatedMinutes ?? null,
+    defaultReplanStrategy: r?.defaultReplanStrategy ?? null,
+    weeklyAvailableMinutes: r?.weeklyAvailableMinutes ?? null,
+  }
 }
 
-/** PUT /users/me/availability-target ([가정-확장]). `minutes`는 5분 배수(공통 불변식 E-COM-009). */
-export function updateWeeklyAvailableMinutes(minutes) {
-  return withDevFallback(
-    () => apiClient.put('/users/me/availability-target', { weeklyAvailableMinutes: minutes }),
-    () => mockBackend.updateWeeklyAvailableMinutes(minutes),
-  ).then((r) => r?.weeklyAvailableMinutes)
-}
-
-// --- 기본값 (FIX-10~12) -----------------------------------------------------------
-
-/** GET /users/me/preferences ([가정-확장]). */
+/** GET /users/me/preferences. 세 필드(기본 예상 시간·기본 재계획 전략·가용
+ * 시간)를 한 번에 돌려준다 — 기본값 화면·가용 시간 화면 둘 다 (직접 또는
+ * `getWeeklyAvailableMinutes`를 통해) 이 하나의 GET을 공유한다. */
 export function getPreferences() {
   return withDevFallback(
     () => apiClient.get('/users/me/preferences'),
     () => mockBackend.getPreferences(),
-  )
+  ).then(normalizePreferences)
 }
 
-/** PATCH /users/me/preferences ([가정-확장]). `patch` = { defaultReplanStrategy }. */
-export function updatePreferences(patch) {
-  return withDevFallback(
-    () => apiClient.patch('/users/me/preferences', patch),
-    () => mockBackend.updatePreferences(patch),
-  )
+/** 가용 시간 화면 전용 read. 같은 GET에서 한 필드만 골라 쓴다 — 이 함수의
+ * 반환 모양(bare number)은 기존 그대로 유지해, 그 화면의 `capacityQuery.data`
+ * 소비 코드를 고칠 필요가 없게 한다. */
+export function getWeeklyAvailableMinutes() {
+  return getPreferences().then((p) => p.weeklyAvailableMinutes)
 }
 
 /**
- * GET /users/me/preferences/suggestions ([가정-신규], RB-FIX-01). Returns
- * `{ suggestedStrategy, reason, sampleSize }` or `null` when there is no
- * suggestion (short-circuits like stats' getCorrectionProposal) — that "no
- * suggestion" state must stay reachable, not just papered over with a fake one.
+ * PUT /users/me/preferences — read-modify-write 본체. `patch`가 세 필드 중
+ * 무엇이든(가용 시간 하나든 재계획 전략 하나든) 먼저 GET으로 현재 값을 전부
+ * 받고 그 위에 얹어 통째로 PUT한다 — PUT 전체 교체이므로 이렇게 하지 않으면
+ * patch에 없는 나머지 필드가 서버에서 null로 지워진다(위 섹션 헤더 참조).
+ * 두 공개 write 함수(updatePreferences/updateWeeklyAvailableMinutes)가 이
+ * 하나의 헬퍼를 공유해, read-modify-write 로직이 두 곳에 따로 살지 않는다.
+ */
+function putPreferences(patch) {
+  return getPreferences().then((current) => {
+    const body = { ...current, ...patch }
+    return withDevFallback(
+      () => apiClient.put('/users/me/preferences', body),
+      () => mockBackend.updatePreferences(body),
+    ).then(normalizePreferences)
+  })
+}
+
+/** 기본값 화면(SettingsDefaultsPage) 전용 write. `patch` = 예:
+ * `{ defaultReplanStrategy }` — read-modify-write 뒤 갱신된 세 필드 전체를
+ * 돌려준다(화면은 그중 defaultReplanStrategy만 읽는다). */
+export function updatePreferences(patch) {
+  return putPreferences(patch)
+}
+
+/** 가용 시간 화면(SettingsAvailabilityPage) 전용 write. `minutes`는 5분
+ * 배수(공통 불변식 E-COM-009) — read-modify-write 뒤 그 필드 하나만 돌려준다
+ * (반환 모양을 기존 그대로 유지 — `useUpdateWeeklyAvailableMinutes`의
+ * 캐시가 bare number를 기대한다). */
+export function updateWeeklyAvailableMinutes(minutes) {
+  return putPreferences({ weeklyAvailableMinutes: minutes }).then((p) => p.weeklyAvailableMinutes)
+}
+
+/**
+ * GET /users/me/preference-suggestions (RB-FIX-01). W6 PATH CORRECTION
+ * (팀장 지시): 이전 `/users/me/preferences/suggestions`에서 주소만 바뀌었다
+ * — 계약(openapi-live-76c7009.yaml)엔 아직 `x-implementation-status:
+ * not-implemented`로 남아 있어([미구현], 서버 미제공) 응답을 못 받을 때는
+ * 지금처럼 mock 폴백으로 흡수한다. 실제로 뜨면 `{ suggestedStrategy, reason,
+ * sampleSize }` 또는 이력 부족 시 `null`(오류 아님)을 기대한다 — 그 "제안
+ * 없음" 상태는 stats의 getCorrectionProposal처럼 계속 재현 가능해야 하므로
+ * 가짜 값으로 덮지 않는다.
  */
 export function getSuggestion() {
   return withDevFallback(
-    () => apiClient.get('/users/me/preferences/suggestions'),
+    () => apiClient.get('/users/me/preference-suggestions'),
     () => mockBackend.getSuggestion(),
   )
 }
@@ -250,10 +304,22 @@ export function updateAccount(patch) {
   )
 }
 
-/** POST /users/me/deactivation ([가정-확장], ACCT-01 진입 이후 실제 확정). */
+/**
+ * DELETE /users/me (W6 PATH CORRECTION, 팀장 지시 — 이전 `POST
+ * /users/me/deactivation` [가정-확장]에서 주소·메서드 둘 다 바뀌었다).
+ *
+ * ⚠️ 응답 모양이 이전 mock과 다르다: 계약은 `{ recoverableUntil }`
+ * (복구 가능 마감 시각) 하나뿐이다 — `status`/`deactivatedAt`/
+ * `reactivationDeadlineDays` 같은 필드는 계약에 없다(GET /users/me가 돌려주는
+ * UserProfile 스키마 자체에도 이 필드들이 없다 — 계정 상태 표시는 여전히
+ * [가정-확장]인 채로 남는다, 팀장 보고 대상). 그래서 이 함수는 서버 응답을
+ * 그대로 캐시에 덮어쓰지 않고 `recoverableUntil`만 넘긴다 — 기존 계정 캐시
+ * 필드(name/email 등)를 보존한 채 병합하는 건 호출부(useSettings.js의
+ * useDeactivateAccount)의 몫이다.
+ */
 export function deactivateAccount() {
   return withDevFallback(
-    () => apiClient.post('/users/me/deactivation'),
+    () => apiClient.delete('/users/me'),
     () => mockBackend.deactivateAccount(),
   )
 }

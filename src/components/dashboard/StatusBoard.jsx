@@ -25,7 +25,20 @@ import { formatDurationKO } from '../../features/plan/planTime'
   메타 영역 전체를 한 줄로 그린다. 이 병합과 함께 "가용시간 조정 →" 텍스트
   링크도 목업에 없어 제거됐다(오너 확인) — /settings 진입은 이 카드가 아닌
   다른 도선이 계속 담당한다.
+
+  계약 정합 delta (W6, 2026-08-23): 위 메타 줄(집중 시간 · 손 볼 요일)이
+  통째로 빠졌다. `focusWindow`도 `adjustDays`도 실제 `DashboardView` 계약
+  (openapi-live-76c7009.yaml)엔 없는 필드다 — 서버가 준 적 없는 값을 있는
+  척 렌더하느니 그 줄 자체를 없앴다. `adjustDays`가 가리키던 DASH-07(요일별
+  잔여 가용 %)은 계약에 `busyWeekdays`로 새로 생겼지만, 이번 작업 범위는
+  데이터 계층에서 받아 두는 것까지다(dashboardApi.js 참고) — 이 카드에 다시
+  그 줄을 그리는 건 별도 스토리.
 */
+// TIGHT은 결정문 §4.5가 정의해 둔 세 번째 상태이지만, 실제 서버는 `status`
+// 단어 자체를 안 주고 `deltaMinutes`의 부호만 준다(dashboardApi.js의
+// normalizeStatusBoard 참고) — 부호 하나로는 OK/OVERLOAD 둘만 구분되므로
+// TIGHT은 지금 어떤 입력으로도 선택되지 않는다. 미래에 실제 임계값이
+// 계약에 추가되면 이 표는 그대로 두고 유도 함수만 갱신하면 된다.
 const STATUS_COPY = {
   OK: { label: '무리 없음', textClass: 'text-text' },
   TIGHT: { label: '여유 부족', textClass: 'text-warning-700' },
@@ -38,8 +51,6 @@ export function StatusBoard({
   status = 'OK',
   plannedMinutes = 0,
   availableMinutes = 0,
-  focusWindow,
-  adjustDays = [],
   onOpenWeekly,
 }) {
   if (error) {
@@ -151,33 +162,6 @@ export function StatusBoard({
           </div>
         </div>
       </div>
-
-      {/* 메타 영역: 집중 시간 · 손 볼 요일, 한 줄(오너 목업). 여유/초과
-          텍스트는 더 이상 여기 없다 — 진행바 hover 툴팁으로 옮겨갔다(위
-          timeDetailLabel 참고). 손 볼 요일은 비인터랙티브(노출까지만 — r1과
-          동일) — 있으면 칩으로, 없으면 "없음" 텍스트로 같은 줄에 붙는다.
-          칩에는 sr-only로 "손 볼 요일" 문맥을 앞세워, 시각적으로는 목업처럼
-          한 줄이면서도 스크린 리더는 칩이 무엇인지 알 수 있게 한다(AC-2, %
-          텍스트도 칩 안에 병기돼 색 단독 구분이 아니다). */}
-      <p className="mt-3 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-label text-text-muted tabular-nums">
-        {focusWindow && <>집중 {focusWindow}</>}
-        {focusWindow && <span aria-hidden="true">·</span>}
-        {adjustDays.length === 0 ? (
-          <>손 볼 요일 없음</>
-        ) : (
-          <>
-            <span className="sr-only">손 볼 요일</span>
-            {adjustDays.map((d) => (
-              <span
-                key={d.dayLabel}
-                className="rounded-chip bg-warning-50 px-2 py-1 text-caption font-medium text-warning-700"
-              >
-                {d.dayLabel} · 잔여 {d.remainingPercent}%
-              </span>
-            ))}
-          </>
-        )}
-      </p>
 
       {/* CTA: normal-flow full-width row on mobile; pinned to the card's
           top-right corner on desktop (md:relative on the card above makes

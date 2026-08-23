@@ -192,12 +192,28 @@ export async function patchTaskStatus(taskId, completed, version) {
 }
 
 /**
- * OP-TASK-EXEC → POST /tasks/{taskId}/execution-records (PLAN-15 실제 시간 기록).
- * Body: { startedAt, endedAt, actualMinutes, memo }. Returns { executionRecordId }.
+ * OP-TASK-EXEC → POST /tasks/{taskId}/execution-logs (PLAN-15 실제 시간 기록).
+ *
+ * W6 PATH CORRECTION (팀장 지시, 2026-08-23): 주소가 `execution-records` →
+ * `execution-logs`로 바뀌었다.
+ *
+ * ⚠️ CONTRACT GAP (§보고, BE-2 확인 필요): 계약의 요청 바디는
+ * `{ startedAt, endedAt, actualMinutes, result, memo? }`로 `result`(enum
+ * COMPLETED/DELAYED/ABORTED)가 **필수**다. 이 함수를 호출하는 두 화면
+ * (WeeklyPage.jsx·HomePage.jsx의 "실제 시간 기록" 모달, 둘 다 이 파일 밖 소유)
+ * 은 `{ startedAt, endedAt, actualMinutes, memo }`만 모아 보내고 `result`를
+ * 고를 UI 자체가 없다 — result 없이 보내면 계약상 422다. 이 화면들을 새로
+ * 만들지 않는 한 매번 실패하므로, 여기서 잠정 기본값 `'COMPLETED'`를 채워
+ * 보낸다(지연/중단 기록을 구분할 수 없다는 뜻 — 정확한 값이 아니라 "일단
+ * 422를 막는" 임시 조치다). 그 두 모달에 결과 선택 UI를 추가하는 건 그
+ * 컴포넌트를 소유한 담당자의 몫이라 여기서 만들지 않는다 — 완결 시 이
+ * 기본값을 지우고 `body.result`를 그대로 요구하면 된다.
+ *
+ * Returns the created ExecutionLog.
  *
  * Guards `taskId` explicitly rather than letting a missing one silently
  * become the literal string "undefined" in the URL (`POST
- * /tasks/undefined/execution-records`) — the mock backend below never
+ * /tasks/undefined/execution-logs`) — the mock backend below never
  * validates its `taskId` argument at all, so this call used to succeed
  * against the mock while a real server would 404/400 it. The caller (dashboard
  * TodayBoard's [기록] button) is now gated on `item.taskId` existing before
@@ -208,8 +224,9 @@ export function postExecutionRecord(taskId, body) {
   if (taskId == null) {
     return Promise.reject(new Error('postExecutionRecord: taskId is required'))
   }
+  const request = { result: 'COMPLETED', ...body } // see CONTRACT GAP note above
   return withDevFallback(
-    () => apiClient.post(`/tasks/${taskId}/execution-records`, body),
-    () => mockBackend.logExecution(taskId, body),
+    () => apiClient.post(`/tasks/${taskId}/execution-logs`, request),
+    () => mockBackend.logExecution(taskId, request),
   )
 }

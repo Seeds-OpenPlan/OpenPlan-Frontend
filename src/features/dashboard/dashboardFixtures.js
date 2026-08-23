@@ -1,21 +1,28 @@
 /*
-  DEV-only mock for GET /dashboard (OP-DASH-ASSEMBLE). The real backend still
-  exposes five separate endpoints (07번 API CSV: weekly-status · todo-items ·
-  risk-solutions · today-execution · weekly-impact) — ui-spec §DASH adopts a
-  single assembled call as the FE contract pending a real BE-1 endpoint, so this
-  file stands in for that assembly, shaped to the ui-spec §DASH data-key table
-  (NOT the five raw CSV bodies). Same dev-fallback convention as planFixtures.js:
-  only ever reached in DEV, only on a network error (dashboardApi.js).
+  DEV-only mock for GET /dashboard (OP-DASH-ASSEMBLE). Shaped to the REAL
+  `DashboardView` server contract (W6, 2026-08-23 — `.agent-team/
+  04-architecture/openapi-live-76c7009.yaml`), not the old FE-invented shape:
+  this mock's output goes through the exact same `normalizeDashboard`
+  (dashboardApi.js) a real response does, so it has to look like what the
+  server actually sends (statusBoard/priorityAction/riskIssues/todayBoard/
+  weeklyImpactProjects/busyWeekdays) — a mock still shaped like the old guess
+  would silently normalize into something a real response never produces,
+  which defeats the point of having dev and prod agree. Same dev-fallback
+  convention as planFixtures.js: only ever reached in DEV, only on a network
+  error (dashboardApi.js's withDevFallback).
 
-  Numbers below intentionally mirror the Desktop.Dashboard.png reference (6시간
-  30분/45시간 · 14% · 자료구조 53% 등) so a fresh checkout renders the exact
-  screen the design was reviewed against.
+  Numbers below still intentionally mirror the Desktop.Dashboard.png reference
+  (6시간 30분/45시간 · 14% · 자료구조 53% 등) where the new leaner contract still
+  has a field for them — DASH-06 (weeklyImpactProjects) no longer carries
+  minutes/percent at all (badges only), so that reference detail (자료구조
+  53%) can't be reproduced here anymore; see ImpactList.jsx's own header for
+  why.
 */
 
 const MOCK_LATENCY_MS = 120
 const delay = (ms = MOCK_LATENCY_MS) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// Today's date at a fixed hour, for the S3 today-execution rows — real hours so
+// Today's date at a fixed hour, for the todayBoard rows — real hours so
 // ExecutionLogForm's duration math (endAt - startAt) behaves normally regardless
 // of what day this mock happens to run on.
 function todayAt(hour, minute = 0) {
@@ -35,139 +42,101 @@ export async function mockDashboard() {
   const task3Start = todayAt(14)
 
   return {
-    planStatus: 'DRAFT',
-    isEmpty: false,
-
-    weeklyStatus: {
-      status: 'OK',
-      plannedMinutes: 390, // 6시간 30분
-      availableMinutes: 2700, // 45시간
-      focusWindow: '09:00–18:00',
-      adjustDays: [], // 이번 주는 손 볼 요일 없음
+    // DASH-01. plannedMinutes 390(6시간 30분) / availableMinutes 2700(45시간)
+    // → deltaMinutes 2310(여유) — 양수이므로 normalizeStatusBoard가 status
+    // 'OK'를 유도한다(dashboardApi.js 참고).
+    statusBoard: {
+      weekStartDate: new Date().toISOString().slice(0, 10),
+      plannedMinutes: 390,
+      availableMinutes: 2700,
+      deltaMinutes: 2310,
     },
 
-    // r2: 기준 카드가 삭제되면서 "고정일정 충돌 n건"의 유일한 노출점이 risks의
-    // 고정 일정 충돌 행이 됐다(ui-spec-dash.md §DASH.5 "확인 필요→BE" 항목).
-    // 이 mock은 그 요구를 그대로 반영해 같은 `id`를 risks 배열에도 등록해
-    // 둔다 — RiskList의 dedup 경로(같은 id면 그 행에 강조만 얹고 중복 추가
-    // 안 함)가 실제로 타는 데이터.
+    // RB-DASH-01 최상위 1행동. actionType은 실제 서버 enum
+    // (RESOLVE_FIXED_CONFLICT 등, openapi DashboardView 참고) — 구 mock의
+    // FIXED_CONFLICT_RESOLVE 같은 FE 자체 발명 값이 아니다. routePath는
+    // 서버가 직접 주는 목적지라 FE가 actionType→경로를 다시 조립할 필요가
+    // 없다(actionRouting.js는 이제 라벨 카탈로그일 뿐 — 그 파일 헤더 참고).
     priorityAction: {
-      id: 'risk-fixed-conflict',
-      // W3: violationMessages.js's own catalog re-keyed 'V2' → 'V2_FIXED_CONFLICT'
-      // (real server ruleId, see that file's own header) — this code must stay
-      // in sync with it, or dashboardIssueCopy.resolveIssueCopy's own
-      // `violationCatalog[issue.code]` lookup silently misses and this card
-      // falls back to raw server text it was never given (empty label/message).
-      code: 'V2_FIXED_CONFLICT',
-      severity: 'blocking',
-      params: { blockTitle: '회의', otherTitle: '스터디', timeRange: '화요일 14:00–15:00' },
-      actionType: 'FIXED_CONFLICT_RESOLVE',
-      actionParams: {},
+      actionType: 'RESOLVE_FIXED_CONFLICT',
+      reason: '회의가 고정 일정 스터디와 화요일 14:00–15:00에 겹칩니다',
+      routePath: '/weekly',
     },
 
-    todayExecution: {
-      dateLabel: '5월 6일 화요일',
-      expectedMinutes: 210, // 예상 3시간 30분
-      remainingAvailableMinutes: 240, // 남은 가용 4시간
+    todayBoard: {
       items: [
         {
-          id: 'exec-1',
-          timeLabel: '09:00',
-          title: '자료 조사',
-          type: 'TASK',
-          expectedMinutes: 60,
-          isTop: true, // RB-DASH-02 선정 결과 = "오늘 먼저"
-          completed: false,
+          planBlockId: 'block-201',
           taskId: 'task-201',
+          title: '자료 조사',
           startAt: task1Start,
           endAt: addMinutesISO(task1Start, 60),
+          estimatedMinutes: 60,
+          completed: false,
+          selectionRank: 1, // RB-DASH-02 선정 결과 = "오늘 먼저"
         },
         {
-          id: 'exec-2',
-          timeLabel: '11:00',
+          // taskId: null → 고정 일정 행(붙을 태스크가 없다) — normalizeTodayItem이
+          // 이 신호로 type을 'SCHEDULE'로 유도한다(dashboardApi.js 참고).
+          planBlockId: 'block-202',
+          taskId: null,
           title: '스터디',
-          type: 'SCHEDULE',
-          expectedMinutes: 60,
-          isTop: false,
-          completed: false,
           startAt: task2Start,
           endAt: addMinutesISO(task2Start, 60),
+          estimatedMinutes: 60,
+          completed: false,
+          selectionRank: null,
         },
         {
-          id: 'exec-3',
-          timeLabel: '14:00',
-          title: '요약 정리',
-          type: 'TASK',
-          expectedMinutes: 30,
-          isTop: false,
-          completed: true,
+          planBlockId: 'block-203',
           taskId: 'task-202',
+          title: '요약 정리',
           startAt: task3Start,
           endAt: addMinutesISO(task3Start, 30),
+          estimatedMinutes: 30,
+          completed: true,
+          selectionRank: null,
         },
       ],
+      remainingMinutes: 240, // 남은 가용 4시간
     },
 
-    weeklyImpact: {
-      projects: [
-        {
-          projectId: 'proj-1',
-          name: '자료구조',
-          adjustCount: 2,
-          investedMinutes: 205, // 3시간 25분
-          availablePercent: 8,
-          unplacedCount: 1,
-          sharePercent: 53,
-        },
-        {
-          projectId: 'proj-2',
-          name: '취업 준비',
-          adjustCount: 1,
-          investedMinutes: 125, // 2시간 5분
-          availablePercent: 5,
-          unplacedCount: 0,
-          sharePercent: 32,
-        },
-      ],
-    },
+    weeklyImpactProjects: [
+      // impactBadges만 있고 investedMinutes/sharePercent 등은 계약에 없다 —
+      // ImpactList.jsx는 더 이상 진행바/퍼센트를 렌더하지 않는다.
+      { projectId: 'proj-1', name: '자료구조', impactBadges: ['HAS_UNASSIGNED'] },
+      { projectId: 'proj-2', name: '취업 준비', impactBadges: [] },
+    ],
 
-    // risk-fixed-conflict가 priorityAction과 같은 id를 공유(위 참고) — 서버가
-    // 실제로 이렇게 응답한다는 보장은 없다(계약 미확정, §DASH.5), 그 전제를
-    // mock에서 시연해 두는 것. 나머지 둘은 V-코드가 없는 이 화면 고유의
-    // 리스크(서버 문구 그대로 소비).
-    risks: [
+    // riskType이 priorityAction의 actionType과 매칭되는 관계를 보여 주기
+    // 위한 것 — RESOLVE_FIXED_CONFLICT ↔ FIXED_CONFLICT (RiskList.jsx의
+    // ACTION_TYPE_TO_RISK_TYPE 참고). 실제로 서버가 이렇게 짝지어 보낸다는
+    // 계약상 보장은 없다(§DASH.5, 여전히 미확정) — 이 mock은 그 전제가
+    // 실제로 있을 때 dedup 경로가 잘 도는지 시연해 두는 것뿐이다.
+    riskIssues: [
       {
-        id: 'risk-fixed-conflict',
-        // W3: kept in sync with priorityAction's own code above — see that
-        // field's own comment.
-        code: 'V2_FIXED_CONFLICT',
-        severity: 'blocking',
-        source: '주간 계획',
-        params: { blockTitle: '회의', otherTitle: '스터디', timeRange: '화요일 14:00–15:00' },
-        actionType: 'FIXED_CONFLICT_RESOLVE',
-        actionParams: {},
+        riskType: 'FIXED_CONFLICT',
+        count: 1,
+        description: '회의가 고정 일정 스터디와 화요일 14:00–15:00에 겹칩니다',
+        routePath: '/weekly',
       },
       {
-        id: 'risk-1',
-        code: 'DAILY_AVAILABILITY_OVERRUN',
-        severity: 'blocking',
-        source: '주간 계획',
-        label: '하루 가용시간 과도 초과',
-        message: '하루 가용시간 과도 초과',
-        actionType: 'INCOMPLETE_REPLAN',
-        actionParams: {},
+        riskType: 'UNASSIGNED_TASKS',
+        count: 1,
+        description: '미배치 태스크가 1건 있습니다',
+        routePath: '/weekly?openUnplaced=1',
       },
       {
-        id: 'risk-2',
-        code: 'DEADLINE_TASK_UNPLACED',
-        severity: 'warning',
-        source: '주간 계획',
-        label: '마감 태스크 미배치',
-        message: '마감 태스크 미배치',
-        actionType: 'UNPLACED_TASK_PLACE',
-        actionParams: {},
+        riskType: 'DEADLINE_SOON',
+        count: 1,
+        description: '마감이 임박한 태스크가 1건 있습니다',
+        routePath: '/weekly',
       },
     ],
+
+    // DASH-07. 이번 작업 범위는 데이터만 받아 두는 것까지다 — 소비하는 UI는
+    // 아직 없다(dashboardApi.js의 busyWeekdays 통과 로직 참고).
+    busyWeekdays: [{ weekday: 'TUE', remainingAvailabilityPercent: 12 }],
   }
 }
 

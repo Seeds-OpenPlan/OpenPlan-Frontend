@@ -26,22 +26,24 @@
 const MOCK_LATENCY_MS = 70
 const delay = (ms = MOCK_LATENCY_MS) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// --- 가용 시간 (사용자 입력, phase 1 — 오너 결정 2026-07-25) ---------------------
-// "가용 시간 범위"(요일별 9-6 창)의 단순 합("가용 시간 범위 합계")과는 별개로,
-// 사용자가 "이번 주에 실제로 계획에 할애할 수 있는 시간"을 직접 정하는 값 —
-// glossary 최상위 "가용 시간" 개념 그 자체([가정-확장], ST-B1-09 availabilities
-// 계약엔 없음). 범위·고정일정과 무관하게 독립적으로 저장된다. phase 1은 설정
-// 화면 자체만 다루므로 주간계획/대시보드/V4 쪽에서는 아직 아무도 이 값을
-// 읽지 않는다(오너가 별도 후속 브랜치로 뺌).
-let weeklyAvailableMinutes = 30 * 60 // 기본값 예시: 30시간
-
-// --- 기본값 (FIX-10~12): default replan strategy on RB-PLAN-02's own 3-택 gate ---
+// --- 기본값 + 가용 시간 (FIX-10~12, W6 계약 정합 2026-08-23) ---------------------
+// W6부터 세 필드(기본 예상 시간·기본 재계획 전략·가용 시간)가 REAL
+// `/users/me/preferences` 리소스 하나로 합쳐졌다(settingsApi.js 자신의 헤더
+// 참조) — 이 mock도 그 모양을 그대로 흉내낸다. "가용 시간"(사용자가 직접
+// 정하는 주간 목표치)이 "가용 시간 범위"(요일별 9-6 창)의 단순 합과 다른
+// 개념이라는 구분(오너 결정 2026-07-25)은 필드가 합쳐진 뒤에도 그대로다 —
+// 범위·고정일정과 무관하게 독립적으로 저장된다.
+//
 // Keys match replanStrategies.js's replanStrategyCatalog exactly (그 카탈로그가
 // 유일한 명칭 출처 — J1과 같은 원칙), so the radio labels never diverge from the
-// 재계획 모달이 이미 쓰는 4개 명칭.
+// 재계획 모달이 이미 쓰는 4개 명칭. `defaultEstimatedMinutes`는 아직 이 화면에
+// 편집 UI가 없어(taskApi.js normalizeTask의 하드코딩 60 주석 참조) null로
+// 시작한다 — 계약엔 있는 필드이니 read-modify-write PUT이 항상 실어 보내는
+// 자리는 마련해 둔다.
 let preferences = {
+  defaultEstimatedMinutes: null,
   defaultReplanStrategy: 'MINIMAL_CHANGE',
-  version: 1,
+  weeklyAvailableMinutes: 30 * 60, // 기본값 예시: 30시간
 }
 
 // --- RB-FIX-01 제안 칩: 최근 재계획 선택 이력을 반영한 "다른 기본값이 어떠세요" 제안.
@@ -126,33 +128,23 @@ let notificationSettings = {
 }
 
 export const mockBackend = {
-  // 가용 시간 (사용자 입력, phase 1). 가용 시간 범위(patterns)와 완전히 별개의
-  // 저장소 — 여기서 patterns를 참조하거나 검증하지 않는다(독립 값이라는
-  // 오너 결정 그대로).
-  async getWeeklyAvailableMinutes() {
-    await delay(60)
-    return { weeklyAvailableMinutes }
-  },
-
-  async updateWeeklyAvailableMinutes(minutes) {
-    await delay()
-    weeklyAvailableMinutes = minutes
-    return { weeklyAvailableMinutes }
-  },
-
+  // GET /users/me/preferences — 세 필드(기본 예상 시간·기본 재계획 전략·가용
+  // 시간)를 한 번에 돌려준다. settingsApi.getWeeklyAvailableMinutes는 이
+  // 함수를 거쳐 그중 한 필드만 골라 읽는다(별도 mock 함수를 두지 않는다 —
+  // 실서버에도 별도 엔드포인트가 없다).
   async getPreferences() {
     await delay()
     return { ...preferences }
   },
 
-  // PATCH 대상 리소스가 tasks/projects/weekly_plans/schedules/fixed_schedules
-  // 목록에 없어 공통 불변식의 version 낙관잠금 대상이 아니다([가정] — 전 스토리
-  // 공통 불변식 문서가 명시한 5개 리소스에 preferences는 없음). 그래도 재요청
-  // 경합을 흉내는 최소한으로 남겨 둔다: version 필드 자체는 응답에 계속 실어
-  // 보내 이후 BE가 낙관잠금을 추가하기로 하면 이 필드 하나로 흡수되게 한다.
-  async updatePreferences(patch) {
+  // PUT 전체 교체 (정본 문구). settingsApi.putPreferences가 이미 GET 결과에
+  // patch를 얹어 "빠진 필드 없는" 완전한 객체를 보내므로, mock도 부분 merge가
+  // 아니라 받은 그대로 갈아 끼운다 — 실서버 동작과 동형이어야 read-modify-write
+  // 로직 자체(그걸 빠뜨리면 나머지 필드가 null로 지워지는 버그)를 이 mock
+  // 위에서는 재현할 수 없게 되는 것을 막는다.
+  async updatePreferences(body) {
     await delay()
-    preferences = { ...preferences, ...patch, version: preferences.version + 1 }
+    preferences = { ...body }
     return { ...preferences }
   },
 
