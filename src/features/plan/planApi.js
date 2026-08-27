@@ -75,33 +75,48 @@ function normalizeBlock(b) {
 }
 
 /**
- * KNOWN UNRESOLVED GAP (W4 review): this reads fields FLAT off `w`
- * (`w.weeklyPlanId`, `w.blocks`, ...), which matches the DEV mock's own shape
- * and the pre-openapi assumption this file was built on — but a real
- * `WeeklyPlanView` (openapi.yaml, GET /weekly-plans's actual schema) nests the
- * plan's own fields under `w.plan` (`w.plan.weeklyPlanId`, `w.plan.status`,
- * `w.plan.version`, `w.plan.totalPlannedMinutes` — only `blocks` happens to
- * already sit at the top level on that envelope, which is why it doesn't
- * break at least THAT field today). Unwrapping this envelope properly is a
- * separate, larger change the team lead has explicitly deferred (out of W4's
- * scope) — `getWeek`'s own `isEmptyWeekView` only reads `w.plan`'s PRESENCE
- * and nullness (not its contents) for exactly this reason, and callers of
- * THIS function should not assume `weeklyPlanId`/`status`/`version`/
- * `totalPlannedMinutes` are populated once a real (non-mock, non-404) server
- * answers — they will silently read as `undefined`/defaults until the
- * envelope unwrap lands.
+ * `WeeklyPlanView` 봉투를 벗겨 화면이 쓰는 평평한 모양으로 바꾼다.
+ *
+ * 실서버(GET /weekly-plans)는 계획 자신의 필드를 `plan` 한 겹 아래 둔다 —
+ * `{ plan: { weeklyPlanId, weekStartDate, status, version, ... }, blocks: [...] }`
+ * (openapi.yaml `WeeklyPlanView`, BE `WeeklyPlanView.java`). DEV 목은 같은 필드를
+ * 평평하게 준다. 둘 다 받는다: `plan` 키가 있으면 그 아래에서, 없으면 `w` 자신에서 읽는다.
+ *
+ * 🔴 이것이 없던 동안 무슨 일이 있었나 (2026-08-28 프로덕션 실측):
+ * 이 함수가 `w.weeklyPlanId` 를 평평하게 읽어 **실서버에서는 항상 `undefined`** 였다.
+ * `blocks` 만 봉투 최상단에 있어 우연히 채워졌기 때문에 **화면은 멀쩡해 보였고**,
+ * 계획 id 를 쓰는 쓰기 경로만 조용히 깨져 있었다:
+ *
+ *     POST /api/v1/weekly-plans/undefined/blocks  →  400 E-COM-001
+ *
+ * 태스크를 드래그해 배치하는 순간 이 요청이 나간다(WeeklyPage 의 onDrop). 저장(확정)·
+ * 자동 배치·일괄 적용·리플랜도 같은 id 를 쓰므로 같은 방식으로 깨진다. 검증(dry-run)만은
+ * `if (!weeklyPlanId) return` 가드가 있어 **요청이 아예 안 나갔고**, 그래서 화면에는
+ * "0 위반" 이 떠 있었다 — 가장 나쁜 방향의 침묵이다("저장해도 안전하다"로 읽힌다).
+ *
+ * 이름이 다른 두 필드도 여기서 맞춘다 — 봉투는 `unassignedCount`·`validationSummary`,
+ * 화면은 `unplacedCount`·`validation`. 이것들도 그동안 기본값 0 으로 조용히 떨어지고 있었다.
+ * (BE 는 아직 `plan`·`blocks` 두 겹만 채운다 — 나머지는 없으면 없는 대로 기본값이 맞다.)
  */
 function normalizeWeek(w) {
+  // `plan` 키가 있고 값이 있으면 봉투(실서버), 아니면 평평한 모양(목).
+  // `plan: null`(정말 빈 주차)이면 getWeek 이 앞서 get-or-create 로 처리한다 — 그러고도
+  // null 이면 여기서는 `w` 로 떨어지고 필드는 비는데, 그 주차는 실제로 비어 있는 것이 맞다.
+  const plan = w?.plan ?? w ?? {}
+  const validation = w?.validationSummary ?? w?.validation ?? {}
   return {
-    weeklyPlanId: w.weeklyPlanId ?? w.weekly_plan_id,
-    weekStartDate: w.weekStartDate ?? w.week_start_date,
-    weekEndDate: w.weekEndDate ?? w.week_end_date,
-    status: w.status ?? 'DRAFT',
-    version: w.version ?? 1,
-    totalPlannedMinutes: w.totalPlannedMinutes ?? w.total_planned_minutes ?? 0,
-    unplacedCount: w.unplacedCount ?? w.unplaced_count ?? 0,
-    validation: w.validation ?? { blockCount: 0, warningCount: 0 },
-    blocks: (w.blocks ?? []).map(normalizeBlock),
+    weeklyPlanId: plan.weeklyPlanId ?? plan.weekly_plan_id,
+    weekStartDate: plan.weekStartDate ?? plan.week_start_date,
+    weekEndDate: plan.weekEndDate ?? plan.week_end_date,
+    status: plan.status ?? 'DRAFT',
+    version: plan.version ?? 1,
+    totalPlannedMinutes: plan.totalPlannedMinutes ?? plan.total_planned_minutes ?? 0,
+    unplacedCount: w?.unassignedCount ?? w?.unplacedCount ?? w?.unplaced_count ?? 0,
+    validation: {
+      blockCount: validation.blockCount ?? 0,
+      warningCount: validation.warningCount ?? 0,
+    },
+    blocks: (w?.blocks ?? []).map(normalizeBlock),
   }
 }
 
