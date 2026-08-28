@@ -108,11 +108,19 @@ function normalizeWeek(w) {
     status: plan.status ?? 'DRAFT',
     version: plan.version ?? 1,
     totalPlannedMinutes: plan.totalPlannedMinutes ?? plan.total_planned_minutes ?? 0,
-    // unplacedCount/validation are summary fields the spec places at the
-    // envelope's TOP level, alongside `blocks` — never under `plan` — so
-    // these two keep reading off `w`, unaffected by the unwrap above.
-    unplacedCount: w.unplacedCount ?? w.unplaced_count ?? 0,
-    validation: w.validation ?? { blockCount: 0, warningCount: 0 },
+    // 이 둘은 스펙상 봉투 최상위 필드다(`blocks` 옆, `plan` 밑이 아님) —
+    // 그래서 위 unwrap과 무관하게 `w`에서 읽는다.
+    //
+    // 🔴 계약상 이름은 `unassignedCount`/`validationSummary`다
+    // (openapi-live-76c7009.yaml WeeklyPlanView). 예전 이름
+    // (`unplacedCount`/`validation`)만 읽고 있어 실서버에서는 항상
+    // undefined→기본값으로 떨어졌다 — 특히 `validation.blockCount`가 늘 0이라,
+    // 첫 dry-run 응답 전 짧은 창 동안 이미 차단 위반이 있는 주차도 저장
+    // 가능으로 보였다(서버가 확정 단계에서 E-PLAN-004로 막으므로 데이터
+    // 손상은 없었다). 계약 이름을 우선 읽고, 옛 이름은 목·구버전 호환으로
+    // 남긴다.
+    unplacedCount: w.unassignedCount ?? w.unplacedCount ?? w.unplaced_count ?? 0,
+    validation: w.validationSummary ?? w.validation ?? { blockCount: 0, warningCount: 0 },
     blocks: (w.blocks ?? []).map(normalizeBlock),
   }
 }

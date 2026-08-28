@@ -353,9 +353,15 @@ export function usePlaceTask() {
           // 왜 잘못됐는지"를 함께 준다. 코드만 보여주면 여전히 원인을 못 좁히니
           // 첫 필드까지 붙인다 — 이번 조사에서 코드는 받았지만 필드를 몰라
           // 한 번 더 왕복해야 했다.
-          const badField = error?.details?.fields?.[0]
+          // `details.fields[0]`의 모양이 두 갈래다: api-contracts는 객체
+          // (`{field, code}`)로 적었지만, 이 저장소의 실서버 실측 기록은
+          // 문자열이다(authApi.js 헤더, 2026-08-18 — "newPassword is required").
+          // 둘 다 받아들인다. 객체만 가정하면 문자열일 때 조용히 undefined가
+          // 되어, 필드명을 붙이려던 이 변경 자체가 무효가 된다.
+          const rawField = error?.details?.fields?.[0]
+          const badField = typeof rawField === 'string' ? rawField : rawField?.field
           const detail =
-            [error?.code, badField?.field].filter(Boolean).join(': ') ||
+            [error?.code, badField].filter(Boolean).join(': ') ||
             (error?.status != null ? `HTTP ${error.status}` : null)
           toast(
             error?.status === 401
