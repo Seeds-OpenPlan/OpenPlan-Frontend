@@ -145,14 +145,14 @@ function normalizeWeek(w) {
   The DEV mock still answers in the FE's own shape (a bare array of minutes),
   so both directions accept either and only convert what's actually foreign.
 */
-function minutesFromTime(value) {
+export function minutesFromTime(value) {
   if (typeof value !== 'string') return null
   const [h, m] = value.split(':').map(Number)
   if (!Number.isFinite(h) || !Number.isFinite(m)) return null
   return h * 60 + m
 }
 
-function timeFromMinutes(minutes) {
+export function timeFromMinutes(minutes) {
   const total = Number.isFinite(minutes) ? minutes : 0
   const h = Math.floor(total / 60)
   const m = total % 60

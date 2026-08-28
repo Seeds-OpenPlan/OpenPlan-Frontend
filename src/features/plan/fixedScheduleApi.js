@@ -20,7 +20,8 @@
 */
 
 import { apiClient } from '../../api/client'
-import { withDevFallback } from './planApi'
+import { withDevFallback, minutesFromTime, timeFromMinutes } from './planApi'
+import { addDaysISO } from './planTime'
 import { mockBackend } from './planFixtures'
 import { unwrapList } from '../../api/unwrap'
 
@@ -41,15 +42,24 @@ function normalizeFixedSchedule(f) {
     fixedScheduleId: f.fixedScheduleId ?? f.fixed_schedule_id,
     title: f.title,
     weekday: f.weekday,
-    startMinutes: f.startMinutes ?? f.start_minutes,
-    endMinutes: f.endMinutes ?? f.end_minutes,
+    // 🔴 서버는 `startTime`/`endTime`을 시각 문자열("09:00:00")로 보낸다 —
+    //    `startMinutes`라는 이름은 계약에 없다(openapi FixedScheduleInput). 이걸
+    //    변환하지 않아 화면 전체가 undefined를 받았고, 시:분 계산이 `NaN:NaN`으로
+    //    렌더됐다. 가용 시간(normalizeAvailability)이 이미 쓰는 것과 같은 폴백
+    //    사슬을 그대로 따른다 — 목(분 단위)과 실서버(시각 문자열)를 둘 다 받는다.
+    startMinutes: f.startMinutes ?? f.start_minutes ?? minutesFromTime(f.startTime ?? f.start_time),
+    endMinutes: f.endMinutes ?? f.end_minutes ?? minutesFromTime(f.endTime ?? f.end_time),
     // Defaults to true: a server that doesn't yet understand week exceptions
     // (or omits the field) should render every fixed schedule as ACTIVE, not
     // silently ghost all of them — an unrecognized false would be the wrong
     // failure direction (hiding a real conflict), so only an explicit false wins.
     activeThisWeek: (f.activeThisWeek ?? f.active_this_week) !== false,
-    effectiveFrom: f.effectiveFrom ?? f.effective_from ?? null,
-    effectiveTo: f.effectiveTo ?? f.effective_to ?? null,
+    // 🔴 서버가 보내는 이름은 `startDate`/`endDate`다. 이름이 어긋나 항상 null이
+    //    됐고, 그래서 **하루짜리 일정이 매주 반복으로 보였다** — 외부 캘린더에서
+    //    반영한 일정(ExternalEventToFixedSchedule이 startDate=endDate=그 날짜로
+    //    하루에 가둔다)이 모든 같은 요일에 뜨던 원인이다.
+    effectiveFrom: f.effectiveFrom ?? f.effective_from ?? f.startDate ?? f.start_date ?? null,
+    effectiveTo: f.effectiveTo ?? f.effective_to ?? f.endDate ?? f.end_date ?? null,
     source: f.source ?? 'MANUAL',
     status: f.status ?? 'ACTIVE',
     version: f.version ?? 1,
@@ -58,6 +68,55 @@ function normalizeFixedSchedule(f) {
     // "no conflict" claim it can't back up.
     hasConflict: f.hasConflict ?? undefined,
   }
+}
+
+/**
+ * 화면이 쓰는 분 단위를 계약이 요구하는 시각 문자열로 되돌린다.
+ *
+ * 🔴 계약(openapi `FixedScheduleInput`)은 `startTime`·`endTime`을 **required**로
+ * 요구하는데, 폼은 `{startMinutes, endMinutes}`를 그대로 실어 보내고 있었다 —
+ * 읽기 쪽 이름 불일치(normalizeFixedSchedule 참조)의 거울상이라, 손으로 만드는
+ * 고정 일정도 같은 이유로 서버에 닿지 못했다.
+ *
+ * 화면(폼·그리드·설정 목록)은 분 단위 그대로 두고 **이 경계에서만** 바꾼다.
+ * 화면 전체를 시각 문자열로 옮기는 것은 훨씬 큰 변경이고, 계약과 UI 모델이
+ * 다른 것 자체는 정상이다 — 어긋나 있던 것은 그 사이를 잇는 어댑터뿐이었다.
+ *
+ * 이미 시각 문자열이면 건드리지 않는다(목 경로·미래의 호출부 대비).
+ */
+function toServerFixedSchedule(payload) {
+  if (!payload || typeof payload !== 'object') return payload
+  const body = { ...payload }
+  if (body.startTime == null && Number.isFinite(body.startMinutes)) {
+    body.startTime = timeFromMinutes(body.startMinutes)
+  }
+  if (body.endTime == null && Number.isFinite(body.endMinutes)) {
+    body.endTime = timeFromMinutes(body.endMinutes)
+  }
+  delete body.startMinutes
+  delete body.endMinutes
+  return body
+}
+
+/**
+ * 이 주에 실제로 나타나야 하는 고정 일정인가.
+ *
+ * 🔴 고정 일정은 기본적으로 **요일 반복**이지만, 외부 캘린더에서 반영한 일정은
+ * `startDate=endDate=그 날짜`로 하루에 갇혀 있다(백엔드 ExternalEventToFixedSchedule).
+ * 그 경계를 보지 않으면 하루짜리 약속이 **모든 같은 요일**에 나타난다 — 그 위에
+ * 계획을 얹지 못하게 막으므로 조용한 오표시가 아니라 실제 배치 제약이 된다.
+ *
+ * 경계가 둘 다 없으면 무기한 반복(손으로 만든 고정 일정)이라 항상 보인다.
+ * ISO 날짜 문자열(YYYY-MM-DD)은 사전순 비교가 곧 시간순이라 그대로 비교한다.
+ */
+function activeInWeek(schedule, weekStartISO) {
+  if (!weekStartISO) return true
+  const { effectiveFrom, effectiveTo } = schedule
+  if (!effectiveFrom && !effectiveTo) return true
+  const weekEndISO = addDaysISO(weekStartISO, 6)
+  if (effectiveFrom && effectiveFrom > weekEndISO) return false
+  if (effectiveTo && effectiveTo < weekStartISO) return false
+  return true
 }
 
 /**
@@ -72,7 +131,13 @@ export function getFixedSchedules(weekStartISO) {
       }),
     () => mockBackend.getFixedSchedules(weekStartISO),
     // Real: `data:[FixedSchedule]` (array). Mock: `{ fixedSchedules: [...] }`.
-  ).then((r) => unwrapList(r, 'fixedSchedules').map(normalizeFixedSchedule))
+  ).then((r) =>
+    unwrapList(r, 'fixedSchedules')
+      .map(normalizeFixedSchedule)
+      // 서버가 weekStartDate 를 받고도 날짜 경계로 걸러 주지 않으므로 여기서 건다.
+      // 서버가 나중에 걸러 주게 되면 이 필터는 그냥 통과라 이중으로 걸려도 무해하다.
+      .filter((f) => activeInWeek(f, weekStartISO)),
+  )
 }
 
 /**
@@ -122,7 +187,7 @@ export function getAllFixedSchedules() {
 /** OP-FIXED-CREATE → POST /fixed-schedules (FIX-06 고정일정 직접 추가). */
 export function createFixedSchedule(payload) {
   return withDevFallback(
-    () => apiClient.post('/fixed-schedules', payload),
+    () => apiClient.post('/fixed-schedules', toServerFixedSchedule(payload)),
     () => mockBackend.createFixedSchedule(payload),
   ).then(normalizeFixedSchedule)
 }
@@ -133,7 +198,7 @@ export function createFixedSchedule(payload) {
  */
 export function updateFixedSchedule(fixedScheduleId, patch) {
   return withDevFallback(
-    () => apiClient.patch(`/fixed-schedules/${fixedScheduleId}`, patch),
+    () => apiClient.patch(`/fixed-schedules/${fixedScheduleId}`, toServerFixedSchedule(patch)),
     () => mockBackend.updateFixedSchedule(fixedScheduleId, patch),
   ).then(normalizeFixedSchedule)
 }
@@ -156,7 +221,15 @@ export function deleteFixedSchedule(fixedScheduleId) {
  */
 export function previewFixedScheduleConflicts(candidate) {
   return withDevFallback(
-    () => apiClient.post('/fixed-schedules/conflict-previews', candidate),
+    // 🔴 계약은 `{candidate: FixedScheduleInput}` 봉투를 요구하고, 그 안의 시각은
+    //    `startTime`/`endTime`이다(ConflictPreviewRequest.Candidate). 폼은 봉투 없이
+    //    `{weekday, startMinutes, endMinutes}`를 그대로 보내고 있었다 — 위
+    //    normalizeFixedSchedule·toServerFixedSchedule과 같은 계열의 불일치다.
+    //    이 호출은 디바운스된 배경 요청이라 실패해도 화면에 오류가 안 뜬다.
+    //    그래서 "충돌 경고가 한 번도 안 뜬 것"이 결함으로 보이지 않았다.
+    () => apiClient.post('/fixed-schedules/conflict-previews', {
+      candidate: toServerFixedSchedule(candidate),
+    }),
     () => mockBackend.previewFixedScheduleConflicts(candidate),
   )
 }
