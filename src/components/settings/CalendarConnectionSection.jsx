@@ -17,7 +17,7 @@ import {
 } from '../../features/settings/useSettings'
 import {
   CONNECTION_STATUS,
-  GOOGLE_CALENDAR_REDIRECT_URI,
+  googleCalendarRedirectUri,
   googleCalendarAuthorizationUrl,
 } from '../../features/settings/settingsApi'
 
@@ -242,16 +242,17 @@ export function CalendarConnectionSection() {
                 ) : (
                   // 구글은 서버가 발급하는 인가 주소로 페이지 전체가 이동한다
                   // (프론트에서 조립하지 않는 이유는 googleCalendarAuthorizationUrl
-                  // 헤더 참조). redirectUri가 아직 TODO라 그 값이 채워지기
-                  // 전까지는 시작 자체를 막는다 — settingsApi.js
-                  // GOOGLE_CALENDAR_REDIRECT_URI 헤더 참조.
+                  // 헤더 참조). redirectUri는 클릭 시점에 googleCalendarRedirectUri()
+                  // 로 조립한다 — 콜백 페이지(GoogleCalendarCallbackPage)도 같은
+                  // 함수를 호출해, 인가 요청과 토큰 교환의 redirectUri가 항상
+                  // 일치하게 한다(settingsApi.js googleCalendarRedirectUri 헤더 참조).
+                  // W6부터 이 게이트를 없앴다 — 다만 배포(raw IP, HTTPS 미보유)에서는
+                  // 구글이 이 값 자체를 거부할 수 있다는 한계는 여전히 남는다.
                   <Button
                     variant="secondary"
                     size="sm"
-                    disabled={!GOOGLE_CALENDAR_REDIRECT_URI}
-                    disabledReason={!GOOGLE_CALENDAR_REDIRECT_URI ? '콜백 주소 등록 후 제공됩니다' : undefined}
                     onClick={() => {
-                      window.location.href = googleCalendarAuthorizationUrl(GOOGLE_CALENDAR_REDIRECT_URI)
+                      window.location.href = googleCalendarAuthorizationUrl(googleCalendarRedirectUri())
                     }}
                   >
                     연동하기

@@ -503,11 +503,28 @@ function WeeklyPage() {
   // Place one task into a resolved grid slot; span = the task's estimated
   // duration, clamped to the end of the day. Optimistic (usePlaceTask).
   const placeTaskAt = (task, slot) => {
+    if (!plan) return
     // fix G: a new placement is exactly the kind of plan change a draft under
     // review can't tolerate (same reasoning as planLocked's own header comment)
     // — the panel's task cards already stop offering drag/quick-place while
-    // locked (UnplacedPanel's `disabled`, below), so this is the backstop.
-    if (!plan || planLocked) return
+    // locked (UnplacedPanel's `disabled`, below), so this is normally
+    // unreachable. It's still a real backstop though (e.g. a drag that began
+    // just before `autoDraft` appeared), and until now this branch dropped the
+    // drop with ZERO feedback — visually indistinguishable from "배치가 안
+    // 되는 결함" (오너 보고, 2026-08-28): the block/ghost just snaps back with
+    // no explanation. handleUserMove's own `isPastWeek` branch already sets
+    // the precedent (a toast beats a silent no-op) — mirrored here for both
+    // reasons `planLocked` can be true, since a dropped drag never reaches any
+    // other error handling to explain itself.
+    if (planLocked) {
+      toast({
+        tone: 'info',
+        message: autoDraft
+          ? '자동 배치 초안을 적용하거나 취소한 뒤 다시 배치해 주세요'
+          : '지난 주에는 새로 배치할 수 없습니다',
+      })
+      return
+    }
     // clampBlockSpan folds two invariant checks into one call: it snaps the
     // task's estimate to the 5-minute grid the server enforces (E-COM-009 —
     // an AI-suggested or partial-remainder estimate might not already be a

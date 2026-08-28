@@ -81,12 +81,40 @@ const TIME_FIELD =
 
 // The common-row value shown/edited: availabilityHelpers.commonPattern's
 // majority-vote result (shared with the hub's own badge — see that file's
-// header for why this must not be a second, possibly-diverging copy), with a
-// fixed 09:00-18:00 fallback only for the one case that helper deliberately
-// returns null for: every day off, where there is no "majority" of an empty
-// set but the field must still show SOMETHING editable.
+// header for why this must not be a second, possibly-diverging copy) among
+// the ACTIVE days.
+//
+// BUG FIX (W6 실서버 재현, 2026-08-28 — 오너 리포트 "요일별 조정이 안 바뀐다" +
+// "합계 0분"): `sharedCommonPattern` returns null when NO day is active — a
+// state `defaultWeekPatterns()` seeds every brand-new/reset account into
+// (every row isActive:false, see that function's own header). The OLD
+// fallback here was a HARDCODED `{9,18}` pair, completely ignoring whatever
+// times actually sit in `patterns` — so for exactly that all-off state, this
+// function returned the SAME constant on every render no matter what the
+// user just typed. `applyCommonPattern` below writes the new start/end to
+// all 7 rows but never touches `isActive`, so while every day stays off the
+// edited value could never round-trip back through here: the input visibly
+// "snapped back" to 09:00-18:00 the instant it changed, which is exactly the
+// reported "고쳐도 반영되지 않는다" — and the user could never work their way
+// out of a genuine 0-active-minute week through this row at all, matching
+// the simultaneous "합계 0분" report (0 IS the correct sum while every day is
+// off; the bug was that this control offered no way out of that state).
+//
+// Fix: when no day is active, fall back to the majority of ALL 7 rows'
+// actual (start,end) pairs — ignoring `isActive` for that one vote — instead
+// of a constant. This reflects the real, currently-edited `patterns` (every
+// row shares one value right after a bulk apply, so the "majority" is
+// unanimous and unambiguous) so the field always shows what was actually
+// typed. Only a genuinely EMPTY array (defensive; `rangeBaselineOf` should
+// never hand this an empty list — see that function) falls through to the
+// fixed 09:00-18:00, since there is then no row of any kind to read a value
+// from.
 function deriveCommonPattern(patterns) {
-  return sharedCommonPattern(patterns) ?? { startMinutes: 9 * 60, endMinutes: 18 * 60 }
+  return (
+    sharedCommonPattern(patterns) ??
+    sharedCommonPattern((patterns ?? []).map((p) => ({ ...p, isActive: true }))) ??
+    { startMinutes: 9 * 60, endMinutes: 18 * 60 }
+  )
 }
 
 function DayRow({ pattern, expanded, onToggleExpand, onToggleActive, onChangeTimes }) {
