@@ -375,10 +375,14 @@ export const mockBackend = {
     throw err
   },
 
-  // GET /projects/{id}/validation-issues — RB-PROJ-02. Real, derived checks
-  // over this mock's own task store (same "computed, not canned" principle
-  // planFixtures.computeValidationIssues uses) so every warning can be
-  // produced/cleared by editing tasks in the browser.
+  // GET /projects/{id}/structure-warnings — RB-PROJ-02 (W6 계약 정합
+  // 2026-08-28). 실서버 응답 모양은 `{warningType, reason, action}`이고
+  // `reason`은 서버가 완성 문장으로 준다 — 이 목도 같은 모양으로 맞춘다
+  // (예전 `{code, severity, params}`는 실계약에 없는 목 전용 발명품이었고,
+  // StructureWarningBanner.jsx가 그 문구를 다시 조립하던 원인이었다). 여전히
+  // 이 mock 스토어의 실제 태스크 상태로부터 매번 계산한다("computed, not
+  // canned", planFixtures.computeValidationIssues와 같은 원칙) — 브라우저에서
+  // 태스크를 편집하면 경고가 그대로 생기고 사라진다.
   async getStructureWarnings(projectId) {
     await delay(60)
     const project = requireProject(projectId)
@@ -386,20 +390,32 @@ export const mockBackend = {
     const issues = []
 
     if (tasks.length > 0 && tasks.length < 3) {
-      issues.push({ code: 'P-TASK-COUNT', severity: 'warning', params: { count: tasks.length } })
+      issues.push({
+        warningType: 'TOO_FEW_TASKS',
+        reason: `태스크가 ${tasks.length}개뿐입니다. 계획 전에 작업을 더 나눠 주세요.`,
+        action: 'ADD_TASK',
+      })
     }
     const noEstimate = tasks.filter((t) => !t.estimatedMinutes || t.estimatedMinutes <= 0)
     if (noEstimate.length > 0) {
-      issues.push({ code: 'P-NO-ESTIMATE', severity: 'warning', params: { count: noEstimate.length } })
+      issues.push({
+        warningType: 'MISSING_ESTIMATES',
+        reason: `예상시간이 비어 있는 태스크가 ${noEstimate.length}개 있습니다. 입력해야 배치 검증이 정확해집니다.`,
+        action: 'EDIT_TASK',
+      })
     }
     if (project.dueDate) {
       const remaining = tasks.filter((t) => t.status !== 'COMPLETED').length
       const daysLeft = Math.round((new Date(project.dueDate) - new Date()) / (24 * 60 * 60 * 1000))
       if (daysLeft >= 0 && daysLeft < remaining) {
+        // 실서버 실측 문구(팀장 보고 예시)와 동일한 형태로 맞춘다:
+        // "마감까지 1일, 미완료 태스크가 3건 남았습니다." — 서버가 주는
+        // 완성 문장을 목이 그대로 흉내 낸 것이지, 목이 독자적으로 지은 게
+        // 아니다.
         issues.push({
-          code: 'P-DEADLINE-LOAD',
-          severity: 'warning',
-          params: { count: remaining, dueDate: project.dueDate },
+          warningType: 'DEADLINE_PRESSURE',
+          reason: `마감까지 ${daysLeft}일, 미완료 태스크가 ${remaining}건 남았습니다.`,
+          action: 'EDIT_TASK',
         })
       }
     }

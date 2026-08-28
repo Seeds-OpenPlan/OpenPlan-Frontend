@@ -387,15 +387,25 @@ export function deleteTask(taskId) {
 }
 
 /**
- * OP-PROJ-VALIDATION → GET /projects/{id}/validation-issues (RB-PROJ-02 구조
- * 경고 배너). The 07 spec documents this endpoint under "WBS/계획 뷰" with no
- * fixed issue-code catalog — the same "issues: []" shape as the weekly-plan
- * validation, adapted here via `structureWarnings.js` exactly like
- * violationMessages.js adapts the plan's own issues.
+ * OP-PROJ-VALIDATION → GET /projects/{id}/structure-warnings (RB-PROJ-02 구조
+ * 경고 배너, W6 계약 정합 2026-08-28).
+ *
+ * PATH CORRECTION (팀장 실서버 실측): 이전 `.../validation-issues`는 실서버
+ * 404다 — `.../structure-warnings`가 진짜 경로다(`openapi-live-*.yaml:1616`).
+ * 🔴 그 스냅샷 파일 자신은 이 엔드포인트를 `x-implementation-status:
+ * not-implemented`로 적어 두지만 **실측(200 + 실 데이터)은 살아있음을
+ * 보여준다** — 이 저장소에서 그 표시가 틀린 사례가 이미 여럿이라, 표시만
+ * 보고 "안 될 것"이라 넘겨짚지 말 것.
+ *
+ * 응답 모양도 이전 가정과 다르다 — 경고 항목마다 고정 코드가 아니라
+ * `{warningType, reason, action}`이고, **문구(`reason`)는 서버가 완성된
+ * 문장으로 준다**(임계값도 서버가 정한다). 그래서 이 어댑터는 항목을
+ * 그대로 통과시킬 뿐 가공하지 않는다 — 문구 조립은 이제 아예 하지 않는다
+ * (StructureWarningBanner.jsx 자신의 헤더 참고).
  */
 export function getProjectStructureWarnings(projectId) {
   return withDevFallback(
-    () => apiClient.get(`/projects/${projectId}/validation-issues`),
+    () => apiClient.get(`/projects/${projectId}/structure-warnings`),
     () => mockBackend.getStructureWarnings(projectId),
   ).then((r) => unwrapList(r, 'issues'))
 }
