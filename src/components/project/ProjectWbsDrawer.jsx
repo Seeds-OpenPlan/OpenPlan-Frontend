@@ -79,7 +79,31 @@ export function ProjectWbsDrawer({ project, tasks, onClose, disabled, disabledRe
       disabledReason={disabledReason}
       onOpenTaskTab={onClose}
       onCommitRange={(taskId, patch) => updateTaskSchedule.mutate({ projectId: project.projectId, taskId, ...patch })}
-      onCommitDeadline={(dueDate) => updateProject.mutateAsync({ projectId: project.projectId, body: { dueDate } })}
+      // BLOCKER FIX (W6 계약 감사): PUT /projects/{id} is a FULL REPLACE, not a
+      // partial PATCH (openapi-live-76c7009.yaml:1102-1104 — "생략한 필드는
+      // null로 교체된다") — sending only `{dueDate}` used to silently null out
+      // name/description/priority on save (the mock used to hide this by
+      // falling back to the existing value on any omitted field; it no
+      // longer does — see projectFixtures.updateProject's own comment).
+      // `version` is required for the same optimistic-lock check every other
+      // PUT caller in this codebase sends (ProjectsPage.handleManageSubmit is
+      // the reference implementation this mirrors — same 4 fields + version,
+      // no new pattern invented here). `project` is already in scope as this
+      // drawer's own prop, kept fresh by useUpdateProject's own onSuccess
+      // invalidation (projectsKey/projectKey), so a second drag after a
+      // successful first one reads the just-bumped version, not a stale one.
+      onCommitDeadline={(dueDate) =>
+        updateProject.mutateAsync({
+          projectId: project.projectId,
+          body: {
+            name: project.name,
+            description: project.description,
+            dueDate,
+            priority: project.priority,
+            version: project.version,
+          },
+        })
+      }
     />
   )
 

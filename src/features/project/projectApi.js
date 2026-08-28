@@ -272,7 +272,11 @@ export function updateProject(projectId, body) {
 export function updateProjectStatus(projectId, status, version) {
   return withDevFallback(
     () => apiClient.patch(`/projects/${projectId}/status`, { status, version }),
-    () => mockBackend.updateProjectStatus(projectId, status),
+    // BLOCKER FIX (W6 계약 감사): `version` used to be dropped here — the real
+    // call above sends it, but the mock fallback silently didn't, so the
+    // mock's own optimistic-lock check (see projectFixtures.updateProjectStatus)
+    // had nothing to compare against and could never 409 in DEV.
+    () => mockBackend.updateProjectStatus(projectId, status, version),
   )
 }
 

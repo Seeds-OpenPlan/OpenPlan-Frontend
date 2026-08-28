@@ -1641,6 +1641,12 @@ export const mockBackend = {
       priority: body.priority ?? 2,
       memo: body.memo ?? '',
       status: 'ACTIVE',
+      // Every other create path in this codebase seeds a fresh row at
+      // version 1 (project/task/fixedSchedule — see their own mocks); a
+      // Schedule (openapi-live-76c7009.yaml:2498-2508) is no exception. Read
+      // back by scheduleApi.js's own version tracker (see that file's header
+      // for why the tracker exists at all).
+      version: 1,
     })
     const block = {
       planBlockId: nextId('block'),
@@ -1659,10 +1665,27 @@ export const mockBackend = {
 
   // PATCH /schedules/{scheduleId} — PLAN-17 일정 편집. Updates the schedule record
   // AND its block's mirrored title/time.
+  //
+  // BLOCKER FIX (W6 계약 감사): this used to apply `patch` unconditionally and
+  // return `{message}` with no `version` at all — `version` is `required` in
+  // the request per openapi-live-76c7009.yaml:1857 and MUST 409
+  // (VersionConflict/E-COM-006) on a mismatch, same as every other
+  // optimistic-lock endpoint's mock in this codebase. Without this, the
+  // scheduleApi.js version tracker (see that file's header) would have
+  // nothing real to key off, and a genuine edit conflict could never surface
+  // even once scheduleApi.js started sending `version` at all.
   async updateSchedule(scheduleId, patch) {
     await delay()
-    const current = schedulesById.get(scheduleId) ?? { scheduleId }
-    const next = { ...current, ...patch }
+    const current = schedulesById.get(scheduleId) ?? { scheduleId, version: 1 }
+    const currentVersion = current.version ?? 1
+    if (patch.version != null && patch.version !== currentVersion) {
+      const err = new Error('mock: schedule version conflict')
+      err.code = 'E-COM-006'
+      err.status = 409
+      err.details = { latest: { ...current, version: currentVersion } }
+      throw err
+    }
+    const next = { ...current, ...patch, version: currentVersion + 1 }
     schedulesById.set(scheduleId, next)
     for (const week of weeks.values()) {
       for (const block of week.blocks) {
@@ -1673,7 +1696,13 @@ export const mockBackend = {
         }
       }
     }
-    return { message: 'UPDATED' }
+    // Real PATCH returns `{data: Schedule}` (unwrapped to the bare Schedule by
+    // the axios interceptor) — this mock bypasses that interceptor entirely
+    // (withDevFallback calls it directly), so it has to hand back the SAME
+    // bare shape itself, not `{message}`, or scheduleApi.js's own
+    // `result?.version` read (the other half of the version round-trip) would
+    // never see a real value against the mock.
+    return next
   },
 
   // POST /weekly-plans/{id}/validations — the dry-run (ST-F1-05 AC-1, path

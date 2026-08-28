@@ -4,19 +4,42 @@
   mock-fallback rule as planApi/scheduleApi/taskApi: real path in prod, mock only
   on a genuine network error.
 
-  ASSUMPTION (unconfirmed with BE — flagged in the PR, not decided unilaterally):
-  the 07번 API 명세서's `GET /fixed-schedules` takes only `status` and returns a
-  flat list with no weekly concept, while `activeThisWeek` (api-contracts.md §5-J6)
-  is inherently PER WEEK — a fixed schedule can be deactivated for one week and
-  stay active every other week. Until BE confirms the real shape, this client
-  asks for the CURRENTLY VIEWED week via an extra `weekStartDate` query param and
-  expects the server to fold its week-exception state into an `activeThisWeek`
-  field per schedule. This is the smallest, most reversible guess available (one
-  extra param on an existing GET, not a second endpoint or a client-side merge of
-  two separate lists) — if BE settles on something else (e.g. a dedicated
-  GET .../week-exceptions), only `normalizeFixedSchedule` and `getFixedSchedules`
-  below need to change; every consumer already just reads `activeThisWeek` off
-  the normalized shape.
+  CONFIRMED GAP (W6 계약 감사, resolves the ASSUMPTION this comment used to
+  record — openapi-live-76c7009.yaml checked directly, not re-guessed):
+  `GET /fixed-schedules` (line 1937) takes ONLY `status` — no `weekStartDate`
+  param exists. Its `FixedSchedule` response schema (line 2519) has no
+  `activeThisWeek` field either; that field only appears ANYWHERE in the
+  contract nested inside `WeeklyPlanView.fixedSchedules` (line 2578-2585) —
+  and `GET /weekly-plans`'s own summary (line 1627) explicitly says
+  fixedSchedules/availability/validationSummary are "후속 편입" (a FUTURE
+  addition, not live yet). The week-exception resource itself
+  (POST/DELETE .../week-exceptions, PLAN-33/34) has NO GET at all — write-only.
+  Net result: there is currently NO live endpoint that tells the client
+  whether a given fixed schedule is excepted for the viewed week. Live-server
+  confirmation was attempted but blocked on missing credentials (no
+  E2E_EMAIL/E2E_PASSWORD available to this fix — see the W6 audit report);
+  everything above is contract-document evidence only, flagged as such.
+
+  FIX (this session, replaces the old server-guess): stop pretending the
+  server told us. `activeThisWeek` is now computed client-side from
+  `sessionWeekExceptions` below — a same-page-load memory of exactly the
+  POST/DELETE week-exception calls THIS session itself made (the one thing
+  the client can actually know for certain, since it made those calls). A
+  schedule/week pair this session has never touched still defaults to
+  ACTIVE (never silently ghosted) — same fail-open reasoning
+  normalizeFixedSchedule always documented, kept because hiding a real
+  scheduling conflict is a worse failure than occasionally under-reporting a
+  week-exception the user set on ANOTHER device or an EARLIER page load.
+  `weekStartDate` is still sent on the GET below as a harmless no-op hint —
+  if BE ever ships the "후속 편입" and starts honoring it, this starts working
+  for real with zero FE change; until then the server just ignores an
+  unrecognized query param.
+
+  REMAINING GAP FOR BE (see report): this client-side memory does not survive
+  a page reload and cannot see another device's changes. The only real fix is
+  a server-side way to read current week-exception state — either (a) ship
+  the already-modeled `WeeklyPlanView.fixedSchedules[].activeThisWeek` this
+  schema anticipates, or (b) a GET on the week-exceptions resource.
 */
 
 import { apiClient } from '../../api/client'
@@ -24,6 +47,12 @@ import { withDevFallback } from './planApi'
 import { mockBackend } from './planFixtures'
 import { minutesFromTime, timeFromMinutes } from './planTime'
 import { unwrapList } from '../../api/unwrap'
+
+// `${fixedScheduleId}::${weekStartISO}` -> true (excepted/ghost this week).
+// Absence means "not known to be excepted" (renders active), NOT "confirmed
+// active" — see this file's header for why that direction is the safe one.
+const sessionWeekExceptions = new Map()
+const exceptionKey = (fixedScheduleId, weekStartISO) => `${fixedScheduleId}::${weekStartISO}`
 
 /**
  * Normalize a fixed schedule to the camelCase shape the grid AND the ST-F1-12
@@ -49,19 +78,31 @@ import { unwrapList } from '../../api/unwrap'
  * only ever read startMinutes/start_minutes — against a real server (which
  * sends ONLY startTime) that always evaluated to `undefined`, breaking every
  * time display on the settings list.
+ *
+ * `weekStartISO`: only meaningful for the week-scoped grid read
+ * (getFixedSchedules below) — `null` from every week-agnostic caller
+ * (getAllFixedSchedules, create/update), which simply never computes a
+ * session-known exception (there is no "this week" to look one up for).
  */
-function normalizeFixedSchedule(f) {
+function normalizeFixedSchedule(f, weekStartISO = null) {
+  const sessionKnown = weekStartISO != null && sessionWeekExceptions.get(exceptionKey(f.fixedScheduleId ?? f.fixed_schedule_id, weekStartISO))
   return {
     fixedScheduleId: f.fixedScheduleId ?? f.fixed_schedule_id,
     title: f.title,
     weekday: f.weekday,
     startMinutes: f.startMinutes ?? f.start_minutes ?? minutesFromTime(f.startTime ?? f.start_time),
     endMinutes: f.endMinutes ?? f.end_minutes ?? minutesFromTime(f.endTime ?? f.end_time),
-    // Defaults to true: a server that doesn't yet understand week exceptions
-    // (or omits the field) should render every fixed schedule as ACTIVE, not
-    // silently ghost all of them — an unrecognized false would be the wrong
-    // failure direction (hiding a real conflict), so only an explicit false wins.
-    activeThisWeek: (f.activeThisWeek ?? f.active_this_week) !== false,
+    // See this file's header (CONFIRMED GAP / FIX) for the full reasoning.
+    // Priority order: (1) this SESSION's own POST/DELETE week-exception call
+    // for this exact (schedule, week) — the one source we can actually
+    // trust; (2) a server-sent `activeThisWeek`, kept as a forward-compat
+    // read in case BE ships the "후속 편입" this contract's own schema
+    // anticipates (WeeklyPlanView.fixedSchedules[].activeThisWeek) — today
+    // this is never present, so this branch is currently always a no-op;
+    // (3) default ACTIVE (fail open — see header for why hiding a real
+    // conflict is the worse failure direction than an occasional stale
+    // ghost that never appears).
+    activeThisWeek: sessionKnown ? false : (f.activeThisWeek ?? f.active_this_week) !== false,
     // Contract field names are startDate/endDate (nullable date) — this
     // codebase used to read effectiveFrom/effectiveTo, a name the real server
     // has never actually sent (renamed together with the mock, below).
@@ -99,8 +140,12 @@ function serializeFixedSchedule(body) {
 }
 
 /**
- * OP-FIXED-LIST → GET /fixed-schedules?status=ACTIVE&weekStartDate= (ASSUMPTION
- * above). Returns the week's recurring fixed schedules with `activeThisWeek`.
+ * OP-FIXED-LIST → GET /fixed-schedules?status=ACTIVE&weekStartDate= (the
+ * `weekStartDate` param is a no-op hint the real server does not honor today
+ * — confirmed against the contract, see this file's header — kept only as a
+ * harmless forward-compat send). `activeThisWeek` on the returned shape comes
+ * from this SESSION's own week-exception calls (normalizeFixedSchedule), not
+ * from the server response.
  */
 export function getFixedSchedules(weekStartISO) {
   return withDevFallback(
@@ -110,7 +155,7 @@ export function getFixedSchedules(weekStartISO) {
       }),
     () => mockBackend.getFixedSchedules(weekStartISO),
     // Real: `data:[FixedSchedule]` (array). Mock: `{ fixedSchedules: [...] }`.
-  ).then((r) => unwrapList(r, 'fixedSchedules').map(normalizeFixedSchedule))
+  ).then((r) => unwrapList(r, 'fixedSchedules').map((f) => normalizeFixedSchedule(f, weekStartISO)))
 }
 
 /**
@@ -125,7 +170,20 @@ export function addFixedException(fixedScheduleId, weekStartISO) {
         weekStartDate: weekStartISO,
       }),
     () => mockBackend.addFixedWeekException(fixedScheduleId, weekStartISO),
-  )
+  ).then((result) => {
+    // Recorded only on CONFIRMED success, not optimistically before the call:
+    // a false "known excepted" entry would make normalizeFixedSchedule ghost a
+    // schedule the server never actually excepted — the OPPOSITE of the fail-
+    // open direction this whole mechanism exists to protect (a ghosted block
+    // reads as "not a placement conflict here", so a wrongly-ghosted entry
+    // could hide a real one). `useToggleFixedException` (usePlanData.js)
+    // invalidates+refetches `getFixedSchedules` in its own onSuccess, which
+    // only runs after THIS promise (and this .then) already resolved, so the
+    // map is guaranteed populated before that refetch's normalizeFixedSchedule
+    // runs — no race despite being set "after" this call in the chain.
+    sessionWeekExceptions.set(exceptionKey(fixedScheduleId, weekStartISO), true)
+    return result
+  })
 }
 
 /**
@@ -139,7 +197,15 @@ export function removeFixedException(fixedScheduleId, weekStartISO) {
   return withDevFallback(
     () => apiClient.delete(`/fixed-schedules/${fixedScheduleId}/week-exceptions/${weekStartISO}`),
     () => mockBackend.removeFixedWeekException(fixedScheduleId, weekStartISO),
-  )
+  ).then((result) => {
+    // Same "confirmed success only" reasoning as addFixedException above —
+    // delete() removes the entry rather than setting `false`, so a schedule
+    // this session never touched still falls through to the (fail-open)
+    // server-field/default branch in normalizeFixedSchedule, not a explicit
+    // "confirmed active" claim this call has no basis to make either.
+    sessionWeekExceptions.delete(exceptionKey(fixedScheduleId, weekStartISO))
+    return result
+  })
 }
 
 // --- ST-F1-12: 고정 일정 관리 (설정) — CRUD + 충돌 미리보기 --------------------

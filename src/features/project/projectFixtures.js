@@ -234,27 +234,89 @@ export const mockBackend = {
     return { projectId }
   },
 
+  // PUT /projects/{id} (SYS-05 낙관 잠금, openapi-live-76c7009.yaml:1098-1131 —
+  // `version` is `required`, 409 VersionConflict/E-COM-006 on a stale one).
+  // BLOCKER FIX (W6 계약 감사): this used to apply the edit and bump the
+  // version unconditionally — `body.version` was accepted as an input but
+  // never actually COMPARED against the stored one, so a real conflict could
+  // never happen against the mock. That silently meant ConflictOverlay
+  // (already wired into ProjectManageForm — see that file's own header) had
+  // never once rendered in DEV: nothing in this codebase could ever trigger
+  // its one entry condition. Same version-mismatch shape (`err.code =
+  // 'E-COM-006'`, `err.status = 409`, `err.details = { latest }`) the
+  // sibling stores already use (updateTask below, fixedSchedule/plan-task
+  // mocks in planFixtures.js) — ProjectsPage.handleManageSubmit's
+  // `error?.code === 'E-COM-006'` branch reads exactly this shape.
   async updateProject(projectId, body) {
     await delay()
     const project = requireProject(projectId)
+    if (body.version != null && body.version !== project.version) {
+      const err = new Error('mock: project version conflict')
+      err.code = 'E-COM-006'
+      err.status = 409
+      err.details = { latest: withAggregates(project) }
+      throw err
+    }
+    // FULL REPLACE, not a merge (BLOCKER FIX, W6 계약 감사 후속 —
+    // ProjectWbsDrawer.jsx caught sending only `{dueDate}`): the endpoint's own
+    // description (openapi-live-76c7009.yaml:1102-1104) is explicit — "전체
+    // 교체다(부분 갱신 아님)... 생략한 필드는 null로 교체된다." This mock used to
+    // `?? project.name` (etc.) on every field, which quietly PRESERVED
+    // whatever the caller left out — the opposite of what a real PUT does.
+    // That generosity is exactly why a caller sending a partial body (name/
+    // description/priority all omitted) worked fine in DEV and would have
+    // silently wiped those same fields to null against a real server — the
+    // bug never had a chance to surface here. Now a partial body nulls the
+    // SAME fields a real PUT would, so any future caller that forgets a
+    // field sees its data visibly vanish in DEV instead of appearing to work.
+    // (Tension worth flagging to BE, not resolved unilaterally here: `name`'s
+    // own schema type is a plain `string`, not `[string,"null"]` — the prose
+    // above and the formal type disagree on whether a null name is even
+    // legal. This mock follows the prose since the caller-visible risk is on
+    // that side either way — a rejection would just make ProjectWbsDrawer's
+    // now-fixed full-body send equally necessary.)
     Object.assign(project, {
-      name: body.name ?? project.name,
-      description: body.description ?? project.description,
-      dueDate: body.dueDate ?? project.dueDate,
-      priority: body.priority ?? project.priority,
-      ...(body.status ? { status: body.status } : {}),
+      name: body.name ?? null,
+      description: body.description ?? null,
+      dueDate: body.dueDate ?? null,
+      priority: body.priority ?? null,
     })
     project.version += 1
-    return { message: 'UPDATED' }
+    // Real PUT returns `{data: Project}` (unwrapped by the axios interceptor
+    // to the bare Project); this mock bypasses that interceptor entirely
+    // (withDevFallback calls it directly), so it must hand back the SAME bare
+    // shape itself, not `{message}`. This matters beyond just shape parity:
+    // ProjectsPage.handleManageSubmit reads `updated?.version` off this
+    // return value to send the FRESH (info-PUT-bumped) version into the
+    // status PATCH that may immediately follow in the same submit — a
+    // `{message}` return made that always `undefined`, so a combined
+    // info+status edit sent the STALE pre-edit version to the status call
+    // and would 409 a real server on every such submit.
+    return withAggregates(project)
   },
 
-  async updateProjectStatus(projectId, status) {
+  // PATCH /projects/{id}/status (openapi-live-76c7009.yaml:1141-1169 — `version`
+  // required, same VersionConflict/E-COM-006 shape as PUT above). `version`
+  // used to be silently dropped by projectApi.js's own wire-up on the way
+  // into this mock (see that file's updateProjectStatus for the matching
+  // fix) — even a caller that carefully picked the right version to send had
+  // no effect here because it never arrived. Same withAggregates return-shape
+  // fix as updateProject above, for the same reason (real PATCH also returns
+  // `{data: Project}`).
+  async updateProjectStatus(projectId, status, version) {
     await delay()
     const project = requireProject(projectId)
+    if (version != null && version !== project.version) {
+      const err = new Error('mock: project status version conflict')
+      err.code = 'E-COM-006'
+      err.status = 409
+      err.details = { latest: withAggregates(project) }
+      throw err
+    }
     project.status = status
     project.closedAt = status === 'CLOSED' ? new Date().toISOString() : null
     project.version += 1
-    return { message: 'STATUS_UPDATED' }
+    return withAggregates(project)
   },
 
   async deleteProject(projectId) {
