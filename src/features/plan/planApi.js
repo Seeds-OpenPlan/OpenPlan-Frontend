@@ -75,30 +75,42 @@ function normalizeBlock(b) {
 }
 
 /**
- * KNOWN UNRESOLVED GAP (W4 review): this reads fields FLAT off `w`
- * (`w.weeklyPlanId`, `w.blocks`, ...), which matches the DEV mock's own shape
- * and the pre-openapi assumption this file was built on — but a real
- * `WeeklyPlanView` (openapi.yaml, GET /weekly-plans's actual schema) nests the
- * plan's own fields under `w.plan` (`w.plan.weeklyPlanId`, `w.plan.status`,
- * `w.plan.version`, `w.plan.totalPlannedMinutes` — only `blocks` happens to
- * already sit at the top level on that envelope, which is why it doesn't
- * break at least THAT field today). Unwrapping this envelope properly is a
- * separate, larger change the team lead has explicitly deferred (out of W4's
- * scope) — `getWeek`'s own `isEmptyWeekView` only reads `w.plan`'s PRESENCE
- * and nullness (not its contents) for exactly this reason, and callers of
- * THIS function should not assume `weeklyPlanId`/`status`/`version`/
- * `totalPlannedMinutes` are populated once a real (non-mock, non-404) server
- * answers — they will silently read as `undefined`/defaults until the
- * envelope unwrap lands.
+ * ENVELOPE UNWRAP LANDED (fixes the W6 demo blocker — see this function's own
+ * prior header, retired below). A real `WeeklyPlanView` (openapi.yaml, GET
+ * /weekly-plans's actual schema; confirmed against a live server response,
+ * 2026-08-28) NESTS the plan's own fields under `w.plan`
+ * (`w.plan.weeklyPlanId`, `w.plan.status`, `w.plan.version`,
+ * `w.plan.totalPlannedMinutes`) — only `blocks` (and the summary fields
+ * below it) sit at the top level. This adapter used to read every field FLAT
+ * off `w`, which matched only the DEV mock's own (now-corrected, see
+ * planFixtures.js) shape: against a real server, `plan.weeklyPlanId` came
+ * back `undefined`, so a placement POSTed to
+ * `/weekly-plans/undefined/blocks` and the server 400'd with `E-COM-001`
+ * before ever reaching field validation (hence an empty
+ * `details.fields[]` — this was reported as "태스크 배치가 안 된다").
+ *
+ * `w.plan ?? w` picks the plan-field SOURCE: nested when present (the real
+ * envelope, or any mock/test fixture that already matches it), flat
+ * otherwise — this function stays tolerant of a flat input rather than
+ * hard-requiring the nested shape, on the same "accept either" precedent as
+ * every other normalizer in this file (see `normalizeBlock`'s own header).
+ * `getWeek`'s own `isEmptyWeekView` still reads `w.plan`'s PRESENCE and
+ * nullness directly (not through this function) — untouched by this change,
+ * still the correct way to detect a genuinely empty week before this
+ * function is ever called with one.
  */
 function normalizeWeek(w) {
+  const plan = w.plan ?? w
   return {
-    weeklyPlanId: w.weeklyPlanId ?? w.weekly_plan_id,
-    weekStartDate: w.weekStartDate ?? w.week_start_date,
-    weekEndDate: w.weekEndDate ?? w.week_end_date,
-    status: w.status ?? 'DRAFT',
-    version: w.version ?? 1,
-    totalPlannedMinutes: w.totalPlannedMinutes ?? w.total_planned_minutes ?? 0,
+    weeklyPlanId: plan.weeklyPlanId ?? plan.weekly_plan_id,
+    weekStartDate: plan.weekStartDate ?? plan.week_start_date,
+    weekEndDate: plan.weekEndDate ?? plan.week_end_date,
+    status: plan.status ?? 'DRAFT',
+    version: plan.version ?? 1,
+    totalPlannedMinutes: plan.totalPlannedMinutes ?? plan.total_planned_minutes ?? 0,
+    // unplacedCount/validation are summary fields the spec places at the
+    // envelope's TOP level, alongside `blocks` — never under `plan` — so
+    // these two keep reading off `w`, unaffected by the unwrap above.
     unplacedCount: w.unplacedCount ?? w.unplaced_count ?? 0,
     validation: w.validation ?? { blockCount: 0, warningCount: 0 },
     blocks: (w.blocks ?? []).map(normalizeBlock),
@@ -184,23 +196,22 @@ function serializeAvailability(patterns) {
  * prior version had it wrong): the test is `raw.plan === null`, not "no
  * `weeklyPlanId` came back". `weeklyPlanId` was NEVER a valid signal either
  * way — on a real, POPULATED `WeeklyPlanView` it lives NESTED at
- * `raw.plan.weeklyPlanId`, never at the top level (this adapter still does
- * not unwrap that envelope — see `normalizeWeek`'s own caveat below, still
- * true, still out of THIS change's scope) — so the old test was false for
- * both "no plan" AND "plan exists", meaning every real GET would have wrongly
- * re-provisioned via POST. `plan` is the one key that only a real
- * `WeeklyPlanView` carries at all (the mock's own flat shape has none —
- * `isEmptyWeekView`'s own `hasOwnProperty` check below is what tells the two
- * apart), and the spec defines emptiness by that field explicitly, so it is
- * the only field this test can safely read.
+ * `raw.plan.weeklyPlanId`, never at the top level. `plan` is the one key
+ * that reliably marks a real `WeeklyPlanView` envelope, and the spec defines
+ * emptiness by that field explicitly, so it is the only field this test can
+ * safely read.
  *
- * "no `plan` key at all" (mock, or any other flat shape) and "`plan` key
- * present but null" (real, genuinely empty week) are DELIBERATELY different
- * branches — collapsing them would either break the mock (which never had a
- * `plan` to be null) or miss a real empty week (a flat object with no `plan`
- * key isn't reliably "has a plan" either, but the mock is the ONLY shape that
- * currently reaches this function without one, and it always get-or-creates,
- * so treating "no `plan` key" as "already complete" is safe today).
+ * "no `plan` key at all" and "`plan` key present but null" are DELIBERATELY
+ * different branches, still — collapsing them would miss a real empty week
+ * (a flat object with no `plan` key isn't reliably "has a plan" either).
+ * planFixtures.js's own mock now ALSO always answers with a `plan` key (see
+ * that file's own `getWeek`), populated and non-null (its `ensureWeek`
+ * always get-or-creates internally — GET never comes back empty through the
+ * mock, on purpose), so it takes the "plan key present, non-null" branch
+ * here exactly like a real populated week does — not the "no `plan` key"
+ * branch this comment used to attribute to it. Kept anyway as a safety net
+ * for any OTHER caller that still hands this function a flat shape without a
+ * `plan` key at all (e.g. a hand-built test fixture).
  */
 function isEmptyWeekView(raw) {
   return raw != null && Object.prototype.hasOwnProperty.call(raw, 'plan') && raw.plan === null

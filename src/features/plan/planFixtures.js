@@ -1156,9 +1156,38 @@ function computeDerived(week) {
 }
 
 export const mockBackend = {
+  // GET /weekly-plans?weekStartDate= — answers with the REAL WeeklyPlanView
+  // envelope shape (`{ plan: {...}, blocks: [...] }`, with `unplacedCount`/
+  // `validation` alongside `blocks` at the top level, per openapi.yaml — a
+  // live server confirmed 2026-08-28), not a flat object. Before this change
+  // the mock's own shape was flat, so DEV never actually exercised
+  // `normalizeWeek`'s envelope-unwrap path — every `weeklyPlanId` read in
+  // DEV happened to work by ACCIDENT (flat `w.weeklyPlanId` existed), while
+  // the same code silently read `undefined` against a real server (`POST
+  // /weekly-plans/undefined/blocks`, `E-COM-001`). Matching the real
+  // envelope here is what makes that class of bug reachable in DEV going
+  // forward — same "mock이 계약 모양을 흉내 낸다" rule
+  // `computeValidationIssues`'s own header already follows for weekday.
+  // `computeDerived` itself keeps its OWN flat return shape internally
+  // (saveWeek/getReplanOptions below still read `.totalPlannedMinutes`/
+  // `.blocks` off it directly) — only THIS call site reshapes it into the
+  // wire envelope `planApi.normalizeWeek` expects.
   async getWeek(weekStartISO) {
     await delay(60)
-    return computeDerived(ensureWeek(weekStartISO))
+    const derived = computeDerived(ensureWeek(weekStartISO))
+    return {
+      plan: {
+        weeklyPlanId: derived.weeklyPlanId,
+        weekStartDate: derived.weekStartDate,
+        weekEndDate: derived.weekEndDate,
+        status: derived.status,
+        version: derived.version,
+        totalPlannedMinutes: derived.totalPlannedMinutes,
+      },
+      blocks: derived.blocks,
+      unplacedCount: derived.unplacedCount,
+      validation: derived.validation,
+    }
   },
 
   async getAvailability() {
