@@ -233,6 +233,16 @@ export const router = createBrowserRouter([
         `help/:ticketId`의 AC-1 소유권 방어(HelpDetailPage 자신)도 그대로
         유지된다.
       */
+      /*
+        `/dashboard` — 서버가 소셜 로그인 성공 후 보내는 주소다 (백엔드
+        OAuthLoginService: `onboardingCompleted ? "/dashboard" : "/onboarding"`).
+        이 앱의 대시보드는 `/`(index)라 그 경로가 라우터에 없었고, 소셜로
+        로그인하면 곧장 404로 떨어졌다(오너 보고 2026-08-28 — `/onboarding`은
+        존재해서 신규 사용자만 멀쩡했다).
+        서버 계약을 바꾸는 대신 여기서 정식 주소로 넘긴다 — 위 faq/help와 같은
+        별칭 패턴이고, 대시보드의 정본 URL을 `/` 하나로 유지한다.
+      */
+      { path: 'dashboard', loader: () => redirect('/') },
       { path: 'faq', loader: () => redirect('/settings/support') },
       { path: 'help', loader: () => redirect('/settings/support') },
       { path: 'help/new', loader: () => redirect('/settings/support') },
