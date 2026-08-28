@@ -333,12 +333,22 @@ export function usePlaceTask() {
             }
           })
         })
-        .catch(() => {
+        .catch((error) => {
           queryClient.setQueryData(weekKey, prevWeek)
           // `finally` below invalidates ['unplacedTasks'] unconditionally right
           // after this runs — invalidating it here too was a redundant extra
           // round-trip on the error path only (harmless, just wasteful).
-          toast({ tone: 'error', message: systemMessages.error.writeTitle })
+          //
+          // 401은 따로 구분해서 알린다 (오너 보고 조사, 2026-08-28): 세션
+          // 쿠키(op_at)가 30분이라 오래 작업하면 조회는 캐시로 멀쩡해 보이는데
+          // 쓰기만 튕긴다. 그때 범용 "요청을 처리하지 못했습니다"만 뜨면
+          // 사용자는 기능이 고장난 줄 알고, 실제로 이번에 그렇게 보고됐다.
+          // 무엇을 해야 하는지(재로그인) 알려주는 편이 정확하고 조치도 된다.
+          toast(
+            error?.status === 401
+              ? { tone: 'error', message: '세션이 만료되었습니다. 다시 로그인한 뒤 배치해 주세요' }
+              : { tone: 'error', message: systemMessages.error.writeTitle },
+          )
         })
         .finally(() => {
           // Release the guard on EVERY path (success, failure, or a soft no-op
