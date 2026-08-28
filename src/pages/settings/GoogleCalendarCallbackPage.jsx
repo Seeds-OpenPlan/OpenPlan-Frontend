@@ -25,8 +25,20 @@ export function GoogleCalendarCallbackPage() {
   const createConnection = useCreateGoogleConnection()
   const firedRef = useRef(false)
 
-  const authCode = searchParams.get('authCode')
+  // 🔴 구글은 인가 코드를 `code`로 돌려준다 (OAuth2 표준). 서버가 구글에
+  // `response_type=code` + `redirect_uri=<이 페이지>`로 요청하므로
+  // (백엔드 ExternalCalendarAuthorization.authorizationUrl), 구글이 서버를
+  // 거치지 않고 **이 페이지로 직접** 리다이렉트한다 — 즉 여기 실려오는 이름은
+  // `code`다. 예전엔 `authCode`만 읽어 항상 누락으로 판정했고, 그래서 인가를
+  // 마치고 돌아와도 "연동 정보를 확인하지 못했습니다"만 떴다(오너 보고
+  // 2026-08-28). `authCode`는 서버가 중계하는 형태로 바뀔 경우를 위한 폴백.
+  const authCode = searchParams.get('code') ?? searchParams.get('authCode')
   const state = searchParams.get('state')
+  // 사용자가 동의를 거부하거나 구글이 요청을 거부하면 code 대신 error가 온다
+  // (예: access_denied, redirect_uri_mismatch). 그 경우 "필요한 정보를 받지
+  // 못했다"는 범용 문구 대신 실제 사유를 보여준다 — 지금 구글 콘솔 등록이
+  // 안 끝난 상태라 이 경로로 돌아올 가능성이 높다.
+  const oauthError = searchParams.get('error')
 
   // 최초 시도(effect)와 502 뒤 [다시 시도] 버튼이 같은 mutate 호출을 공유한다
   // (Thomas 리뷰 MAJOR fix — 이전엔 재시도 쪽에만 onSuccess가 빠져 있어, 재시도가
@@ -56,8 +68,12 @@ export function GoogleCalendarCallbackPage() {
     return (
       <ErrorState
         variant="page"
-        title="연동 정보를 확인하지 못했습니다"
-        description="Google에서 필요한 정보를 받지 못했습니다. 설정 화면에서 다시 시도해 주세요."
+        title={oauthError ? 'Google이 연동을 거부했습니다' : '연동 정보를 확인하지 못했습니다'}
+        description={
+          oauthError
+            ? `Google 응답: ${oauthError}. 이 앱의 콜백 주소가 Google 콘솔에 등록돼 있어야 합니다.`
+            : 'Google에서 필요한 정보를 받지 못했습니다. 설정 화면에서 다시 시도해 주세요.'
+        }
         actionLabel="설정으로 돌아가기"
         onAction={() => navigate('/settings/calendar', { replace: true })}
       />
