@@ -22,34 +22,51 @@
 import { apiClient } from '../../api/client'
 import { withDevFallback } from './planApi'
 import { mockBackend } from './planFixtures'
+import { minutesFromTime, timeFromMinutes } from './planTime'
 import { unwrapList } from '../../api/unwrap'
 
 /**
  * Normalize a fixed schedule to the camelCase shape the grid AND the ST-F1-12
- * settings screen both read. version/effectiveFrom/effectiveTo/source/status
+ * settings screen both read. version/startDate/endDate/source/status
  * (ST-B2-12's fixed_schedules columns) are additive — of these, only `version`
  * is actually consumed anywhere in this codebase today (the optimistic-lock
- * check on update). `effectiveFrom`/`effectiveTo`/`source`/`status` are kept
+ * check on update). `startDate`/`endDate`/`source`/`status` are kept
  * normalized here so the shape round-trips cleanly (the mock backend already
  * threads them through create/update), but NO current screen reads or writes
  * them — neither the ST-F1-06 grid nor FixedScheduleForm (ST-F1-12's own CRUD
  * form only edits title/weekday/start/end minutes). They're reserved fields,
  * unused/on hold until a future story actually surfaces them in the UI.
+ *
+ * TIME CONTRACT (fixed BLOCKER — full-repo verification): FixedScheduleInput
+ * (openapi-live-76c7009.yaml:2509) carries `startTime`/`endTime` as time
+ * STRINGS ("HH:mm:ss"), required — every screen in this codebase, though,
+ * works in minutes-of-day integers (startMinutes/endMinutes), same as the
+ * availability contract already had to bridge (planApi.js's own
+ * minutesFromTime/timeFromMinutes, now shared via planTime.js — see that
+ * file's header). This is the ONE place the read side of that bridge lives:
+ * prefer an already-minutes field (old mock/server shape) and fall back to
+ * parsing the real contract's time string. Before this fix, this function
+ * only ever read startMinutes/start_minutes — against a real server (which
+ * sends ONLY startTime) that always evaluated to `undefined`, breaking every
+ * time display on the settings list.
  */
 function normalizeFixedSchedule(f) {
   return {
     fixedScheduleId: f.fixedScheduleId ?? f.fixed_schedule_id,
     title: f.title,
     weekday: f.weekday,
-    startMinutes: f.startMinutes ?? f.start_minutes,
-    endMinutes: f.endMinutes ?? f.end_minutes,
+    startMinutes: f.startMinutes ?? f.start_minutes ?? minutesFromTime(f.startTime ?? f.start_time),
+    endMinutes: f.endMinutes ?? f.end_minutes ?? minutesFromTime(f.endTime ?? f.end_time),
     // Defaults to true: a server that doesn't yet understand week exceptions
     // (or omits the field) should render every fixed schedule as ACTIVE, not
     // silently ghost all of them — an unrecognized false would be the wrong
     // failure direction (hiding a real conflict), so only an explicit false wins.
     activeThisWeek: (f.activeThisWeek ?? f.active_this_week) !== false,
-    effectiveFrom: f.effectiveFrom ?? f.effective_from ?? null,
-    effectiveTo: f.effectiveTo ?? f.effective_to ?? null,
+    // Contract field names are startDate/endDate (nullable date) — this
+    // codebase used to read effectiveFrom/effectiveTo, a name the real server
+    // has never actually sent (renamed together with the mock, below).
+    startDate: f.startDate ?? f.start_date ?? null,
+    endDate: f.endDate ?? f.end_date ?? null,
     source: f.source ?? 'MANUAL',
     status: f.status ?? 'ACTIVE',
     version: f.version ?? 1,
@@ -58,6 +75,27 @@ function normalizeFixedSchedule(f) {
     // "no conflict" claim it can't back up.
     hasConflict: f.hasConflict ?? undefined,
   }
+}
+
+/**
+ * Translate a create/edit draft (FixedScheduleForm's own shape —
+ * startMinutes/endMinutes, plus title/weekday and, on edit, version) into the
+ * wire `FixedScheduleInput` the contract requires (startTime/endTime time
+ * strings). This is the WRITE side of the same time-contract bridge
+ * `normalizeFixedSchedule` reads back above — the boundary where the app's
+ * minutes-of-day convention ever touches the server's string one, so a
+ * future caller never has to remember to convert by hand.
+ *
+ * startDate/endDate are nullable in the contract and FixedScheduleForm never
+ * collects them, so they are simply omitted here (not sent as `null`) rather
+ * than invented — an absent optional field is not a contract violation.
+ */
+function serializeFixedSchedule(body) {
+  const { startMinutes, endMinutes, ...rest } = body
+  const wire = { ...rest }
+  if (startMinutes != null) wire.startTime = timeFromMinutes(startMinutes)
+  if (endMinutes != null) wire.endTime = timeFromMinutes(endMinutes)
+  return wire
 }
 
 /**
@@ -119,22 +157,37 @@ export function getAllFixedSchedules() {
   ).then((r) => unwrapList(r, 'fixedSchedules').map(normalizeFixedSchedule))
 }
 
-/** OP-FIXED-CREATE → POST /fixed-schedules (FIX-06 고정일정 직접 추가). */
+/**
+ * OP-FIXED-CREATE → POST /fixed-schedules (FIX-06 고정일정 직접 추가).
+ * `payload` arrives as FixedScheduleForm's own draft shape (startMinutes/
+ * endMinutes); `serializeFixedSchedule` converts it to the wire
+ * `FixedScheduleInput` (startTime/endTime) BEFORE either the real POST or the
+ * mock, so the mock's own store actually exercises the same contract shape a
+ * real server expects (see planFixtures.createFixedSchedule) — the previous
+ * version sent `payload` straight through unconverted, so startTime/endTime
+ * (required by the contract) never went out at all.
+ */
 export function createFixedSchedule(payload) {
+  const wire = serializeFixedSchedule(payload)
   return withDevFallback(
-    () => apiClient.post('/fixed-schedules', payload),
-    () => mockBackend.createFixedSchedule(payload),
+    () => apiClient.post('/fixed-schedules', wire),
+    () => mockBackend.createFixedSchedule(wire),
   ).then(normalizeFixedSchedule)
 }
 
 /**
  * OP-FIXED-UPDATE → PATCH /fixed-schedules/{id} (FIX-07 편집). `patch` must
- * carry `version` for the optimistic-lock check (E-COM-006, common invariant).
+ * carry `version` for the optimistic-lock check (E-COM-006, common invariant;
+ * required server-side per openapi-live-76c7009.yaml:1994). Same
+ * serializeFixedSchedule conversion as createFixedSchedule — `version`/
+ * `title`/`weekday` pass through untouched (they're not time fields), only
+ * startMinutes/endMinutes become startTime/endTime.
  */
 export function updateFixedSchedule(fixedScheduleId, patch) {
+  const wire = serializeFixedSchedule(patch)
   return withDevFallback(
-    () => apiClient.patch(`/fixed-schedules/${fixedScheduleId}`, patch),
-    () => mockBackend.updateFixedSchedule(fixedScheduleId, patch),
+    () => apiClient.patch(`/fixed-schedules/${fixedScheduleId}`, wire),
+    () => mockBackend.updateFixedSchedule(fixedScheduleId, wire),
   ).then(normalizeFixedSchedule)
 }
 
