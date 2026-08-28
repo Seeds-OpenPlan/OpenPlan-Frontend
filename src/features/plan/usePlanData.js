@@ -333,12 +333,46 @@ export function usePlaceTask() {
             }
           })
         })
-        .catch(() => {
+        .catch((error) => {
           queryClient.setQueryData(weekKey, prevWeek)
           // `finally` below invalidates ['unplacedTasks'] unconditionally right
           // after this runs — invalidating it here too was a redundant extra
           // round-trip on the error path only (harmless, just wasteful).
-          toast({ tone: 'error', message: systemMessages.error.writeTitle })
+          //
+          // 401은 따로 구분해서 알린다 (오너 보고 조사, 2026-08-28): 세션
+          // 쿠키(op_at)가 30분이라 오래 작업하면 조회는 캐시로 멀쩡해 보이는데
+          // 쓰기만 튕긴다. 그때 범용 "요청을 처리하지 못했습니다"만 뜨면
+          // 사용자는 기능이 고장난 줄 알고, 실제로 이번에 그렇게 보고됐다.
+          // 무엇을 해야 하는지(재로그인) 알려주는 편이 정확하고 조치도 된다.
+          // 401이 아닌 실패는 서버가 준 코드(E-XXX-000)나 HTTP 상태를 문구에
+          // 붙여 노출한다. 범용 문구만으로는 사용자도 우리도 원인을 알 수 없어
+          // 같은 증상 보고가 반복됐고(2026-08-28), 실제로 이 화면은 서버가
+          // 200/201을 주는데도 실패로 보이는 상태였다. 코드가 보이면 사용자가
+          // 그대로 전달만 해도 원인이 특정된다 — 지원 창구의 통상적 관행이다.
+          // E-COM-001(요청 형식 오류)은 계약상 details.fields[]로 "어느 필드가
+          // 왜 잘못됐는지"를 함께 준다. 코드만 보여주면 여전히 원인을 못 좁히니
+          // 첫 필드까지 붙인다 — 이번 조사에서 코드는 받았지만 필드를 몰라
+          // 한 번 더 왕복해야 했다.
+          // `details.fields[0]`의 모양이 두 갈래다: api-contracts는 객체
+          // (`{field, code}`)로 적었지만, 이 저장소의 실서버 실측 기록은
+          // 문자열이다(authApi.js 헤더, 2026-08-18 — "newPassword is required").
+          // 둘 다 받아들인다. 객체만 가정하면 문자열일 때 조용히 undefined가
+          // 되어, 필드명을 붙이려던 이 변경 자체가 무효가 된다.
+          const rawField = error?.details?.fields?.[0]
+          const badField = typeof rawField === 'string' ? rawField : rawField?.field
+          const detail =
+            [error?.code, badField].filter(Boolean).join(': ') ||
+            (error?.status != null ? `HTTP ${error.status}` : null)
+          toast(
+            error?.status === 401
+              ? { tone: 'error', message: '세션이 만료되었습니다. 다시 로그인한 뒤 배치해 주세요' }
+              : {
+                  tone: 'error',
+                  message: detail
+                    ? `${systemMessages.error.writeTitle} (${detail})`
+                    : systemMessages.error.writeTitle,
+                },
+          )
         })
         .finally(() => {
           // Release the guard on EVERY path (success, failure, or a soft no-op

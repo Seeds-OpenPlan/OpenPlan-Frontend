@@ -327,21 +327,42 @@ export function createGoogleConnection({ authCode, redirectUri, state }) {
 }
 
 /*
- * TODO(redirect-uri): 구글 콘솔에 등록할 콜백 주소가 아직 확정되지 않았다 —
- * 구글 콘솔 등록이 백엔드 쪽 선행 작업이라 여기서 값을 임의로 지어내지
- * 않는다(팀장 지시). 이 상수는 GoogleCalendarCallbackPage(router.js의
- * `settings/calendar/google-callback`)와 항상 같은 주소를 가리켜야 하므로
- * 그 라우트 문자열과 함께 이 한 곳에서만 관리한다 — 실제 값이 확정되면
- * `GOOGLE_CALENDAR_REDIRECT_URI`만 채우면 된다(경로 문자열은 이미 맞춰져
- * 있으니 라우트 자체를 옮길 필요는 없다는 전제 — 옮기게 되면 이 상수도 같이
- * 고친다). 값이 비어 있는 동안 CalendarConnectionSection은 구글 [연동하기]
- * 버튼을 disabledReason과 함께 막아 둔다 — redirectUri 없이 인가를 시작하면
- * 서버/구글 양쪽에서 거부되거나(최악의 경우) 등록되지 않은 주소로 조용히
- * 리다이렉트되는 상태가 되므로, 값이 없을 때 아예 시작하지 못하게 막는 편이
- * "일단 눌러보게 두고 실패시키는" 것보다 안전하다.
+ * W6 게이트 해제(2026-08-28, 팀장 지시 · 오너 요청 "구글 연동 막힌 것을
+ * 프론트단에서 풀어달라"): 이전엔 콜백 주소를 고정 상수로 박아 두려 했으나
+ * (아래 지워진 TODO), 그러면 dev(`http://localhost:5173`)와 배포
+ * (`https://13.208.66.211`)마다 값을 손으로 바꿔 넣어야 한다. 대신
+ * `googleCalendarRedirectUri()` **함수**로 바꿔 호출 시점의
+ * `window.location.origin`에 이 경로를 붙여 그때그때 조립한다 — 어느
+ * 환경에서 열려 있든 항상 "지금 이 페이지가 실제로 떠 있는 origin"이
+ * 나온다. 모듈 최상단(정적 초기화)이 아니라 함수 본문 안에서
+ * `window.location.origin`을 읽는 게 핵심이다 — 최상단에서 읽으면 SSR/
+ * 빌드타임처럼 `window`가 없는 환경에서 모듈 로드 자체가 죽고, 브라우저에서도
+ * "import된 시점의 origin"으로 굳어버려 여러 오리진에서 재사용할 수 없다.
+ *
+ * 인가 요청(googleCalendarAuthorizationUrl 호출부, CalendarConnectionSection)과
+ * 콜백 POST(GoogleCalendarCallbackPage)가 반드시 **글자 하나 다르지 않게**
+ * 같은 redirectUri를 보내야 한다 — 구글 OAuth는 authorize 단계와 token
+ * 교환 단계의 redirect_uri가 정확히 일치하지 않으면 요청을 거부한다. 두
+ * 화면이 각자 값을 만들지 않고 이 함수 하나를 호출하게 해 그 불변식을
+ * 코드 구조로 강제한다(값을 상수로 캐시해 두 곳에 나눠주는 방식은, 어느 한쪽이
+ * 나중에 값을 스냅샷해 두면 페이지 이동 사이 origin이 바뀌는 사고를 막지
+ * 못하므로 쓰지 않는다).
+ *
+ * ⚠️ 남은 제약(프론트가 해결할 수 없음): 구글은 리디렉션 URI에 HTTPS를
+ * 요구하고 raw IP는 거부한다. 배포 주소가 `https://13.208.66.211`(도메인
+ * 없음)인 동안은 이 값 자체가 구글 콘솔에 등록 불가능해, 버튼을 눌러도
+ * 구글이 "redirect_uri_mismatch" 계열로 거부할 수 있다 — 그건 인프라에
+ * 도메인이 붙어야 풀리는 별도 과제다. 여기서는 값을 임의로 지어내는 대신
+ * "실제로 열려 있는 origin"을 그대로 쓰게 해 게이트만 없앤다.
  */
 export const GOOGLE_CALENDAR_CALLBACK_PATH = '/settings/calendar/google-callback'
-export const GOOGLE_CALENDAR_REDIRECT_URI = undefined // TODO(redirect-uri)
+
+/** 호출 시점의 origin + 콜백 경로로 redirectUri를 조립한다 — 위 헤더 코멘트
+ * 참조. 반드시 이 함수를 통해서만 얻어, 인가 요청과 콜백 POST가 같은 값을
+ * 쓰도록 한다. */
+export function googleCalendarRedirectUri() {
+  return `${window.location.origin}${GOOGLE_CALENDAR_CALLBACK_PATH}`
+}
 
 /**
  * GET /external-calendar-authorization?provider=GOOGLE&redirectUri=... 로

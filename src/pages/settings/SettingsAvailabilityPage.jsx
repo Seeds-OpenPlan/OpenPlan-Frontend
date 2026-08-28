@@ -10,6 +10,7 @@ import {
 import { useWeeklyAvailableMinutes, useUpdateWeeklyAvailableMinutes } from '../../features/settings/useSettings'
 import { Toggle } from '../../components/common/Toggle'
 import { Button } from '../../components/common/Button'
+import { TimeSelect } from '../../components/common/TimeSelect'
 import { LoadingSkeleton } from '../../components/common/LoadingSkeleton'
 import { ErrorState } from '../../components/common/ErrorState'
 import { useAppStore } from '../../store/useAppStore'
@@ -70,23 +71,43 @@ function minutesToTimeInput(min) {
   const m = min % 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
-function timeInputToMinutes(value) {
-  const [h, m] = value.split(':').map(Number)
-  if (Number.isNaN(h) || Number.isNaN(m)) return null
-  return h * 60 + m
-}
-
-const TIME_FIELD =
-  'w-full rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring'
 
 // The common-row value shown/edited: availabilityHelpers.commonPattern's
 // majority-vote result (shared with the hub's own badge — see that file's
-// header for why this must not be a second, possibly-diverging copy), with a
-// fixed 09:00-18:00 fallback only for the one case that helper deliberately
-// returns null for: every day off, where there is no "majority" of an empty
-// set but the field must still show SOMETHING editable.
+// header for why this must not be a second, possibly-diverging copy) among
+// the ACTIVE days.
+//
+// BUG FIX (W6 실서버 재현, 2026-08-28 — 오너 리포트 "요일별 조정이 안 바뀐다" +
+// "합계 0분"): `sharedCommonPattern` returns null when NO day is active — a
+// state `defaultWeekPatterns()` seeds every brand-new/reset account into
+// (every row isActive:false, see that function's own header). The OLD
+// fallback here was a HARDCODED `{9,18}` pair, completely ignoring whatever
+// times actually sit in `patterns` — so for exactly that all-off state, this
+// function returned the SAME constant on every render no matter what the
+// user just typed. `applyCommonPattern` below writes the new start/end to
+// all 7 rows but never touches `isActive`, so while every day stays off the
+// edited value could never round-trip back through here: the input visibly
+// "snapped back" to 09:00-18:00 the instant it changed, which is exactly the
+// reported "고쳐도 반영되지 않는다" — and the user could never work their way
+// out of a genuine 0-active-minute week through this row at all, matching
+// the simultaneous "합계 0분" report (0 IS the correct sum while every day is
+// off; the bug was that this control offered no way out of that state).
+//
+// Fix: when no day is active, fall back to the majority of ALL 7 rows'
+// actual (start,end) pairs — ignoring `isActive` for that one vote — instead
+// of a constant. This reflects the real, currently-edited `patterns` (every
+// row shares one value right after a bulk apply, so the "majority" is
+// unanimous and unambiguous) so the field always shows what was actually
+// typed. Only a genuinely EMPTY array (defensive; `rangeBaselineOf` should
+// never hand this an empty list — see that function) falls through to the
+// fixed 09:00-18:00, since there is then no row of any kind to read a value
+// from.
 function deriveCommonPattern(patterns) {
-  return sharedCommonPattern(patterns) ?? { startMinutes: 9 * 60, endMinutes: 18 * 60 }
+  return (
+    sharedCommonPattern(patterns) ??
+    sharedCommonPattern((patterns ?? []).map((p) => ({ ...p, isActive: true }))) ??
+    { startMinutes: 9 * 60, endMinutes: 18 * 60 }
+  )
 }
 
 function DayRow({ pattern, expanded, onToggleExpand, onToggleActive, onChangeTimes }) {
@@ -121,33 +142,26 @@ function DayRow({ pattern, expanded, onToggleExpand, onToggleActive, onChangeTim
       {expanded && (
         <div className="flex flex-col gap-2 border-t border-border bg-surface-sunken px-4 py-3">
           <p className="text-caption text-text-muted">{label}요일만 개별 설정합니다</p>
-          <div className="flex gap-3">
-            <label className="flex flex-1 flex-col gap-1">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1">
               <span className="text-caption font-medium text-text-muted">시작</span>
-              <input
-                type="time"
-                step="300"
-                value={minutesToTimeInput(pattern.startMinutes)}
-                onChange={(e) => {
-                  const m = timeInputToMinutes(e.target.value)
-                  if (m != null) onChangeTimes({ startMinutes: snapMinutes(m) })
-                }}
-                className={TIME_FIELD}
+              <TimeSelect
+                label={`${label}요일 시작`}
+                value={pattern.startMinutes}
+                onChange={(m) => onChangeTimes({ startMinutes: snapMinutes(m) })}
               />
-            </label>
-            <label className="flex flex-1 flex-col gap-1">
+            </div>
+            <span className="pb-2 text-text-muted" aria-hidden="true">
+              -
+            </span>
+            <div className="flex flex-col gap-1">
               <span className="text-caption font-medium text-text-muted">종료</span>
-              <input
-                type="time"
-                step="300"
-                value={minutesToTimeInput(pattern.endMinutes)}
-                onChange={(e) => {
-                  const m = timeInputToMinutes(e.target.value)
-                  if (m != null) onChangeTimes({ endMinutes: snapMinutes(m) })
-                }}
-                className={TIME_FIELD}
+              <TimeSelect
+                label={`${label}요일 종료`}
+                value={pattern.endMinutes}
+                onChange={(m) => onChangeTimes({ endMinutes: snapMinutes(m) })}
               />
-            </label>
+            </div>
           </div>
           {invalid && (
             <p role="alert" className="text-caption text-danger-700">
@@ -479,16 +493,13 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
 
       <section className="rounded-card border border-border p-4">
         <p className="mb-3 text-caption font-medium text-text-muted">가용 시간 범위 (기본 패턴)</p>
-        <div className="flex items-end gap-3">
-          <label className="flex flex-1 flex-col gap-1">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1">
             <span className="text-caption font-medium text-text-muted">시작</span>
-            <input
-              type="time"
-              step="300"
-              value={minutesToTimeInput(commonStart)}
-              onChange={(e) => {
-                const m = timeInputToMinutes(e.target.value)
-                if (m == null) return
+            <TimeSelect
+              label="공통 패턴 시작"
+              value={commonStart}
+              onChange={(m) => {
                 const snapped = snapMinutes(m)
                 if (snapped < commonEnd) {
                   setCommonApplyInvalid(false)
@@ -500,19 +511,17 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
                   setCommonApplyInvalid(true)
                 }
               }}
-              className={TIME_FIELD}
             />
-          </label>
-          <span className="pb-2 text-text-muted">-</span>
-          <label className="flex flex-1 flex-col gap-1">
+          </div>
+          <span className="pb-2 text-text-muted" aria-hidden="true">
+            -
+          </span>
+          <div className="flex flex-col gap-1">
             <span className="text-caption font-medium text-text-muted">종료</span>
-            <input
-              type="time"
-              step="300"
-              value={minutesToTimeInput(commonEnd)}
-              onChange={(e) => {
-                const m = timeInputToMinutes(e.target.value)
-                if (m == null) return
+            <TimeSelect
+              label="공통 패턴 종료"
+              value={commonEnd}
+              onChange={(m) => {
                 const snapped = snapMinutes(m)
                 if (commonStart < snapped) {
                   setCommonApplyInvalid(false)
@@ -521,9 +530,8 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
                   setCommonApplyInvalid(true)
                 }
               }}
-              className={TIME_FIELD}
             />
-          </label>
+          </div>
         </div>
         {commonApplyInvalid && (
           <p role="alert" className="mt-2 text-caption text-danger-700">

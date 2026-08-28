@@ -2,12 +2,12 @@ import { useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { LoadingSkeleton } from '../../components/common/LoadingSkeleton'
 import { ErrorState } from '../../components/common/ErrorState'
-import { GOOGLE_CALENDAR_REDIRECT_URI } from '../../features/settings/settingsApi'
+import { googleCalendarRedirectUri } from '../../features/settings/settingsApi'
 import { useCreateGoogleConnection } from '../../features/settings/useSettings'
 
 /*
   GoogleCalendarCallbackPage — FIX-14 구글 경로의 착지점. 서버가 구글 인가를
-  마치고 여기(`GOOGLE_CALENDAR_REDIRECT_URI`가 가리키는 라우트, settingsApi.js
+  마치고 여기(`googleCalendarRedirectUri()`가 가리키는 라우트, settingsApi.js
   참조)로 302 리다이렉트하면서 실어 보내는 `authCode`·`state` 쿼리스트링을
   그대로 읽어 POST /external-calendar-connections로 넘긴다(6주차 문서 근거 —
   로컬 openapi.yaml엔 아직 이 필드가 없다).
@@ -32,9 +32,13 @@ export function GoogleCalendarCallbackPage() {
   // (Thomas 리뷰 MAJOR fix — 이전엔 재시도 쪽에만 onSuccess가 빠져 있어, 재시도가
   // 성공해도 이동하지 않고 화면이 영영 스켈레톤에 갇혔다). 한 함수로 묶어 두 곳이
   // 다시 갈라지지 않게 한다.
+  // redirectUri는 여기서도 googleCalendarRedirectUri()로 다시 조립한다(상수를
+  // props/캐시로 물려받지 않는다) — 인가 요청 쪽(CalendarConnectionSection)과
+  // 완전히 같은 함수를 호출해야 두 값이 한 글자도 어긋나지 않는다(settingsApi.js
+  // 헤더 참조). 이 페이지 자체가 그 origin에서 열려 있으므로 값도 동일하게 나온다.
   const attemptConnect = () =>
     createConnection.mutate(
-      { authCode, state, redirectUri: GOOGLE_CALENDAR_REDIRECT_URI },
+      { authCode, state, redirectUri: googleCalendarRedirectUri() },
       { onSuccess: () => navigate('/settings/calendar', { replace: true }) },
     )
 

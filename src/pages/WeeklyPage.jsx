@@ -503,11 +503,36 @@ function WeeklyPage() {
   // Place one task into a resolved grid slot; span = the task's estimated
   // duration, clamped to the end of the day. Optimistic (usePlaceTask).
   const placeTaskAt = (task, slot) => {
+    // 이 화면에 남아 있던 마지막 "말 없이 사라지는" 경로 (리드 브라우저 재현,
+    // 2026-08-28): 주간 계획이 아직 안 잡혔으면 드롭이 아무 흔적 없이 버려졌다
+    // — 요청도 안 나가고 토스트도 없어서, 겉보기엔 아래 planLocked 분기나
+    // 서버 실패와 구분이 되지 않는다. 오너의 "배치가 안 된다" 보고를 조사할 때
+    // 바로 이 구분이 안 돼서 원인을 좁히는 데 시간이 걸렸다.
+    if (!plan) {
+      toast({ tone: 'info', message: '주간 계획을 불러오는 중입니다. 잠시 후 다시 시도해 주세요' })
+      return
+    }
     // fix G: a new placement is exactly the kind of plan change a draft under
     // review can't tolerate (same reasoning as planLocked's own header comment)
     // — the panel's task cards already stop offering drag/quick-place while
-    // locked (UnplacedPanel's `disabled`, below), so this is the backstop.
-    if (!plan || planLocked) return
+    // locked (UnplacedPanel's `disabled`, below), so this is normally
+    // unreachable. It's still a real backstop though (e.g. a drag that began
+    // just before `autoDraft` appeared), and until now this branch dropped the
+    // drop with ZERO feedback — visually indistinguishable from "배치가 안
+    // 되는 결함" (오너 보고, 2026-08-28): the block/ghost just snaps back with
+    // no explanation. handleUserMove's own `isPastWeek` branch already sets
+    // the precedent (a toast beats a silent no-op) — mirrored here for both
+    // reasons `planLocked` can be true, since a dropped drag never reaches any
+    // other error handling to explain itself.
+    if (planLocked) {
+      toast({
+        tone: 'info',
+        message: autoDraft
+          ? '자동 배치 초안을 적용하거나 취소한 뒤 다시 배치해 주세요'
+          : '지난 주에는 새로 배치할 수 없습니다',
+      })
+      return
+    }
     // clampBlockSpan folds two invariant checks into one call: it snaps the
     // task's estimate to the 5-minute grid the server enforces (E-COM-009 —
     // an AI-suggested or partial-remainder estimate might not already be a
