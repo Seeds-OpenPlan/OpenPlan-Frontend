@@ -344,10 +344,21 @@ export function usePlaceTask() {
           // 쓰기만 튕긴다. 그때 범용 "요청을 처리하지 못했습니다"만 뜨면
           // 사용자는 기능이 고장난 줄 알고, 실제로 이번에 그렇게 보고됐다.
           // 무엇을 해야 하는지(재로그인) 알려주는 편이 정확하고 조치도 된다.
+          // 401이 아닌 실패는 서버가 준 코드(E-XXX-000)나 HTTP 상태를 문구에
+          // 붙여 노출한다. 범용 문구만으로는 사용자도 우리도 원인을 알 수 없어
+          // 같은 증상 보고가 반복됐고(2026-08-28), 실제로 이 화면은 서버가
+          // 200/201을 주는데도 실패로 보이는 상태였다. 코드가 보이면 사용자가
+          // 그대로 전달만 해도 원인이 특정된다 — 지원 창구의 통상적 관행이다.
+          const detail = error?.code ?? (error?.status != null ? `HTTP ${error.status}` : null)
           toast(
             error?.status === 401
               ? { tone: 'error', message: '세션이 만료되었습니다. 다시 로그인한 뒤 배치해 주세요' }
-              : { tone: 'error', message: systemMessages.error.writeTitle },
+              : {
+                  tone: 'error',
+                  message: detail
+                    ? `${systemMessages.error.writeTitle} (${detail})`
+                    : systemMessages.error.writeTitle,
+                },
           )
         })
         .finally(() => {
