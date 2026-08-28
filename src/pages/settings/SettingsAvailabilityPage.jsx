@@ -10,6 +10,7 @@ import {
 import { useWeeklyAvailableMinutes, useUpdateWeeklyAvailableMinutes } from '../../features/settings/useSettings'
 import { Toggle } from '../../components/common/Toggle'
 import { Button } from '../../components/common/Button'
+import { TimeSelect } from '../../components/common/TimeSelect'
 import { LoadingSkeleton } from '../../components/common/LoadingSkeleton'
 import { ErrorState } from '../../components/common/ErrorState'
 import { useAppStore } from '../../store/useAppStore'
@@ -70,14 +71,6 @@ function minutesToTimeInput(min) {
   const m = min % 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
-function timeInputToMinutes(value) {
-  const [h, m] = value.split(':').map(Number)
-  if (Number.isNaN(h) || Number.isNaN(m)) return null
-  return h * 60 + m
-}
-
-const TIME_FIELD =
-  'w-full rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring'
 
 // The common-row value shown/edited: availabilityHelpers.commonPattern's
 // majority-vote result (shared with the hub's own badge — see that file's
@@ -149,33 +142,26 @@ function DayRow({ pattern, expanded, onToggleExpand, onToggleActive, onChangeTim
       {expanded && (
         <div className="flex flex-col gap-2 border-t border-border bg-surface-sunken px-4 py-3">
           <p className="text-caption text-text-muted">{label}요일만 개별 설정합니다</p>
-          <div className="flex gap-3">
-            <label className="flex flex-1 flex-col gap-1">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1">
               <span className="text-caption font-medium text-text-muted">시작</span>
-              <input
-                type="time"
-                step="300"
-                value={minutesToTimeInput(pattern.startMinutes)}
-                onChange={(e) => {
-                  const m = timeInputToMinutes(e.target.value)
-                  if (m != null) onChangeTimes({ startMinutes: snapMinutes(m) })
-                }}
-                className={TIME_FIELD}
+              <TimeSelect
+                label={`${label}요일 시작`}
+                value={pattern.startMinutes}
+                onChange={(m) => onChangeTimes({ startMinutes: snapMinutes(m) })}
               />
-            </label>
-            <label className="flex flex-1 flex-col gap-1">
+            </div>
+            <span className="pb-2 text-text-muted" aria-hidden="true">
+              -
+            </span>
+            <div className="flex flex-col gap-1">
               <span className="text-caption font-medium text-text-muted">종료</span>
-              <input
-                type="time"
-                step="300"
-                value={minutesToTimeInput(pattern.endMinutes)}
-                onChange={(e) => {
-                  const m = timeInputToMinutes(e.target.value)
-                  if (m != null) onChangeTimes({ endMinutes: snapMinutes(m) })
-                }}
-                className={TIME_FIELD}
+              <TimeSelect
+                label={`${label}요일 종료`}
+                value={pattern.endMinutes}
+                onChange={(m) => onChangeTimes({ endMinutes: snapMinutes(m) })}
               />
-            </label>
+            </div>
           </div>
           {invalid && (
             <p role="alert" className="text-caption text-danger-700">
@@ -507,16 +493,13 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
 
       <section className="rounded-card border border-border p-4">
         <p className="mb-3 text-caption font-medium text-text-muted">가용 시간 범위 (기본 패턴)</p>
-        <div className="flex items-end gap-3">
-          <label className="flex flex-1 flex-col gap-1">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1">
             <span className="text-caption font-medium text-text-muted">시작</span>
-            <input
-              type="time"
-              step="300"
-              value={minutesToTimeInput(commonStart)}
-              onChange={(e) => {
-                const m = timeInputToMinutes(e.target.value)
-                if (m == null) return
+            <TimeSelect
+              label="공통 패턴 시작"
+              value={commonStart}
+              onChange={(m) => {
                 const snapped = snapMinutes(m)
                 if (snapped < commonEnd) {
                   setCommonApplyInvalid(false)
@@ -528,19 +511,17 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
                   setCommonApplyInvalid(true)
                 }
               }}
-              className={TIME_FIELD}
             />
-          </label>
-          <span className="pb-2 text-text-muted">-</span>
-          <label className="flex flex-1 flex-col gap-1">
+          </div>
+          <span className="pb-2 text-text-muted" aria-hidden="true">
+            -
+          </span>
+          <div className="flex flex-col gap-1">
             <span className="text-caption font-medium text-text-muted">종료</span>
-            <input
-              type="time"
-              step="300"
-              value={minutesToTimeInput(commonEnd)}
-              onChange={(e) => {
-                const m = timeInputToMinutes(e.target.value)
-                if (m == null) return
+            <TimeSelect
+              label="공통 패턴 종료"
+              value={commonEnd}
+              onChange={(m) => {
                 const snapped = snapMinutes(m)
                 if (commonStart < snapped) {
                   setCommonApplyInvalid(false)
@@ -549,9 +530,8 @@ function SettingsAvailabilityPage({ embedded = false, ref, onReadyChange }) {
                   setCommonApplyInvalid(true)
                 }
               }}
-              className={TIME_FIELD}
             />
-          </label>
+          </div>
         </div>
         {commonApplyInvalid && (
           <p role="alert" className="mt-2 text-caption text-danger-700">
