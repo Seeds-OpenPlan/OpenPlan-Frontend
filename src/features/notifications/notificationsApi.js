@@ -28,13 +28,25 @@ async function loadNotificationsMock() {
 
 /** Tolerates snake_case (server) or camelCase (mock) — same reasoning
  * planApi.js's normalizeBlock gives for why this one adapter absorbs the
- * casing question instead of every consumer guessing at both. */
+ * casing question instead of every consumer guessing at both.
+ *
+ * NO `body`/`message`/`content` field: the real `Notification` schema
+ * (openapi-live-76c7009.yaml:2362-2370) only ever had notificationId /
+ * notificationType / title / routePath / readAt / createdAt — this file's
+ * own header called that shape a [가정-신규] guess because this checkout had
+ * no Swagger page for it yet, and the guess included a `body` field the
+ * real contract never had. NotificationPanel.jsx used to render that
+ * field as every row's subtitle; on the real server the field is simply
+ * `undefined`, so every subtitle rendered blank (2026-08-28 contract audit,
+ * MAJOR finding — mock/fixtures had a `body` too, which is exactly why DEV
+ * never caught it). Do not reintroduce a `body` passthrough here without a
+ * contract line backing it — see NotificationPanel.jsx's own header for
+ * where the subtitle went instead. */
 function normalizeNotification(n) {
   return {
     notificationId: n.notificationId ?? n.notification_id,
-    type: n.type,
+    notificationType: n.notificationType ?? n.notification_type,
     title: n.title,
-    body: n.body,
     routePath: n.routePath ?? n.route_path,
     readAt: n.readAt ?? n.read_at ?? null,
     createdAt: n.createdAt ?? n.created_at,

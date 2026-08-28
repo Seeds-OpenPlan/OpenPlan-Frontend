@@ -14,6 +14,17 @@ import { formatDateTimeKO } from '../../utils/formatDate'
   color/weight alone (NFR-017). Clicking a row marks it read (if not already)
   and hands the routePath up to the caller, which owns the actual navigation
   (NotificationBell) since only it knows how to also close the panel first.
+
+  Row has no separate subtitle line — `title` is the ONLY text field the real
+  `Notification` contract sends (notificationId/notificationType/title/
+  routePath/readAt/createdAt, openapi-live-76c7009.yaml:2362-2370). An earlier
+  version rendered a second `n.body` line under the title; that field was
+  never in the contract, so every row's subtitle rendered blank against the
+  real server (2026-08-28 contract audit, MAJOR). Do not re-add a subtitle
+  fed by a client-composed string either — that "server didn't give it so the
+  client invents it" shape is exactly what got StructureWarningBanner removed
+  from this codebase. `title` is expected to already read as a full sentence
+  (see notificationsFixtures.js's own seed data) so a single line is enough.
 */
 export function NotificationPanel({ notifications, isLoading, isError, onRetry, onItemClick }) {
   if (isError) {
@@ -57,7 +68,6 @@ export function NotificationPanel({ notifications, isLoading, isError, onRetry, 
                   {unread && <span className="sr-only">(읽지 않음) </span>}
                   {n.title}
                 </span>
-                <span className="truncate text-caption text-text-muted">{n.body}</span>
                 <span className="text-caption text-text-disabled">{formatDateTimeKO(n.createdAt)}</span>
               </span>
             </button>
