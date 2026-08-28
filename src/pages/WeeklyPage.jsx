@@ -568,8 +568,12 @@ function WeeklyPage() {
       setAutoDraft((d) =>
         d
           ? {
+              ...d,
               placements: d.placements.filter((p) => p.taskId !== task.taskId),
-              unplaced: d.unplaced.filter((t) => t.taskId !== task.taskId),
+              // 🔴 unplaced 는 이제 태스크 객체가 아니라 **UUID 문자열 배열**이다
+              //    (계약 unplacedTaskIds). 예전처럼 `t.taskId` 로 비교하면 문자열엔
+              //    그 속성이 없어 언제나 참이 되어 아무것도 안 걸러진다.
+              unplaced: d.unplaced.filter((id) => id !== task.taskId),
             }
           : d,
       )
