@@ -6,11 +6,25 @@ import { googleCalendarRedirectUri } from '../../features/settings/settingsApi'
 import { useCreateGoogleConnection } from '../../features/settings/useSettings'
 
 /*
-  GoogleCalendarCallbackPage — FIX-14 구글 경로의 착지점. 서버가 구글 인가를
-  마치고 여기(`googleCalendarRedirectUri()`가 가리키는 라우트, settingsApi.js
-  참조)로 302 리다이렉트하면서 실어 보내는 `authCode`·`state` 쿼리스트링을
-  그대로 읽어 POST /external-calendar-connections로 넘긴다(6주차 문서 근거 —
-  로컬 openapi.yaml엔 아직 이 필드가 없다).
+  GoogleCalendarCallbackPage — FIX-14 구글 경로의 착지점. **구글이** 인가를
+  마치고 여기로 직접 돌려보내면서 붙이는 `code`·`state` 쿼리스트링을 읽어
+  POST /external-calendar-connections로 넘긴다.
+
+  🔴 이전 주석은 "서버가 302로 `authCode`를 실어 보낸다"고 적고 코드도 그렇게
+  읽고 있었는데, 그 경로에 서버는 없다. 서버가 구글에 넘기는 `redirect_uri`가
+  바로 이 페이지 주소이기 때문에(ExternalCalendarAuthorization.authorizationUrl —
+  `googleCalendarRedirectUri()`가 만든 값을 그대로 실어 보낸다), 구글은 서버를
+  거치지 않고 브라우저를 여기로 보낸다. 그리고 구글은 인가 코드를 OAuth 2.0
+  규격대로 **`code`**라는 이름으로 붙인다 — `authCode`라는 파라미터는 오지 않는다.
+  그래서 이 페이지는 항상 `authCode === null`이 되어 "연동 정보를 확인하지
+  못했습니다"만 띄웠고, 구글 연동이 끝까지 성공한 적이 없다.
+
+  `authCode`도 폴백으로 남겨 둔다 — 서버가 나중에 중간에서 받아 이름을 바꿔
+  넘기는 구조로 가더라도 이 페이지가 다시 깨지지 않게. 다만 지금 실제로 오는
+  것은 `code`다.
+
+  POST 본문의 필드명이 `authCode`인 것은 맞다(계약 `CreateConnectionRequest`) —
+  틀렸던 것은 **URL에서 읽는 이름**뿐이다.
 
   authCode/state 자체의 유효성(서명·만료)은 서버 몫이라 여기서 검증하지 않는다
   — 파라미터 누락(콜백이 아예 실패해 아무것도 안 실려온 경우)만 화면에서
@@ -25,7 +39,7 @@ export function GoogleCalendarCallbackPage() {
   const createConnection = useCreateGoogleConnection()
   const firedRef = useRef(false)
 
-  const authCode = searchParams.get('authCode')
+  const authCode = searchParams.get('code') ?? searchParams.get('authCode')
   const state = searchParams.get('state')
 
   // 최초 시도(effect)와 502 뒤 [다시 시도] 버튼이 같은 mutate 호출을 공유한다
