@@ -355,6 +355,48 @@ export function createGoogleConnection({ authCode, redirectUri, state }) {
  * 도메인이 붙어야 풀리는 별도 과제다. 여기서는 값을 임의로 지어내는 대신
  * "실제로 열려 있는 origin"을 그대로 쓰게 해 게이트만 없앤다.
  */
+/**
+ * GET /external-calendar-connections/{connectionId}/events (ONB-08).
+ *
+ * 🔴 이 호출이 곧 **동기화 트리거**다. 서버는 이 요청을 받은 자리에서 선택된
+ * 캘린더를 기준으로 제공자(구글 API·애플 CalDAV)를 찔러 일정을 가져온다
+ * (ExternalCalendarService.listEvents → synchronize). 다른 어떤 엔드포인트도
+ * 동기화를 시작하지 않는다 — 연동을 추가하고 캘린더를 골라도, 이걸 부르지
+ * 않으면 서버는 외부 일정을 **한 번도 수집하지 않는다.**
+ *
+ * ⚠️ 선택된 캘린더가 없으면 서버가 제공자를 부르지 않고 즉시 돌아온다
+ * (synchronize의 `selections.isEmpty()` 분기) — 빈 목록이 오면 "일정이 없다"가
+ * 아니라 "가져올 캘린더를 아직 안 골랐다"일 수 있다. 호출부가 그 둘을 구분해
+ * 안내한다(CalendarConnectionSection).
+ */
+export function getExternalEvents(connectionId, applyStatus) {
+  const query = applyStatus ? `?applyStatus=${encodeURIComponent(applyStatus)}` : ''
+  return withDevFallback(
+    () => apiClient.get(`/external-calendar-connections/${connectionId}/events${query}`),
+    // 목업을 두지 않고 빈 목록을 준다. 여기서 가짜 일정을 돌려주면 개발 화면이
+    // "N개 반영했습니다"라고 거짓말을 하고, 그 거짓이 실서버에서만 드러난다.
+    async () => [],
+  ).then((r) => unwrapList(r, 'events'))
+}
+
+/**
+ * POST /external-calendar-events/{eventId}/application (ONB-09 반영).
+ *
+ * AS_IS·EDITED는 고정 일정(source=EXTERNAL)을 만들고 EXCLUDE는 제외로만
+ * 기록한다. **주간 계획이 읽는 것은 그 고정 일정**이므로, 이 호출 없이는 외부
+ * 일정이 주간 계획에 나타날 경로가 아예 없다(가져오기만으로는 CANDIDATE에 머문다).
+ *
+ * 409(E-EXT-005)는 "이미 반영·제외한 일정"이다. 서버가 이중 클릭·재시도로 고정
+ * 일정이 두 벌 생기는 것을 막아 주는 것이라, 호출부는 이걸 실패가 아니라
+ * **이미 처리됨**으로 읽어야 한다(계약 원문이 그렇게 읽으라고 적어 두었다).
+ */
+export function applyExternalEvent(eventId, mode = 'AS_IS') {
+  return withDevFallback(
+    () => apiClient.post(`/external-calendar-events/${eventId}/application`, { mode }),
+    async () => ({ applyStatus: mode === 'EXCLUDE' ? 'EXCLUDED' : 'APPLIED', fixedSchedule: null }),
+  )
+}
+
 export const GOOGLE_CALENDAR_CALLBACK_PATH = '/settings/calendar/google-callback'
 
 /** 호출 시점의 origin + 콜백 경로로 redirectUri를 조립한다 — 위 헤더 코멘트

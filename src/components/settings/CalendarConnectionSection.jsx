@@ -14,6 +14,7 @@ import {
   useSetConnectionStatus,
   useReplaceSelectedCalendars,
   useDisconnectConnection,
+  useApplyCandidateEvents,
 } from '../../features/settings/useSettings'
 import {
   CONNECTION_STATUS,
@@ -189,6 +190,7 @@ export function CalendarConnectionSection() {
   const setStatus = useSetConnectionStatus()
   const replaceCalendars = useReplaceSelectedCalendars()
   const disconnect = useDisconnectConnection()
+  const applyEvents = useApplyCandidateEvents()
 
   const [disconnectTarget, setDisconnectTarget] = useState(null) // {connectionId, label} | null
   const [calendarEditTarget, setCalendarEditTarget] = useState(null) // {connectionId, label, selectedCalendars} | null
@@ -266,6 +268,32 @@ export function CalendarConnectionSection() {
                     {conn.selectedCalendars.length}개 캘린더 선택됨
                   </span>
                   <div className="flex gap-2">
+                    {/*
+                      ONB-08/09 — 이 버튼이 외부 일정을 주간 계획까지 실어 나르는
+                      유일한 경로다. 연동 추가와 캘린더 선택만으로는 서버가 제공자를
+                      부르지도 않고(동기화는 후보 조회 시점에 돈다), 가져온 일정도
+                      CANDIDATE에 머물러 고정 일정이 되지 않는다 — 두 단계가 모두
+                      빠져 있어 "연동은 됐는데 주간 계획이 빈" 상태가 됐다.
+                      useApplyCandidateEvents가 조회(=동기화)와 반영을 한 동작으로 묶는다.
+
+                      캘린더를 하나도 안 골랐으면 누르지 못하게 막는다. 서버가 그 경우
+                      제공자를 부르지 않고 빈 목록을 돌려주는데, 그러면 "일정이 없다"와
+                      "고를 캘린더를 안 골랐다"가 화면에서 같아 보인다.
+                    */}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      loading={applyEvents.isPending}
+                      disabled={conn.selectedCalendars.length === 0}
+                      title={
+                        conn.selectedCalendars.length === 0
+                          ? '가져올 캘린더를 먼저 선택해 주세요'
+                          : undefined
+                      }
+                      onClick={() => applyEvents.mutate(conn.connectionId)}
+                    >
+                      일정 가져와 반영
+                    </Button>
                     <Button
                       variant="secondary"
                       size="sm"

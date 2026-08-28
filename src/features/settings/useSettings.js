@@ -30,6 +30,8 @@ import {
   disconnectConnection,
   createAppleConnection,
   createGoogleConnection,
+  getExternalEvents,
+  applyExternalEvent,
   getAccount,
   updateAccount,
   deactivateAccount,
@@ -253,6 +255,65 @@ export function useCreateGoogleConnection() {
   return useMutation({
     mutationFn: createGoogleConnection,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: connectionsKey() }),
+  })
+}
+
+/**
+ * 후보 일정을 가져와 한 번에 반영한다 (ONB-08 → ONB-09 일괄).
+ *
+ * 두 API를 한 동작으로 묶는 이유: 사용자에게 "외부 일정을 주간 계획에 넣는다"는
+ * 한 가지 일인데 계약은 조회(=동기화)와 반영을 나눠 두었다. 화면이 그 둘을 따로
+ * 노출하면 "가져오기만 하고 반영은 안 한" 상태가 생기는데, 그 상태는 화면에서
+ * **아무것도 안 가져온 상태와 구별되지 않는다** — 둘 다 주간 계획이 비어 있다.
+ *
+ * 반영은 순차로 돈다. 병렬로 쏘면 같은 연동의 동기화·반영이 겹쳐 서버가 막아
+ * 놓은 경합 경로(409·UQ 위반 흡수)를 불필요하게 두드린다.
+ *
+ * 409는 실패로 세지 않는다 — 서버가 중복 반영을 막아 준 것이고 사용자 관점에서는
+ * 이미 반영된 것이다(settingsApi.applyExternalEvent 헤더 참조).
+ */
+export function useApplyCandidateEvents() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (connectionId) => {
+      const events = await getExternalEvents(connectionId, 'CANDIDATE')
+      let applied = 0
+      let already = 0
+      let failed = 0
+      for (const event of events) {
+        try {
+          await applyExternalEvent(event.externalCalendarEventId, 'AS_IS')
+          applied += 1
+        } catch (error) {
+          if (error?.status === 409) already += 1
+          else failed += 1
+        }
+      }
+      return { fetched: events.length, applied, already, failed }
+    },
+    onSuccess: ({ fetched, applied, already, failed }) => {
+      // 고정 일정이 새로 생겼다 — 주간 계획·고정 일정 화면이 모두 그것을 읽는다.
+      // 주차별로 키가 갈리므로 접두사로 한 번에 무효화한다.
+      queryClient.invalidateQueries({ queryKey: ['fixedSchedules'] })
+      queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
+      queryClient.invalidateQueries({ queryKey: ['weekPlan'] })
+
+      if (fetched === 0) {
+        // 🔴 "일정이 없다"로 단정하지 않는다. 가져올 캘린더를 안 골랐어도 빈 목록이
+        //    온다(settingsApi.getExternalEvents 헤더) — 두 원인을 한 문장에 담는다.
+        toast({ tone: 'info', message: '반영할 새 일정이 없습니다. 가져올 캘린더를 선택했는지 확인해 주세요' })
+        return
+      }
+      if (failed > 0) {
+        toast({ tone: 'error', message: `${applied}개 반영, ${failed}개 실패했습니다` })
+        return
+      }
+      toast({
+        tone: 'success',
+        message: already > 0 ? `${applied}개 반영했습니다 (${already}개는 이미 반영됨)` : `${applied}개 반영했습니다`,
+      })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
 }
 
