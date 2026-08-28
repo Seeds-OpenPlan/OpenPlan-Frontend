@@ -26,7 +26,9 @@ export function AuthShell({ children, footer }) {
         <div className="flex flex-col items-center gap-3 text-center">
           <BrandMarkIcon />
           <div>
-            <p className="text-title font-bold text-text">OpenPlan</p>
+            {/* BrandLogo와 같은 워드마크지만 색/크기가 달라 이 화면은 자체
+                마크업을 유지한다 — Pretendard 제외(font-logo)만 맞춘다. */}
+            <p className="text-title font-logo font-bold text-text">OpenPlan</p>
             <p className="text-caption text-text-muted">실행 가능한 계획을 만들어드려요</p>
           </div>
         </div>

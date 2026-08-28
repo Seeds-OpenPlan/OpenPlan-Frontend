@@ -61,7 +61,19 @@ function OnboardingIntroPage() {
           rather than needing to re-discover focus on every "다음" click. */}
       <div aria-live="polite" className="flex flex-col gap-3 motion-safe:transition-opacity motion-safe:duration-slow">
         <h1 className="text-heading font-bold text-text">{page.title}</h1>
-        <p className="max-w-[48ch] text-body text-text-muted">{page.body}</p>
+        {/* 줄바꿈 위치는 문구 자신이 정한다(onboardingCopy의 bodyLines 주석
+            참고) — 그래서 폭 제한(옛 max-w-[48ch])을 두지 않는다. 그 제한이
+            남아 있으면 지정한 자리보다 먼저 접혀 버린다. 각 줄은 block
+            <span>이라 <br> 없이 끊기고, 스크린리더에는 여전히 한 문단이다.
+            break-keep은 모바일처럼 한 줄이 다 안 들어가는 폭에서 다시 접힐 때
+            어절 중간이 아니라 어절 경계에서 접히게 한다. */}
+        <p className="text-body break-keep text-text-muted">
+          {page.bodyLines.map((line) => (
+            <span key={line} className="block">
+              {line}
+            </span>
+          ))}
+        </p>
       </div>
 
       {/* Page dots — visual + textual (색 단독 금지: 현재 페이지 자체가

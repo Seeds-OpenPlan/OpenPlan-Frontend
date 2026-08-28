@@ -79,6 +79,15 @@
   --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
 
+  /* "OpenPlan" 워드마크 전용 — 오너 지시(2026-08-28): 로고만 Pretendard 적용
+     대상에서 뺀다. --font-sans에서 Pretendard 두 항목만 덜어낸 스택이라,
+     Pretendard를 실제로 로드하기 시작한 뒤에도 워드마크는 그 전과 똑같이
+     그려진다(Windows=Segoe UI, macOS=시스템 폰트). 로고가 본문 폰트를 따라
+     같이 바뀌는 것을 막는 게 이 토큰의 유일한 목적이므로, BrandLogo와
+     AuthShell 워드마크 밖에서는 쓰지 않는다. */
+  --font-logo: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+
   --text-caption: 0.75rem;
   --text-caption--line-height: 1.4;
   --text-label: 0.8125rem;
