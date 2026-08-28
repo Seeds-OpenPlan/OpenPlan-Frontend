@@ -349,7 +349,14 @@ export function usePlaceTask() {
           // 같은 증상 보고가 반복됐고(2026-08-28), 실제로 이 화면은 서버가
           // 200/201을 주는데도 실패로 보이는 상태였다. 코드가 보이면 사용자가
           // 그대로 전달만 해도 원인이 특정된다 — 지원 창구의 통상적 관행이다.
-          const detail = error?.code ?? (error?.status != null ? `HTTP ${error.status}` : null)
+          // E-COM-001(요청 형식 오류)은 계약상 details.fields[]로 "어느 필드가
+          // 왜 잘못됐는지"를 함께 준다. 코드만 보여주면 여전히 원인을 못 좁히니
+          // 첫 필드까지 붙인다 — 이번 조사에서 코드는 받았지만 필드를 몰라
+          // 한 번 더 왕복해야 했다.
+          const badField = error?.details?.fields?.[0]
+          const detail =
+            [error?.code, badField?.field].filter(Boolean).join(': ') ||
+            (error?.status != null ? `HTTP ${error.status}` : null)
           toast(
             error?.status === 401
               ? { tone: 'error', message: '세션이 만료되었습니다. 다시 로그인한 뒤 배치해 주세요' }
