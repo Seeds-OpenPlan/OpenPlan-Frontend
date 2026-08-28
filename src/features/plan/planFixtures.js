@@ -1443,10 +1443,20 @@ export const mockBackend = {
       const { startMin, endMin } = clampBlockSpan(slot.startMin, duration)
       const startAt = composeTimestamp(days[slot.dayIndex], startMin)
       const endAt = composeTimestamp(days[slot.dayIndex], endMin)
-      placements.push({ taskId: task.taskId, title: task.title, startAt, endAt })
+      // 🔴 계약(openapi PlanBlockInput)의 shape 그대로 — blockType 포함, title 없음.
+      //    title 은 서버가 주지 않는다(taskId 로 화면이 잇는다).
+      placements.push({ blockType: 'TASK', taskId: task.taskId, startAt, endAt })
       occupied.push({ startAt, endAt })
     }
-    return { placements, unplaced }
+    // 🔴 이 목이 오래도록 `{ placements, unplaced }` 라는 **계약에 없는 이름**을
+    //    돌려줬고, 어댑터가 거기에 맞춰져 실서버에서만 조용히 깨졌다(2026-08-28).
+    //    목은 클라이언트가 아니라 **계약**을 흉내내야 한다 — 서버와 같은 이름·같은
+    //    모양으로 돌려준다. unplaced 도 태스크 객체가 아니라 UUID 배열이다.
+    return {
+      proposedBlocks: placements,
+      unplacedTaskIds: unplaced.map((t) => t.taskId),
+      reason: '우선순위·마감일·예상시간 순으로 가용 시간에 채웠습니다(first-fit).',
+    }
   },
 
   // POST /weekly-plans/{id}/block-batches — commit an applied auto-place draft.
