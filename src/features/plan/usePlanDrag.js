@@ -25,13 +25,25 @@ const DRAG_THRESHOLD_PX = 4
  * @param {React.RefObject<HTMLElement>} opts.gridRef  grid BODY element (7 cols, excludes ruler)
  * @param {{startMinutes:number,endMinutes:number}} opts.range
  * @param {(target:{planBlockId:string,boundary:('prev'|'next'|null),dayIndex:number,startMin:number,endMin:number})=>void} opts.onCommit
+ * @param {number} [opts.pxPerMin]  현재 세로 축척. 그리드가 그릴 때 쓴 값과 같아야
+ *   드래그한 거리와 블록이 실제로 옮겨 가는 시간이 일치한다.
  * @param {boolean} [opts.disabled]
  */
-export function usePlanDrag({ gridRef, range, onCommit, onDropOutside, disabled }) {
+export function usePlanDrag({
+  gridRef,
+  range,
+  pxPerMin = PX_PER_MIN,
+  onCommit,
+  onDropOutside,
+  disabled,
+}) {
   const [dragState, setDragState] = useState(null)
   // The visible band, read through a ref so an in-flight drag clamps against the
   // current range without re-binding its window listeners.
   const rangeRef = useRef(range)
+  // 축척도 range와 같은 이유로 ref를 거쳐 읽는다 — 드래그 도중 확대/축소가
+  // 일어나도 진행 중인 드래그가 옛 축척으로 계산하지 않도록.
+  const pxPerMinRef = useRef(pxPerMin)
 
   // Commit through a ref so a drag that started earlier still calls the latest
   // handler without re-binding the window listeners mid-drag. Drag math is
@@ -43,7 +55,8 @@ export function usePlanDrag({ gridRef, range, onCommit, onDropOutside, disabled 
     onCommitRef.current = onCommit
     onDropOutsideRef.current = onDropOutside
     rangeRef.current = range
-  }, [onCommit, onDropOutside, range])
+    pxPerMinRef.current = pxPerMin
+  }, [onCommit, onDropOutside, range, pxPerMin])
 
   const onBlockPointerDown = useCallback(
     (e, block, dayIndex, startMin) => {
@@ -66,7 +79,7 @@ export function usePlanDrag({ gridRef, range, onCommit, onDropOutside, disabled 
         const rect = gridRef.current.getBoundingClientRect()
         const colWidth = rect.width / 7
 
-        const dMin = (clientY - s.clientY0) / PX_PER_MIN
+        const dMin = (clientY - s.clientY0) / pxPerMinRef.current
         let start = snapMinutes(s.startMin0 + dMin)
         // Clamp to the VISIBLE band, not just the whole day: in focus mode the
         // grid starts at ~08:00, so a day-clamped start could sit above the body

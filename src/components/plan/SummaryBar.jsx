@@ -1,4 +1,5 @@
 import { ModeToggle } from './ModeToggle'
+import { HourScaleControl } from './HourScaleControl'
 import { formatDurationKO } from '../../features/plan/planTime'
 
 /*
@@ -37,7 +38,17 @@ function BlockLegend() {
   )
 }
 
-export function SummaryBar({ usedMinutes, availableMinutes, mode, onModeChange }) {
+export function SummaryBar({
+  usedMinutes,
+  availableMinutes,
+  mode,
+  onModeChange,
+  // 세로 축척 조절(팀장 요청) — 상태는 페이지가 소유하고 여기선 표시만 한다.
+  scaleIndex,
+  onScaleChange,
+  canZoomIn,
+  canZoomOut,
+}) {
   const ratio = availableMinutes > 0 ? usedMinutes / availableMinutes : 0
   const pct = Math.min(100, Math.round(ratio * 100))
   const over = usedMinutes > availableMinutes && availableMinutes > 0
@@ -54,7 +65,13 @@ export function SummaryBar({ usedMinutes, availableMinutes, mode, onModeChange }
           <span className="text-text-muted"> / {formatDurationKO(availableMinutes)}</span>
           {over && <span className="ml-2 text-caption font-medium text-warning-700">초과</span>}
         </p>
-        <div className="absolute right-0">
+        <div className="absolute right-0 flex items-center gap-2">
+          <HourScaleControl
+            index={scaleIndex}
+            onChange={onScaleChange}
+            canZoomIn={canZoomIn}
+            canZoomOut={canZoomOut}
+          />
           <ModeToggle mode={mode} onChange={onModeChange} />
         </div>
       </div>

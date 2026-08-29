@@ -7,24 +7,50 @@
 
 import { MINUTES_PER_DAY, snapMinutes, WEEKDAY_KEYS } from './planTime'
 
-// One hour of vertical space. Blocks and the hour ruler both derive from this.
-//
-// 2026-08-29 (팀장 제안): "주간계획 화면이 너무 작아서 스크롤 하는 게 불편하다 —
-// 1시간 간격을 좀 좁히더라도 한 눈에 더 많은 시간을 보이게 하자." 75 → 50으로
-// 내렸다. 같은 그리드 높이에서 보이는 시간이 8시간대 → 12시간대로 늘어, 보통의
-// 가용 창(예: 09–19시)이 스크롤 없이 통째로 들어온다.
-//
-// 왜 더 내리지 않았나: 이 값은 블록 안 글씨 높이와 직접 맞물린다. 1시간 블록의
-// 실제 높이가 그대로 HOUR_PX이고, PlanBlock은 46px(SHORT_BLOCK_PX) 아래를
-// "제목을 못 읽는 블록"으로 보고 hover 카드에 의존한다. 50이면 1시간 블록은
-// 여전히 자기 제목을 직접 보여 주고, 그 아래(45분 이하)만 카드로 넘어간다.
-// 40대로 더 내리면 가장 흔한 1시간 블록까지 전부 카드 의존이 된다.
-//
-// Every other geometry helper here (rangeHeightPx, blockRect, pxToMinutes) and
-// every consumer (CalendarGrid's scroll-offset math, usePlanDrag's px→min drag
-// delta) derives from PX_PER_MIN, so they all scale automatically; nothing else
-// needs a matching change.
-export const HOUR_PX = 50
+/*
+  1시간이 차지하는 세로 픽셀 — 즉 그리드의 세로 축척.
+
+  2026-08-29 (팀장): 처음엔 "화면이 작아 스크롤이 불편하다"는 지적에 75 → 50으로
+  낮췄는데, 이어서 "사용자가 직접 조절해서 한눈에 보이는 일정 량을 조절하고
+  싶다"는 요청이 왔다. 그래서 이 값은 더 이상 고정 상수가 아니라 **사용자
+  설정값**이다 — 달력 박스 높이는 그대로 두고 축척만 바꾸므로, 촘촘히 하면 같은
+  칸에 더 많은 시간이 들어오고 넉넉히 하면 블록 글씨가 커진다. 페이지 전체
+  스크롤은 영향받지 않는다.
+
+  연속 실수가 아니라 **고정 단계 표**를 쓴다(WbsTimeline의 ZOOM_STEPS와 같은
+  이유): 모든 단계가 정수 픽셀이라 시간선이 소수점으로 어긋나지 않고, +/− 버튼이
+  양 끝에서 자연스럽게 비활성화된다.
+
+  단계 값의 근거 — 이 축척은 블록 안 글씨 높이와 직접 맞물린다. 1시간 블록의
+  실제 높이가 그대로 이 값이고, PlanBlock은 46px(SHORT_BLOCK_PX) 아래를 "제목을
+  못 읽는 블록"으로 보아 hover 카드에 의존한다. 그래서:
+    30·40 — 1시간 블록도 카드에 의존한다. 하루 전체를 훑는 용도의 "촘촘히".
+    50    — 1시간 블록이 제 제목을 직접 보여 주는 첫 단계. 기본값.
+    65·80 — 읽기 편한 쪽. 30분 블록도 제목을 직접 보여 주기 시작한다.
+
+  Every other geometry helper here (rangeHeightPx, blockRect, pxToMinutes) and
+  every consumer (CalendarGrid's scroll-offset math, usePlanDrag's px→min drag
+  delta) derives from the scale it is HANDED, not from a module constant — that
+  is what keeps the grid render, the block rects, and the drag hook from ever
+  disagreeing about it (see this file's own header).
+*/
+export const HOUR_PX_STEPS = [30, 40, 50, 65, 80]
+export const DEFAULT_HOUR_PX_INDEX = 2
+
+/** 범위를 벗어난(또는 저장돼 있다 표가 바뀐) 단계 인덱스를 표 안으로 되돌린다. */
+export function clampHourPxIndex(index) {
+  if (!Number.isInteger(index)) return DEFAULT_HOUR_PX_INDEX
+  return Math.max(0, Math.min(HOUR_PX_STEPS.length - 1, index))
+}
+
+/** 단계 인덱스 → 분당 픽셀. 지오메트리 헬퍼들이 받는 값이 바로 이것이다. */
+export function pxPerMinAt(index) {
+  return HOUR_PX_STEPS[clampHourPxIndex(index)] / 60
+}
+
+// 기본 축척. 아래 헬퍼들의 기본 인자이자, 축척을 조절하지 않는 화면
+// (TaskEditPreview의 작은 미리보기)이 그대로 쓰는 값이다.
+export const HOUR_PX = HOUR_PX_STEPS[DEFAULT_HOUR_PX_INDEX]
 export const PX_PER_MIN = HOUR_PX / 60
 
 /**
@@ -93,9 +119,18 @@ export function visibleRange(mode, availability, spans) {
   return { startMinutes: padStart, endMinutes: padEnd }
 }
 
+/*
+  아래 네 헬퍼는 축척(`pxPerMin`)을 **인자로** 받는다. 기본값은 기본 축척이라
+  축척을 조절하지 않는 호출부(TaskEditPreview)는 손댈 필요가 없고, 주간 그리드는
+  사용자가 고른 축척을 넘겨 준다. 한 화면 안에서 이 넷에 서로 다른 축척을 넘기면
+  블록 위치·드래그 좌표·눈금이 어긋나므로, 호출부는 반드시 같은 값을 쓴다
+  (CalendarGrid는 `pxPerMin` prop 하나를, WeeklyPage는 같은 값을 grid와
+  hit-test 양쪽에 넘긴다).
+*/
+
 /** Total pixel height of the grid body for a visible range. */
-export function rangeHeightPx(range) {
-  return (range.endMinutes - range.startMinutes) * PX_PER_MIN
+export function rangeHeightPx(range, pxPerMin = PX_PER_MIN) {
+  return (range.endMinutes - range.startMinutes) * pxPerMin
 }
 
 /** Whole-hour tick marks inside a visible range, for the left ruler + gridlines. */
@@ -108,15 +143,15 @@ export function hourTicks(range) {
 }
 
 /** Top/height px for a block given its minutes-of-day span and the visible range. */
-export function blockRect(startMin, endMin, range) {
-  const top = (startMin - range.startMinutes) * PX_PER_MIN
-  const height = Math.max(PX_PER_MIN * 15, (endMin - startMin) * PX_PER_MIN) // >=15min tall
+export function blockRect(startMin, endMin, range, pxPerMin = PX_PER_MIN) {
+  const top = (startMin - range.startMinutes) * pxPerMin
+  const height = Math.max(pxPerMin * 15, (endMin - startMin) * pxPerMin) // >=15min tall
   return { top, height }
 }
 
 /** Convert a pixel offset from the grid top into minutes-of-day within the range. */
-export function pxToMinutes(px, range) {
-  return range.startMinutes + px / PX_PER_MIN
+export function pxToMinutes(px, range, pxPerMin = PX_PER_MIN) {
+  return range.startMinutes + px / pxPerMin
 }
 
 /**
@@ -138,9 +173,11 @@ export function availabilityForColumn(columnIndex, availability) {
  * @param {{x:number,y:number}} point  viewport coordinates (clientX/clientY)
  * @param {DOMRect} rect  the grid body's bounding rect
  * @param {{startMinutes:number,endMinutes:number}} range
+ * @param {number} [pxPerMin]  현재 축척. 그리드가 그릴 때 쓴 값과 반드시 같아야
+ *   한다 — 다르면 드롭 미리보기와 실제로 커밋되는 시각이 어긋난다.
  * @returns {{dayIndex:number, startMin:number}|null}
  */
-export function resolveGridSlot(point, rect, range) {
+export function resolveGridSlot(point, rect, range, pxPerMin = PX_PER_MIN) {
   if (!rect) return null
   if (
     point.x < rect.left ||
@@ -152,6 +189,6 @@ export function resolveGridSlot(point, rect, range) {
   }
   const colWidth = rect.width / 7
   const dayIndex = Math.max(0, Math.min(6, Math.floor((point.x - rect.left) / colWidth)))
-  const startMin = snapMinutes(pxToMinutes(point.y - rect.top, range))
+  const startMin = snapMinutes(pxToMinutes(point.y - rect.top, range, pxPerMin))
   return { dayIndex, startMin }
 }

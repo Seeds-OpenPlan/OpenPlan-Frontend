@@ -15,10 +15,11 @@ import {
 // aria-label already carries the full title+time for screen readers). This is
 // an ABSOLUTE pixel figure (padding + one line of the time label + one line of
 // the title, per the block's fixed font sizes/padding below) — it does NOT
-// scale with planGeometry's HOUR_PX/PX_PER_MIN. Raising HOUR_PX makes any given
-// DURATION taller on screen, so fewer blocks fall under this same px bar and
-// need the popover — that's the intended effect, not something to compensate
-// for by scaling this constant too.
+// scale with the grid's vertical scale. 세로 축척은 이제 사용자가 확대/축소로
+// 고르는 값이라(planGeometry의 HOUR_PX_STEPS) 이 문턱을 넘나드는 블록 집합도
+// 그때그때 달라진다 — 넉넉히 볼수록 같은 길이의 블록이 화면에서 더 높아져 카드
+// 없이도 제목이 읽히고, 촘촘히 볼수록 더 많은 블록이 카드에 기댄다. 그것이
+// 의도한 동작이지, 이 상수를 축척에 맞춰 같이 키울 이유가 아니다.
 const SHORT_BLOCK_PX = 46
 
 /*
@@ -101,6 +102,9 @@ export function PlanBlock({
   // `moveBlocked` below — so callers only need to set this for the
   // "read-only week, but this block still has actions" case.
   moveLocked = false,
+  // 현재 세로 축척(분당 픽셀). 짧은 블록 판정이 이 값에 달려 있어, 사용자가
+  // 축척을 바꾸면 hover 카드가 필요한 블록 집합도 함께 달라져야 한다.
+  pxPerMin = PX_PER_MIN,
   dragActive = false,
   resizing = false,
   pending = false, // optimistic block whose server id hasn't reconciled yet
@@ -201,7 +205,7 @@ export function PlanBlock({
   // Detail card for short blocks: anchored to the block's on-screen rect and
   // rendered in a portal so the grid's overflow can't clip it.
   const [detail, setDetail] = useState(null) // { left, top } | null
-  const isShort = (endMin - startMin) * PX_PER_MIN < SHORT_BLOCK_PX
+  const isShort = (endMin - startMin) * pxPerMin < SHORT_BLOCK_PX
 
   const openDetail = (e) => {
     // Never open while ANY drag is in progress — during a drag the browser holds
