@@ -63,10 +63,45 @@ export function ProjectWbsDrawer({ project, tasks, onClose, disabled, disabledRe
   // itself carries no completion state — it's joined here against the SAME
   // task list the panel already loaded, by taskId, exactly as before.
   const taskStatusById = new Map(tasks.map((t) => [t.taskId, t.status]))
-  const wbsNodes = (wbsQuery.data ?? []).map((n) => ({
+  const rangedNodes = (wbsQuery.data ?? []).map((n) => ({
     ...n,
     status: taskStatusById.get(n.taskId),
   }))
+
+  /*
+    실서버 대조 (2026-08-29, 팀장 보고 "프로젝트 기간 설정이 정상적으로 안 된다").
+
+    GET /projects/{id}/wbs 는 wbs_items 행만 돌려준다 — 컨트롤러가 직접
+    "기간 미설정 태스크는 행이 없어 미포함"이라고 못박고 있다. 그런데 이 화면의
+    [기간 설정]은 바로 그 미설정 행에 달린 버튼이다. 즉 서버 응답만으로 행을
+    만들면 아직 기간이 없는 태스크는 화면에 아예 나타나지 않고, 기간을 처음
+    설정할 방법도 함께 사라진다 — 태스크가 있는데도 "태스크를 먼저 만들면
+    기간을 계획할 수 있습니다" 빈 상태만 보이는 것도 같은 원인이다.
+    (DEV mock은 기간 없는 태스크까지 다 돌려줘서 여기서는 안 걸렸다.)
+
+    그래서 행 목록의 정본을 **패널이 이미 들고 있는 태스크 목록**으로 바꾸고,
+    WBS 응답은 거기에 기간을 얹는 자리로만 쓴다. 순서는 서버 정렬(startDate
+    ASC)을 그대로 살리고 미설정 태스크를 뒤에 붙인다 — 바가 그려지는 행이
+    위로 모여야 타임라인이 읽힌다.
+  */
+  const rangeByTaskId = new Map(rangedNodes.map((n) => [n.taskId, n]))
+  const unsetNodes = tasks
+    .filter((t) => !rangeByTaskId.has(t.taskId))
+    .map((t) => ({
+      taskId: t.taskId,
+      title: t.title,
+      estimatedMinutes: t.estimatedMinutes,
+      plannedStartDate: null,
+      plannedEndDate: null,
+      status: t.status,
+    }))
+  // 서버 행에 제목이 비어 오는 경우(과거 taskTitle 키 불일치 같은)에도 행이
+  // 무명으로 남지 않도록, 패널의 태스크 제목을 최후 보루로 얹는다.
+  const taskTitleById = new Map(tasks.map((t) => [t.taskId, t.title]))
+  const wbsNodes = [
+    ...rangedNodes.map((n) => ({ ...n, title: n.title || taskTitleById.get(n.taskId) || '' })),
+    ...unsetNodes,
+  ]
 
   const timeline = (
     <WbsTimeline
@@ -79,7 +114,26 @@ export function ProjectWbsDrawer({ project, tasks, onClose, disabled, disabledRe
       disabledReason={disabledReason}
       onOpenTaskTab={onClose}
       onCommitRange={(taskId, patch) => updateTaskSchedule.mutate({ projectId: project.projectId, taskId, ...patch })}
-      onCommitDeadline={(dueDate) => updateProject.mutateAsync({ projectId: project.projectId, body: { dueDate } })}
+      /*
+        실서버 대조 (2026-08-29): PUT /projects/{id}는 **전체 교체**다 —
+        ProjectUpdateRequest가 name·description·dueDate·priority를 다 받고
+        `version`은 @NotNull(누락 시 400)이다. 여기서 { dueDate }만 보내던
+        것은 version이 없어 항상 400이었고, 설령 통과해도 이름·설명·우선순위를
+        null로 밀어버렸을 것이다. ProjectsPage.handleManageSubmit이 이미 같은
+        이유로 네 필드+version을 전부 싣고 있다 — 그 규칙을 이 경로에도 맞춘다.
+      */
+      onCommitDeadline={(dueDate) =>
+        updateProject.mutateAsync({
+          projectId: project.projectId,
+          body: {
+            name: project.name,
+            description: project.description,
+            dueDate,
+            priority: project.priority,
+            version: project.version,
+          },
+        })
+      }
     />
   )
 

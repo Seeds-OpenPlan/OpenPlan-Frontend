@@ -36,10 +36,41 @@ const SHORT_BLOCK_PX = 46
   (ST-F1-08); `block.tone` is carried but not yet mapped to a palette here.
 */
 
+/*
+  블록 종류별 색 (팀장 제안 2026-08-29: "고정일정·태스크·일정 색깔 다르게").
+
+  세 종류가 각자 다른 계열을 쓴다 — 태스크=브랜드 파랑, 일정=초록, 고정 일정=
+  회색(FixedScheduleBlock이 소유). 예전엔 일정이 `bg-surface`, 즉 빈 그리드와
+  똑같은 흰 카드여서 테두리 하나로만 구분됐다.
+
+  색만으로 구분하지는 않는다(NFR-017): 고정 일정은 자물쇠 글리프를, 일정·태스크는
+  아래 종류 라벨을 aria-label에 싣고, 그리드 바로 위 요약 줄의 범례(SummaryBar의
+  BlockLegend)가 세 색을 글자로 풀어 준다. 위반 표시(테두리+빗금+칩)는 이 위에 덧그려지며, 칩이 실제
+  의미를 전달하므로 계열이 겹쳐도 오독되지 않는다.
+*/
 const TYPE_CLASSES = {
   TASK: 'bg-brand-50 border-brand-200 text-brand-900',
-  SCHEDULE: 'bg-surface border-border text-text',
+  SCHEDULE: 'bg-success-50 border-success-500 text-success-700',
 }
+
+const TYPE_LABELS = { TASK: '태스크', SCHEDULE: '일정' }
+
+/*
+  우선순위 강조 막대 (팀장 제안: "우선순위에 따라 색상 다르게").
+  블록 왼쪽 3px 띠로만 칠한다 — 배경 계열은 이미 종류를 뜻하므로, 우선순위까지
+  배경에 실으면 둘을 구분할 수 없다.
+
+  ⚠ 지금 실서버 GET /weekly-plans 의 PlanBlock 응답에는 priority 필드가 없다
+  (openapi PlanBlock 스키마 참고). 그래서 실데이터에서는 이 띠가 뜨지 않는다 —
+  BE가 필드를 실어 주는 순간 저절로 살아나도록 "값이 있을 때만" 그리는 형태로
+  둔다. 값이 없다고 회색 띠를 그리면 "우선순위 낮음"이라는 거짓말이 된다.
+*/
+const PRIORITY_BAR_CLASSES = {
+  1: 'bg-danger-600',
+  2: 'bg-warning-500',
+  3: 'bg-neutral-400',
+}
+const PRIORITY_LABELS = { 1: '높음', 2: '보통', 3: '낮음' }
 
 /*
   Validation marking (ST-F1-05, layer 1 of the 3-layer display). A violated block
@@ -93,6 +124,9 @@ export function PlanBlock({
   const moveBlocked = locked || moveLocked
   const timeLabel = `${formatMinutesLabel(startMin)} - ${formatMinutesLabel(endMin)}`
   const typeClass = TYPE_CLASSES[block.blockType] ?? TYPE_CLASSES.TASK
+  const typeLabel = TYPE_LABELS[block.blockType] ?? TYPE_LABELS.TASK
+  const priorityBar = PRIORITY_BAR_CLASSES[block.priority] ?? null
+  const priorityLabel = PRIORITY_LABELS[block.priority] ?? null
   // Completed blocks read as done via a check + strikethrough + dimming, never by
   // color alone (PLAN-13 AC-2, NFR-017).
   const isDone = block.status === 'COMPLETED'
@@ -235,7 +269,11 @@ export function PlanBlock({
       ref={rootRef}
       role="button"
       tabIndex={disabled ? -1 : 0}
-      aria-label={`${block.title}, ${timeLabel}${isDone ? ', 완료' : ''}${
+      aria-label={`${typeLabel}, ${block.title}, ${timeLabel}${
+        // 색으로만 전달되는 것이 없도록, 종류와 우선순위를 글자로도 싣는다
+        // (NFR-017) — TYPE_CLASSES/PRIORITY_BAR_CLASSES 헤더 참고.
+        priorityLabel ? `, 우선순위 ${priorityLabel}` : ''
+      }${isDone ? ', 완료' : ''}${
         violationLabel ? `, ${violationLabel}` : ''
       }${
         // Fully disabled (no menu at all) vs. move-locked but still reachable
@@ -279,6 +317,9 @@ export function PlanBlock({
         'absolute overflow-hidden rounded-control border p-1.5 text-caption',
         'select-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
         typeClass,
+        // 우선순위 띠가 있을 때만 왼쪽 여백을 띠 폭만큼 넓힌다 — 없을 땐 예전
+        // 여백 그대로라 블록 안 글자 위치가 달라지지 않는다.
+        priorityBar ? 'pl-2.5' : '',
         violation ? VIOLATION_BORDER_CLASSES[violation.severity] : '',
         isDone ? 'opacity-60' : '',
         moveBlocked ? 'cursor-default' : 'cursor-grab',
@@ -291,6 +332,14 @@ export function PlanBlock({
         // the block is still sliding into view, which the owner didn't want.
       ].join(' ')}
     >
+      {/* 우선순위 띠. 값이 있을 때만 그린다(PRIORITY_BAR_CLASSES 헤더).
+          pointer-events-none이라 블록의 드래그·메뉴 동작을 가로채지 않는다. */}
+      {priorityBar && (
+        <span
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-y-0 left-0 w-[3px] ${priorityBar}`}
+        />
+      )}
       {/* A2 resize handles (top/bottom edge). Pointer-only; keyboard users edit
           time via the task/schedule form. onResizeStart stops propagation so it
           never starts a block MOVE. Group-hover reveals a subtle grip. */}
@@ -333,7 +382,10 @@ export function PlanBlock({
         )}
       </span>
       <span className="mt-0.5 flex items-start gap-1 font-medium leading-tight">
-        {isDone && <CheckCircleIcon className="mt-px shrink-0 text-success-600" size={12} />}
+        {/* text-current: 일정 블록이 초록 계열이 되면서 초록 체크가 배경에
+            묻혔다. 완료 표시는 체크 글리프 + 취소선 + 흐리게(세 신호)가
+            전달하므로, 아이콘 색은 블록 글자색을 그대로 따르면 된다. */}
+        {isDone && <CheckCircleIcon className="mt-px shrink-0 text-current" size={12} />}
         <span className={`line-clamp-3 ${isDone ? 'line-through' : ''}`}>{block.title}</span>
       </span>
 

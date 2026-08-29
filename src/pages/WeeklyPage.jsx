@@ -282,7 +282,30 @@ function WeeklyPage() {
   const unplacedCount = unplacedQuery.data?.length ?? 0
 
   const days = useMemo(() => weekDaysOf(weekStartISO), [weekStartISO])
-  const range = useMemo(() => visibleRange(mode, availability), [mode, availability])
+  /*
+    집중 모드의 창은 가용 시간뿐 아니라 **이 주에 실제로 그려지는 것들**까지
+    감싸야 한다 — 그러지 않으면 가용 창 밖의 블록·고정 일정이 그리드 위아래로
+    잘려 무슨 일정인지 안 보인다(팀장 보고 2026-08-29; 자세한 사정은
+    planGeometry.visibleRange 헤더). 초안 배치까지 포함하는 이유는 그것도
+    같은 그리드에 같은 좌표로 그려지기 때문이다.
+  */
+  const drawnSpans = useMemo(() => {
+    const spans = []
+    for (const b of blocks) {
+      spans.push({ startMinutes: minutesOfDay(b.startAt), endMinutes: minutesOfDay(b.endAt) })
+    }
+    for (const f of fixedSchedulesQuery.data ?? []) {
+      spans.push({ startMinutes: f.startMinutes, endMinutes: f.endMinutes })
+    }
+    for (const d of autoDraft?.placements ?? []) {
+      spans.push({ startMinutes: minutesOfDay(d.startAt), endMinutes: minutesOfDay(d.endAt) })
+    }
+    return spans
+  }, [blocks, fixedSchedulesQuery.data, autoDraft])
+  const range = useMemo(
+    () => visibleRange(mode, availability, drawnSpans),
+    [mode, availability, drawnSpans],
+  )
   const availableMinutes = availableMinutesOf(availability)
 
   // --- validation (ST-F1-05: PLAN-21~28) ------------------------------------
@@ -914,7 +937,15 @@ function WeeklyPage() {
       )
     } else if (scheduleForm?.block) {
       updateSchedule.mutate(
-        { scheduleId: scheduleForm.block.scheduleId, weekStartISO, patch: payload },
+        {
+          scheduleId: scheduleForm.block.scheduleId,
+          weekStartISO,
+          // 일정 편집은 낙관락이라 version이 필수다(PATCH /schedules/{id}).
+          // 폼은 이 값을 다루지 않으므로 블록이 들고 있는 값을 그대로 얹는다 —
+          // 실서버 PlanBlock에 아직 없는 필드라 보통 null이고, 그 경우
+          // scheduleApi가 키 자체를 빼고 보낸다(scheduleApi 헤더의 서버측 공백).
+          patch: { ...payload, version: scheduleForm.block.version ?? null },
+        },
         { onSuccess: () => setScheduleForm(null) },
       )
     }
