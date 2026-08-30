@@ -56,10 +56,14 @@ export function SummaryCards({ period, completionRate, totalEstimatedMinutes, to
   // 계약엔 avgDeviation.direction 같은 별도 필드가 없다 — varianceRate 부호로
   // 직접 방향을 나눈다: 양수=예상보다 오래, 음수=예상보다 빠름, 0/null=거의
   // 일치. 세 값 모두 실제 렌더 경로를 갖도록 분기하는 것은 이전과 동일.
+  // 캡션은 화면에 찍히는 값과 같은 기준으로 판정해야 한다 — 원시값으로 나누면
+  // +0.4 가 값은 `0%`인데 캡션은 "예상보다 오래"가 되어 한 카드가 스스로
+  // 어긋난다. 반올림한 값으로 부호를 본다.
+  const roundedVariance = Math.round(varianceRate ?? 0)
   const deviationCopy =
-    varianceRate > 0
+    roundedVariance > 0
       ? { tone: 'warning', text: '예상보다 오래' }
-      : varianceRate < 0
+      : roundedVariance < 0
         ? { tone: 'success', text: '예상보다 빠름' }
         : { tone: 'muted', text: '예상과 비슷해요' }
 
