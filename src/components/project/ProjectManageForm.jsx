@@ -6,6 +6,7 @@ import { ErrorState } from '../common/ErrorState'
 import { ConflictOverlay } from '../common/ConflictOverlay'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
 import { PROJECT_STATUS_OPTIONS } from '../../features/project/projectLabels'
+import { formatISODate } from '../../features/plan/planTime'
 
 /*
   OVL-PROJ-MANAGE (ui-spec §PROJ.5, PROJ-05/06/07). One overlay does both the
@@ -48,7 +49,10 @@ export function ProjectManageForm({
   const [status, setStatus] = useState(project.status)
 
   const trimmedName = name.trim()
-  const todayISO = new Date().toISOString().slice(0, 10)
+  // 로컬 날짜 — 서버(UserClock.todayOf)가 사용자 timezone 기준으로 오늘을
+  // 판정하므로 toISOString()의 UTC 날짜를 쓰면 KST 00:00~08:59 동안 하루
+  // 이른 값이 되어 "어제" 마감일을 그대로 통과시킨다(ProjectCreateForm 동일).
+  const todayISO = formatISODate(new Date())
   /*
     실서버 대조 (2026-08-29): 편집 PUT도 과거 마감일을 받지 않는다 — 이미 마감이
     지난 프로젝트를 과거 마감일 그대로 저장하면 422 E-PROJ-006("마감일을 미래로
@@ -64,7 +68,7 @@ export function ProjectManageForm({
     status === 'IN_PROGRESS' &&
     project.status !== 'IN_PROGRESS' &&
     dueDate &&
-    dueDate < new Date().toISOString().slice(0, 10)
+    dueDate < todayISO
 
   const submit = (e) => {
     e.preventDefault()
@@ -116,7 +120,7 @@ export function ProjectManageForm({
         />
         {isPastDue && (
           <span role="alert" className="text-caption text-danger-700">
-            마감일은 오늘 이후로 정해 주세요
+            마감일은 오늘 이후로 정해 주세요 — 비워 두면 기한 없이 저장됩니다
           </span>
         )}
       </label>
