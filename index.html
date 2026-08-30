@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenPlan</title>
+    <!--
+      Pretendard. src/index.css의 --font-sans가 이 폰트를 1순위로 지목해 왔지만
+      정작 로드하는 곳이 없어서, 실제로는 계속 Segoe UI / 맑은 고딕 폴백으로
+      그려지고 있었다(오너 확인 2026-08-28). dynamic-subset 빌드라 한글 전체가
+      아니라 페이지가 실제 쓴 글리프 청크만 내려받고, @font-face가
+      font-display:swap이라 CDN이 느리거나 막힌 환경에서도 폴백으로 즉시 그려진
+      뒤 교체된다 — 그래서 이 <link> 하나가 실패해도 화면은 지금과 똑같이 뜬다.
+    -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+    />
   </head>
   <body>
     <div id="root"></div>

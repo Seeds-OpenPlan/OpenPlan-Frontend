@@ -29,7 +29,9 @@ const SIZE_CLASS = {
   what it did before this component existed.
 */
 export function BrandLogo({ to, size = 'lg', className = '' }) {
-  const classes = [SIZE_CLASS[size], 'font-bold', 'text-brand-600', className]
+  // font-logo: 본문 전체가 Pretendard로 넘어가도 워드마크만은 종전 시스템
+  // 폰트를 유지한다(오너 지시 2026-08-28 — index.css의 --font-logo 주석 참고).
+  const classes = [SIZE_CLASS[size], 'font-logo', 'font-bold', 'text-brand-600', className]
     .filter(Boolean)
     .join(' ')
 
