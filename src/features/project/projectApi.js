@@ -507,7 +507,12 @@ export function getProjectWbs(projectId) {
   ).then((r) =>
     unwrapList(r, 'nodes').map((n) => ({
       taskId: n.taskId ?? n.task_id,
-      title: n.title,
+      // 실서버 대조 (2026-08-29): 응답 shape는 WbsItemResponse —
+      // {wbsItemId, taskId, taskTitle, startDate, endDate} 다. 제목 키가
+      // `title`이 아니라 `taskTitle`이라 이 줄이 전부 undefined를 만들고
+      // 있었다(WBS 행 제목이 통째로 빈칸). mock은 `title`을 주므로 DEV에서는
+      // 안 걸렸다 — 두 키를 다 받는다.
+      title: n.title ?? n.taskTitle ?? n.task_title ?? '',
       // Same read-boundary snap as normalizeTask above, for consistency —
       // this WBS-node estimate only feeds WbsTimeline's day-count display
       // today (duplicateProject re-creates tasks from getProjectTasks's own

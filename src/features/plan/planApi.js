@@ -68,6 +68,11 @@ function normalizeBlock(b) {
     // Folded to the 1~3 the server accepts: this value prefills 일정 편집's own
     // 우선순위 select and is re-sent on save (see clampPriority's header).
     priority: clampPriority(b.priority, null),
+    // SCHEDULE 편집(PATCH /schedules/{id})의 낙관락 입력. 실서버의 PlanBlock
+    // 응답에는 아직 이 필드가 없어 대개 null이다 — scheduleApi의
+    // toScheduleUpdateBody 헤더에 적은 서버측 공백. 읽어 두면 BE가 필드를
+    // 추가하는 순간 편집이 저절로 살아난다(그때 여기 손댈 필요 없음).
+    version: b.version ?? b.schedule_version ?? b.scheduleVersion ?? null,
     // TASK-block project link (PLAN-12 프로젝트에서 보기); null when unknown.
     projectId: b.projectId ?? b.project_id ?? null,
     projectName: b.projectName ?? b.project_name ?? null,

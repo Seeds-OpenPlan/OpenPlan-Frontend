@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { PlanBlock } from './PlanBlock'
 import { FixedScheduleBlock } from './FixedScheduleBlock'
 import { usePlanDrag } from '../../features/plan/usePlanDrag'
@@ -11,6 +11,9 @@ import {
   rangeHeightPx,
   resolveGridSlot,
 } from '../../features/plan/planGeometry'
+// 이 파일의 축척은 전부 `pxPerMin` prop 하나에서 나온다 — 모듈 상수(PX_PER_MIN)는
+// prop을 안 넘긴 호출부의 기본값 자리로만 남는다. 한 군데라도 상수를 직접 쓰면
+// 사용자가 확대/축소했을 때 그 부분만 옛 축척으로 그려져 어긋난다.
 import {
   clampBlockSpan,
   dateOf,
@@ -59,9 +62,9 @@ function DayHeader({ dayISO, columnIndex, todayISO }) {
   availability window, and weekends entirely (they have no window) — carries the
   sunken tint, so the usable band is what reads as "open".
 */
-function BgColumn({ availWindow, range }) {
+function BgColumn({ availWindow, range, pxPerMin }) {
   const band = availWindow
-    ? blockRect(availWindow.startMinutes, availWindow.endMinutes, range)
+    ? blockRect(availWindow.startMinutes, availWindow.endMinutes, range, pxPerMin)
     : null
   return (
     <div className="relative border-l border-border bg-surface-sunken">
@@ -82,13 +85,13 @@ function BgColumn({ availWindow, range }) {
   in 5-minute steps; release commits via PUT (onCommit). A live preview minute is
   reported through onPreview so the band tracks the drag before it commits.
 */
-function AvailabilityHandle({ columnIndex, edge, minutes, gridRef, range, onPreview, onCommit }) {
+function AvailabilityHandle({ columnIndex, edge, minutes, gridRef, range, pxPerMin, onPreview, onCommit }) {
   const onPointerDown = (e) => {
     e.stopPropagation()
     e.preventDefault()
     const compute = (clientY) => {
       const rect = gridRef.current.getBoundingClientRect()
-      return snapMinutes(pxToMinutes(clientY - rect.top, range))
+      return snapMinutes(pxToMinutes(clientY - rect.top, range, pxPerMin))
     }
     const move = (ev) => onPreview(columnIndex, edge, compute(ev.clientY))
     const up = (ev) => {
@@ -100,7 +103,7 @@ function AvailabilityHandle({ columnIndex, edge, minutes, gridRef, range, onPrev
     window.addEventListener('pointerup', up)
   }
 
-  const top = (minutes - range.startMinutes) * PX_PER_MIN
+  const top = (minutes - range.startMinutes) * pxPerMin
   return (
     <button
       type="button"
@@ -156,6 +159,9 @@ export function CalendarGrid({
   fixedSchedules = null,
   onOpenFixedMenu,
   bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
+  // 사용자가 고른 세로 축척(분당 픽셀). 페이지가 소유하고 여기로 내려온다 —
+  // 이 컴포넌트 안의 모든 좌표 계산은 오직 이 값만 쓴다.
+  pxPerMin = PX_PER_MIN,
 }) {
   const gridRef = useRef(null)
   const scrollRef = useRef(null)
@@ -192,6 +198,7 @@ export function CalendarGrid({
   const { dragState, onBlockPointerDown } = usePlanDrag({
     gridRef,
     range,
+    pxPerMin,
     onCommit: onMoveCommit,
     onDropOutside: onBlockDropOutside,
     disabled: readOnly,
@@ -208,7 +215,7 @@ export function CalendarGrid({
     e.preventDefault()
     const compute = (clientY) => {
       const rect = gridRef.current.getBoundingClientRect()
-      const m = snapMinutes(pxToMinutes(clientY - rect.top, range))
+      const m = snapMinutes(pxToMinutes(clientY - rect.top, range, pxPerMin))
       return edge === 'start'
         ? { startMin: Math.max(0, Math.min(m, endMin - RESIZE_MIN_DUR)), endMin }
         : { startMin, endMin: Math.min(MINUTES_PER_DAY, Math.max(m, startMin + RESIZE_MIN_DUR)) }
@@ -230,17 +237,46 @@ export function CalendarGrid({
     window.addEventListener('pointerup', up)
   }
 
-  const height = rangeHeightPx(range)
+  const height = rangeHeightPx(range, pxPerMin)
   const ticks = hourTicks(range)
 
   // In 24h mode, start scrolled to ~8:00 so the working day is visible. Switching
   // back to focus mode resets to the top — focus mode already begins at the
   // working hours, so a leftover 24h scroll offset would otherwise push it down.
+  //
+  // 축척(pxPerMin)은 일부러 의존성에 넣지 않고 ref로 읽는다 — 축척이 바뀌었을
+  // 때 할 일은 "8시로 되감기"가 아니라 "보던 자리를 지키기"이고, 그건 바로
+  // 아래 레이아웃 이펙트가 맡는다. 둘 다 반응하면 서로 덮어쓴다.
+  // 렌더 중에 ref를 쓰면 React 19 린트가 막는다(그리고 실제로 위험하다) —
+  // 동기화는 이펙트에서 한다. 아래 스크롤 이펙트보다 먼저 선언해야, 같은
+  // 커밋에서 mode와 축척이 함께 바뀌었을 때 최신 축척으로 계산한다.
+  const pxPerMinRef = useRef(pxPerMin)
+  useEffect(() => {
+    pxPerMinRef.current = pxPerMin
+  }, [pxPerMin])
   useEffect(() => {
     if (!scrollRef.current) return
     scrollRef.current.scrollTop =
-      mode === '24h' ? Math.max(0, (8 * 60 - range.startMinutes) * PX_PER_MIN) : 0
+      mode === '24h' ? Math.max(0, (8 * 60 - range.startMinutes) * pxPerMinRef.current) : 0
   }, [mode, range.startMinutes])
+
+  /*
+    확대/축소했을 때 "보고 있던 시각"을 그대로 붙잡아 둔다. 축척만 바뀌면 같은
+    시각이 있던 픽셀 위치도 같은 비율로 움직이므로, 스크롤 위치에 그 비율을
+    곱하는 것으로 충분하다 — 넉넉히 키웠는데 화면이 맨 위(가용 시작)로 튕겨
+    올라가 방금 보던 오후를 다시 찾아 내려가야 하는 일이 없다.
+
+    useLayoutEffect인 이유: 새 높이가 페인트되기 전에 스크롤을 옮겨야 한 프레임
+    깜빡임이 안 생긴다.
+  */
+  const prevPxPerMinRef = useRef(pxPerMin)
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const prev = prevPxPerMinRef.current
+    prevPxPerMinRef.current = pxPerMin
+    if (!el || prev === pxPerMin || prev <= 0) return
+    el.scrollTop = el.scrollTop * (pxPerMin / prev)
+  }, [pxPerMin])
 
   // Position each block; the one being dragged uses the live drag target.
   const positioned = blocks
@@ -379,7 +415,7 @@ export function CalendarGrid({
                   <span
                     key={h}
                     className="absolute right-1 -translate-y-1/2 text-caption text-text-muted"
-                    style={{ top: (h * 60 - range.startMinutes) * PX_PER_MIN }}
+                    style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
                   >
                     {String(h).padStart(2, '0')}
                   </span>
@@ -398,6 +434,7 @@ export function CalendarGrid({
               { x: e.clientX, y: e.clientY },
               e.currentTarget.getBoundingClientRect(),
               range,
+              pxPerMin,
             )
             if (!slot) return
             e.preventDefault()
@@ -414,7 +451,15 @@ export function CalendarGrid({
                     endMinutes: previewFor(i, 'end', win.endMinutes),
                   }
                 : null
-              return <BgColumn key={dayISO} columnIndex={i} availWindow={shown} range={range} />
+              return (
+                <BgColumn
+                  key={dayISO}
+                  columnIndex={i}
+                  availWindow={shown}
+                  range={range}
+                  pxPerMin={pxPerMin}
+                />
+              )
             })}
           </div>
 
@@ -423,7 +468,7 @@ export function CalendarGrid({
             <div
               key={h}
               className="pointer-events-none absolute inset-x-0 border-t border-border/70"
-              style={{ top: (h * 60 - range.startMinutes) * PX_PER_MIN }}
+              style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
               aria-hidden="true"
             />
           ))}
@@ -442,6 +487,7 @@ export function CalendarGrid({
                   minutes={previewFor(i, edge, edge === 'start' ? win.startMinutes : win.endMinutes)}
                   gridRef={gridRef}
                   range={range}
+                  pxPerMin={pxPerMin}
                   onPreview={(c, e2, m) => setAvailPreview({ columnIndex: c, edge: e2, minutes: m })}
                   onCommit={(c, e2, m) => {
                     // Commit FIRST (the optimistic cache write), THEN drop the
@@ -460,7 +506,7 @@ export function CalendarGrid({
               readable, interactive element on top, with the fixed schedule it
               conflicts with still visible around its edges underneath. */}
           {positionedFixed.map(({ f, dayIndex, startMin, endMin }) => {
-            const rect = blockRect(startMin, endMin, range)
+            const rect = blockRect(startMin, endMin, range, pxPerMin)
             return (
               <FixedScheduleBlock
                 key={f.fixedScheduleId}
@@ -482,7 +528,7 @@ export function CalendarGrid({
               box-shadow is repainted on its own compositing layer and leaves no
               afterimage trail. Static blocks keep percentage left/top. */}
           {positioned.map(({ block, dayIndex, startMin, endMin, isDragged }) => {
-            const rect = blockRect(startMin, endMin, range)
+            const rect = blockRect(startMin, endMin, range, pxPerMin)
             const colW = gridWidth / 7
             const baseStyle =
               isDragged && colW > 0
@@ -525,6 +571,7 @@ export function CalendarGrid({
                 // nudge) on top, for every block type, whenever `readOnly` is set.
                 disabled={readOnly && block.blockType !== 'TASK'}
                 moveLocked={readOnly}
+                pxPerMin={pxPerMin}
                 // Any drag in progress (this or another block, or a panel→grid
                 // placement) suppresses the hover detail card, so pointer-capture
                 // swallowing mouseleave can't leave stale cards on the grid.
@@ -549,7 +596,7 @@ export function CalendarGrid({
               + a solid "초안" pill — so it never reads as a committed task block
               (which is a solid brand fill). */}
           {positionedDrafts.map(({ d, dayIndex, startMin, endMin }) => {
-            const rect = blockRect(startMin, endMin, range)
+            const rect = blockRect(startMin, endMin, range, pxPerMin)
             return (
               <div
                 key={d.taskId}
@@ -581,8 +628,8 @@ export function CalendarGrid({
               style={{
                 left: `calc(${placementPreview.dayIndex} / 7 * 100% + 2px)`,
                 width: `calc(100% / 7 - 4px)`,
-                top: blockRect(placementPreview.startMin, placementPreview.endMin, range).top,
-                height: blockRect(placementPreview.startMin, placementPreview.endMin, range).height,
+                top: blockRect(placementPreview.startMin, placementPreview.endMin, range, pxPerMin).top,
+                height: blockRect(placementPreview.startMin, placementPreview.endMin, range, pxPerMin).height,
               }}
             >
               <span className="block text-[0.6rem] opacity-80">

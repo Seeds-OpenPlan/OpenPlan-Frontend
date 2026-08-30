@@ -47,6 +47,7 @@ import {
   selectCanRedo,
 } from '../features/plan/usePlanHistory'
 import { usePlacementDrag } from '../features/plan/usePlacementDrag'
+import { useHourScale } from '../features/plan/useHourScale'
 import { resolveGridSlot, visibleRange } from '../features/plan/planGeometry'
 import { findFirstFreeSlot } from '../features/plan/planPlacement'
 import { getPopoverAnchorStyle } from '../utils/popoverPosition'
@@ -108,6 +109,13 @@ function WeeklyPage() {
 
   const [weekStartISO, setWeekStartISO] = useState(() => currentWeekStartISO())
   const [mode, setMode] = useState('focus')
+  /*
+    세로 축척(팀장 요청 2026-08-29). `mode`와 나란히 여기 사는 이유는 같다 —
+    그리드가 무엇을, 얼마나 크게 그리는지를 정하는 값은 페이지가 한곳에서 들고
+    있어야 그리드 렌더·드래그 계산·드롭 히트테스트가 서로 어긋날 수 없다.
+    `mode`와 달리 이건 기기별로 기억된다(useHourScale 헤더).
+  */
+  const hourScale = useHourScale()
   const [menu, setMenu] = useState({ open: false, block: null, position: null })
   const [reviewOpen, setReviewOpen] = useState(false)
 
@@ -282,7 +290,30 @@ function WeeklyPage() {
   const unplacedCount = unplacedQuery.data?.length ?? 0
 
   const days = useMemo(() => weekDaysOf(weekStartISO), [weekStartISO])
-  const range = useMemo(() => visibleRange(mode, availability), [mode, availability])
+  /*
+    집중 모드의 창은 가용 시간뿐 아니라 **이 주에 실제로 그려지는 것들**까지
+    감싸야 한다 — 그러지 않으면 가용 창 밖의 블록·고정 일정이 그리드 위아래로
+    잘려 무슨 일정인지 안 보인다(팀장 보고 2026-08-29; 자세한 사정은
+    planGeometry.visibleRange 헤더). 초안 배치까지 포함하는 이유는 그것도
+    같은 그리드에 같은 좌표로 그려지기 때문이다.
+  */
+  const drawnSpans = useMemo(() => {
+    const spans = []
+    for (const b of blocks) {
+      spans.push({ startMinutes: minutesOfDay(b.startAt), endMinutes: minutesOfDay(b.endAt) })
+    }
+    for (const f of fixedSchedulesQuery.data ?? []) {
+      spans.push({ startMinutes: f.startMinutes, endMinutes: f.endMinutes })
+    }
+    for (const d of autoDraft?.placements ?? []) {
+      spans.push({ startMinutes: minutesOfDay(d.startAt), endMinutes: minutesOfDay(d.endAt) })
+    }
+    return spans
+  }, [blocks, fixedSchedulesQuery.data, autoDraft])
+  const range = useMemo(
+    () => visibleRange(mode, availability, drawnSpans),
+    [mode, availability, drawnSpans],
+  )
   const availableMinutes = availableMinutesOf(availability)
 
   // --- validation (ST-F1-05: PLAN-21~28) ------------------------------------
@@ -587,7 +618,9 @@ function WeeklyPage() {
   const placementDrag = usePlacementDrag({
     resolveSlot: (point) => {
       const el = gridBodyRef.current
-      return el ? resolveGridSlot(point, el.getBoundingClientRect(), range) : null
+      // 그리드가 그릴 때 쓴 축척과 같은 값을 넘긴다 — 다르면 드롭 미리보기와
+      // 실제로 커밋되는 시각이 어긋난다(resolveGridSlot 주석).
+      return el ? resolveGridSlot(point, el.getBoundingClientRect(), range, hourScale.pxPerMin) : null
     },
     onDrop: (task, slot) => {
       if (slot) placeTaskAt(task, slot)
@@ -914,7 +947,15 @@ function WeeklyPage() {
       )
     } else if (scheduleForm?.block) {
       updateSchedule.mutate(
-        { scheduleId: scheduleForm.block.scheduleId, weekStartISO, patch: payload },
+        {
+          scheduleId: scheduleForm.block.scheduleId,
+          weekStartISO,
+          // 일정 편집은 낙관락이라 version이 필수다(PATCH /schedules/{id}).
+          // 폼은 이 값을 다루지 않으므로 블록이 들고 있는 값을 그대로 얹는다 —
+          // 실서버 PlanBlock에 아직 없는 필드라 보통 null이고, 그 경우
+          // scheduleApi가 키 자체를 빼고 보낸다(scheduleApi 헤더의 서버측 공백).
+          patch: { ...payload, version: scheduleForm.block.version ?? null },
+        },
         { onSuccess: () => setScheduleForm(null) },
       )
     }
@@ -1202,6 +1243,10 @@ function WeeklyPage() {
           availableMinutes={availableMinutes}
           mode={mode}
           onModeChange={setMode}
+          scaleIndex={hourScale.index}
+          onScaleChange={hourScale.setIndex}
+          canZoomIn={hourScale.canZoomIn}
+          canZoomOut={hourScale.canZoomOut}
         />
 
         <div ref={gridWrapperRef} className="relative">
@@ -1215,6 +1260,7 @@ function WeeklyPage() {
             weekDays={days}
             range={range}
             mode={mode}
+            pxPerMin={hourScale.pxPerMin}
             blocks={blocks}
             availability={availability}
             // fix G: CalendarGrid's `readOnly` prop is really "can't edit right

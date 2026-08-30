@@ -4,6 +4,7 @@ import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { ErrorState } from '../common/ErrorState'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { formatISODate } from '../../features/plan/planTime'
 
 /*
   OVL-PROJ-CREATE (ui-spec §PROJ.4, PROJ-02). Same Dialog/BottomSheet-by-
@@ -25,11 +26,24 @@ export function ProjectCreateForm({ onClose, onSubmit, submitting = false, submi
   const [dueDate, setDueDate] = useState('')
 
   const trimmedName = name.trim()
-  const isPastDue = dueDate && dueDate < new Date().toISOString().slice(0, 10)
+  /*
+    실서버 대조 (2026-08-29): ProjectValidator.validateDueDate가 오늘보다 이른
+    마감일을 422 E-COM-009(dueDate/past)로 거부한다 — 생성·편집 둘 다.
+    이 화면은 그동안 "서버 정책 미확인"이라는 전제로 과거 날짜를 통과시키고
+    안내 문구만 띄웠는데, 그러면 [만들기]가 서버에서 조용히 실패하고 사용자는
+    이유를 모른 채 "기간 설정이 안 된다"만 겪는다. 정책이 확인됐으니 여기서
+    막고, 왜 막혔는지 그 자리에서 말한다.
+
+    "오늘"은 로컬 날짜여야 한다 — 서버의 UserClock.todayOf가 사용자 timezone
+    (미설정 시 Asia/Seoul) 기준으로 판정하므로, toISOString()의 UTC 날짜를 쓰면
+    KST 00:00~08:59 동안 하루 이른 값이 나와 정작 막아야 할 "어제"를 통과시킨다.
+  */
+  const todayISO = formatISODate(new Date())
+  const isPastDue = dueDate && dueDate < todayISO
 
   const submit = (e) => {
     e.preventDefault()
-    if (!trimmedName || submitting) return
+    if (!trimmedName || isPastDue || submitting) return
     onSubmit({ name: trimmedName, description: description.trim(), dueDate: dueDate || null })
   }
 
@@ -66,13 +80,17 @@ export function ProjectCreateForm({ onClose, onSubmit, submitting = false, submi
         <input
           type="date"
           value={dueDate}
+          min={todayISO}
           onChange={(e) => setDueDate(e.target.value)}
+          aria-invalid={isPastDue || undefined}
           className={FIELD}
         />
-        {/* Past dates are allowed (server policy unconfirmed — §PROJ.4 [가정]);
-            this is an informational caption only, never a blocking error. */}
+        {/* `min` 만으로는 부족하다 — 키보드로 직접 입력하면 브라우저가 값을
+            그대로 받는다. 그래서 제출 가드(위)와 이 문구가 실제 방어선이다. */}
         {isPastDue && (
-          <span className="text-caption text-text-muted">마감일이 이미 지났습니다</span>
+          <span role="alert" className="text-caption text-danger-700">
+            마감일은 오늘 이후로 정해 주세요 — 비워 두면 기한 없이 만듭니다
+          </span>
         )}
       </label>
 
@@ -95,7 +113,13 @@ export function ProjectCreateForm({ onClose, onSubmit, submitting = false, submi
           <Button type="button" variant="secondary" size="md" onClick={onClose}>
             취소
           </Button>
-          <Button type="submit" variant="primary" size="md" loading={submitting} disabled={!trimmedName}>
+          <Button
+            type="submit"
+            variant="primary"
+            size="md"
+            loading={submitting}
+            disabled={!trimmedName || isPastDue}
+          >
             만들기
           </Button>
         </div>
