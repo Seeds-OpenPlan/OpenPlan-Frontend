@@ -29,8 +29,18 @@ export function formatSignedHm(minutes) {
   return `${sign}${m}m`
 }
 
-/** 18 → "+18%", -4 → "-4%", 0 → "0%". */
+/**
+ * 0~100 스케일 비율을 정수 퍼센트로. 서버의 completionRate/varianceRate는
+ * `(a * 100.0) / b` 나눗셈 결과라 20.833333333333332처럼 배정밀도 자릿수가
+ * 그대로 실려 온다 — 화면에 붙이기 전에 반드시 여기를 거친다.
+ */
+export function formatPercent(value) {
+  return `${Math.round(value)}%`
+}
+
+/** 18 → "+18%", -4.2 → "-4%", 0 → "0%". */
 export function formatSignedPercent(value) {
-  if (!value) return '0%'
-  return `${value > 0 ? '+' : ''}${value}%`
+  const rounded = Math.round(value)
+  if (!rounded) return '0%'
+  return `${rounded > 0 ? '+' : ''}${rounded}%`
 }
