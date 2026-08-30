@@ -42,11 +42,22 @@ function Caption({ tone, children }) {
   return <p className={`mt-1 text-caption font-medium ${TONE_TEXT[tone]}`}>{children}</p>
 }
 
+// 잴 수 없는 값의 표기. DeviationPanel 이 같은 사유(deviationRate = null)에
+// 쓰는 문구와 맞춘다 — 한 화면에서 같은 상태가 두 이름을 갖지 않도록.
+const NO_DATA = '기록 없음'
+
 function Card({ label, value, children }) {
+  const isNoData = value === NO_DATA
   return (
     <div className="rounded-card border border-border bg-surface p-4">
       <p className="text-caption text-text-muted">{label}</p>
-      <p className="mt-1 text-title font-bold text-text tabular-nums">{value}</p>
+      <p
+        className={`mt-1 text-title font-bold tabular-nums ${
+          isNoData ? 'text-text-disabled' : 'text-text'
+        }`}
+      >
+        {value}
+      </p>
       {children}
     </div>
   )
@@ -59,9 +70,16 @@ export function SummaryCards({ period, completionRate, totalEstimatedMinutes, to
   // 캡션은 화면에 찍히는 값과 같은 기준으로 판정해야 한다 — 원시값으로 나누면
   // +0.4 가 값은 `0%`인데 캡션은 "예상보다 오래"가 되어 한 카드가 스스로
   // 어긋난다. 반올림한 값으로 부호를 본다.
-  const roundedVariance = Math.round(varianceRate ?? 0)
-  const deviationCopy =
-    roundedVariance > 0
+  //
+  // null 을 0 으로 접지 않는다. 서버는 예상 시간 합이 0이면(= 이 기간에 기록된
+  // 태스크 중 예상 시간이 적힌 것이 하나도 없으면) varianceRate 를 null 로
+  // 준다 — "편차가 0"이 아니라 "잴 수 없음"이다. 둘을 같은 `0%`로 그리면
+  // 사용자는 계산이 끝난 결과로 읽는다.
+  const hasVariance = varianceRate != null
+  const roundedVariance = hasVariance ? Math.round(varianceRate) : null
+  const deviationCopy = !hasVariance
+    ? { tone: 'muted', text: '예상 시간이 없어 편차를 잴 수 없어요' }
+    : roundedVariance > 0
       ? { tone: 'warning', text: '예상보다 오래' }
       : roundedVariance < 0
         ? { tone: 'success', text: '예상보다 빠름' }
@@ -77,7 +95,10 @@ export function SummaryCards({ period, completionRate, totalEstimatedMinutes, to
           줄도 함께 뺐다 — Caption은 children이 없으면 아무것도 렌더하지 않아
           카드가 2줄로 줄어들 뿐, 값이 있다가 없어지는 것이 아니라 항상
           같은 모양이라 CLS는 발생하지 않는다. */}
-      <Card label={COMPLETION_LABEL[period] ?? '완료율'} value={formatPercent(completionRate ?? 0)} />
+      <Card
+        label={COMPLETION_LABEL[period] ?? '완료율'}
+        value={completionRate == null ? NO_DATA : formatPercent(completionRate)}
+      />
 
       <Card label="총 수행 시간" value={formatHoursDecimal(totalActualMinutes ?? 0)}>
         <Caption tone="muted">
@@ -85,7 +106,7 @@ export function SummaryCards({ period, completionRate, totalEstimatedMinutes, to
         </Caption>
       </Card>
 
-      <Card label="평균 시간 오차" value={formatSignedPercent(varianceRate ?? 0)}>
+      <Card label="평균 시간 오차" value={hasVariance ? formatSignedPercent(varianceRate) : NO_DATA}>
         <Caption tone={deviationCopy.tone}>{deviationCopy.text}</Caption>
       </Card>
     </div>
