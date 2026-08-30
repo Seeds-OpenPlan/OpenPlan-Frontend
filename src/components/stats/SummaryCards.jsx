@@ -1,5 +1,5 @@
 import { Skeleton, SkeletonText } from '../common/Skeleton'
-import { formatHoursDecimal, formatSignedPercent } from '../../features/stats/statsFormat'
+import { formatHoursDecimal, formatPercent, formatSignedPercent } from '../../features/stats/statsFormat'
 
 /*
   3 요약 카드 (Desktop.Status.png 상단 행 — RB-STAT-01 편차 분석의 집계 요약).
@@ -56,23 +56,28 @@ export function SummaryCards({ period, completionRate, totalEstimatedMinutes, to
   // 계약엔 avgDeviation.direction 같은 별도 필드가 없다 — varianceRate 부호로
   // 직접 방향을 나눈다: 양수=예상보다 오래, 음수=예상보다 빠름, 0/null=거의
   // 일치. 세 값 모두 실제 렌더 경로를 갖도록 분기하는 것은 이전과 동일.
+  // 캡션은 화면에 찍히는 값과 같은 기준으로 판정해야 한다 — 원시값으로 나누면
+  // +0.4 가 값은 `0%`인데 캡션은 "예상보다 오래"가 되어 한 카드가 스스로
+  // 어긋난다. 반올림한 값으로 부호를 본다.
+  const roundedVariance = Math.round(varianceRate ?? 0)
   const deviationCopy =
-    varianceRate > 0
+    roundedVariance > 0
       ? { tone: 'warning', text: '예상보다 오래' }
-      : varianceRate < 0
+      : roundedVariance < 0
         ? { tone: 'success', text: '예상보다 빠름' }
         : { tone: 'muted', text: '예상과 비슷해요' }
 
   return (
     <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-      {/* [불확실] completionRate/varianceRate가 0~100 스케일이라고 가정하고
-          그대로 `%`를 붙인다 — 계약엔 스케일 표기가 없고 이 계정엔 아직 실제
-          이력이 없어(전부 null) 실측으로 확인하지 못했다(statsFixtures.js의
-          같은 주석 참고). 계약에 비교/증감값이 없어 예전의 "전주 대비" 캡션
+      {/* completionRate/varianceRate는 0~100 스케일이다 — 실서버 값
+          20.833333333333332%(= (실제−예상)×100/예상)로 확인했다. 계약엔
+          스케일 표기가 없어 오래 [불확실]로 남아 있던 가정이다. 두 값 모두
+          나눗셈 결과라 배정밀도 자릿수가 그대로 실려 오므로 statsFormat의
+          포맷터를 거쳐 정수로 반올림한다. 계약에 비교/증감값이 없어 예전의 "전주 대비" 캡션
           줄도 함께 뺐다 — Caption은 children이 없으면 아무것도 렌더하지 않아
           카드가 2줄로 줄어들 뿐, 값이 있다가 없어지는 것이 아니라 항상
           같은 모양이라 CLS는 발생하지 않는다. */}
-      <Card label={COMPLETION_LABEL[period] ?? '완료율'} value={`${completionRate ?? 0}%`} />
+      <Card label={COMPLETION_LABEL[period] ?? '완료율'} value={formatPercent(completionRate ?? 0)} />
 
       <Card label="총 수행 시간" value={formatHoursDecimal(totalActualMinutes ?? 0)}>
         <Caption tone="muted">
