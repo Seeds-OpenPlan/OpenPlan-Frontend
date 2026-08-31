@@ -19,7 +19,6 @@ import {
   dateOf,
   formatISODate,
   formatMinutesLabel,
-  MINUTES_PER_DAY,
   minutesOfDay,
   parseISODate,
   snapMinutes,
@@ -231,6 +230,21 @@ export function CalendarGrid({
   // end in 5-min steps (min 15-min tall); release commits via onResizeCommit. Runs
   // here (not in PlanBlock) because it needs the grid geometry, like the availability
   // handles. The pointerdown stops propagation so it never starts a block MOVE.
+  //
+  // 2026-08-31 정정: 클램프를 하루 전체(0..MINUTES_PER_DAY)가 아니라 지금 보이는
+  // `range`로 좁혔다. 예전엔 focus 모드에서 그리드 바닥 아래로(가시 범위 밖으로)
+  // 끌어도 값 자체는 자정까지 허용됐는데, 그 초과분을 흡수해 주던 것이 바로
+  // visibleRange의 위아래 여유였다 — 여유를 없앤 지금은(그 함수 헤더 참고) 흡수할
+  // 곳이 없어 미리보기가 그리드 밖으로 그대로 삐져나갔다(blockRect의 15분 최소
+  // 높이 캡과 같은 종류의 문제, 그쪽 헤더 참고). `usePlanDrag`의 MOVE 드래그는
+  // 이미 같은 이유로 `range`에 클램프돼 있었으므로(그 파일의 compute), 여기도
+  // 같은 경계에 맞춘다 — 한 그리드 안에서 MOVE와 RESIZE가 서로 다른 경계를 갖는
+  // 것이 더 이상한 일이다.
+  //
+  // 이 클램프는 부수적으로 "보이지 않는 시간으로 리사이즈"도 막는다: focus
+  // 모드의 `range`는 가용 시간(∪ 이 주에 실제로 그려지는 것) 밖으로는 아예 열려
+  // 있지 않으므로, 그 창 밖 시간대로 늘리는 것은 원래 의미가 없다 — 하루 전체를
+  // 보고 늘리고 싶으면 24시간 토글이 이미 그 창을 연다.
   const RESIZE_MIN_DUR = 15
   const makeResizeStart = (block, dayIndex, startMin, endMin) => (edge, e) => {
     if (readOnly || e.button !== 0) return
@@ -240,8 +254,8 @@ export function CalendarGrid({
       const rect = gridRef.current.getBoundingClientRect()
       const m = snapMinutes(pxToMinutes(clientY - rect.top, range, pxPerMin))
       return edge === 'start'
-        ? { startMin: Math.max(0, Math.min(m, endMin - RESIZE_MIN_DUR)), endMin }
-        : { startMin, endMin: Math.min(MINUTES_PER_DAY, Math.max(m, startMin + RESIZE_MIN_DUR)) }
+        ? { startMin: Math.max(range.startMinutes, Math.min(m, endMin - RESIZE_MIN_DUR)), endMin }
+        : { startMin, endMin: Math.min(range.endMinutes, Math.max(m, startMin + RESIZE_MIN_DUR)) }
     }
     const move = (ev) => setResizeState({ planBlockId: block.planBlockId, ...compute(ev.clientY) })
     const up = (ev) => {

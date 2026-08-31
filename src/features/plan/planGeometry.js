@@ -156,7 +156,32 @@ export function hourTicks(range) {
 /** Top/height px for a block given its minutes-of-day span and the visible range. */
 export function blockRect(startMin, endMin, range, pxPerMin = PX_PER_MIN) {
   const top = (startMin - range.startMinutes) * pxPerMin
-  const height = Math.max(pxPerMin * 15, (endMin - startMin) * pxPerMin) // >=15min tall
+  const raw = Math.max(pxPerMin * 15, (endMin - startMin) * pxPerMin) // >=15min tall
+  /*
+    2026-08-31: visibleRange stopped padding the band with a buffer above/below
+    the actual content (see that function's own header) — the range's bottom
+    edge can now sit EXACTLY at a real block's end. A block whose true duration
+    is under 15 minutes still renders at the 15-min floor above, so pinned to
+    that edge it would poke past the grid's own height by however many minutes
+    the floor added — the exact "몇 px 때문에 스크롤바가 생기는" failure this
+    whole change exists to remove, just moved from the range's padding to this
+    floor.
+    (A live A2 resize-drag preview COULD do the same thing more easily, since it
+    isn't one of the real spans visibleRange grows the range to enclose — but
+    that path is closed at the source instead, by clamping the drag itself to
+    `range` in CalendarGrid's makeResizeStart, so the preview's endMin/startMin
+    can never leave the range to begin with. Capping it again here would only
+    hide a bug in that clamp, not fix one — so this cap has exactly one job.)
+    Capped at the range's own bottom instead of raising `raw`: a real block's
+    span (endMin-startMin)*pxPerMin always fits inside the range (visibleRange
+    grows to enclose every drawn span), so this can only ever shave off the
+    artificial 15-min inflation, never a block's actual content. The outer
+    `Math.max` below is the same guarantee made explicit — it stays as a
+    safety net so a future caller whose span genuinely exceeds the range (a
+    contract this function doesn't itself enforce) still gets its real content
+    rendered in full rather than silently clipped.
+  */
+  const height = Math.max((endMin - startMin) * pxPerMin, Math.min(raw, rangeHeightPx(range, pxPerMin) - top))
   return { top, height }
 }
 
