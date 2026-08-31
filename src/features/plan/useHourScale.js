@@ -27,7 +27,7 @@
   강요할 이유가 없다.
 */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { clampHourPxIndex, DEFAULT_HOUR_PX_INDEX, HOUR_PX_STEPS } from './planGeometry'
 
 /*
@@ -40,16 +40,6 @@ import { clampHourPxIndex, DEFAULT_HOUR_PX_INDEX, HOUR_PX_STEPS } from './planGe
   코드를 들일 값어치가 없다).
 */
 const STORAGE_KEY = 'openplan.plan.hourScale'
-
-/* HOUR_PX_STEPS는 오름차순이라 앞/뒤에서 처음 만나는 것이 곧 가장 가까운 이웃이다. */
-const lastIndexWhere = (pred) => {
-  for (let i = HOUR_PX_STEPS.length - 1; i >= 0; i -= 1) if (pred(HOUR_PX_STEPS[i])) return i
-  return -1
-}
-const firstIndexWhere = (pred) => {
-  for (let i = 0; i < HOUR_PX_STEPS.length; i += 1) if (pred(HOUR_PX_STEPS[i])) return i
-  return -1
-}
 
 /* 저장값이 이 문자열이면 맞춤 모드. 숫자 인덱스와 한 칸을 나눠 쓰므로 예전
    빌드가 남긴 "2" 같은 값도 그대로 수동 단계로 읽힌다(마이그레이션 불필요). */
@@ -115,26 +105,40 @@ export function useHourScale({ fitHourPx = null } = {}) {
     : HOUR_PX_STEPS[clampHourPxIndex(value)]
 
   /*
-    맞춤에서 +/− 를 누르면 "지금 보이는 크기" 바로 옆 단계로 간다 — 지금 축척
-    **보다 작은 것 중 가장 큰** 단계(좁게), **보다 큰 것 중 가장 작은**
-    단계(넓게). 저장해 둔 옛 인덱스로 돌아가면 화면이 크게 튀어 "한 칸 조절"이
-    아니게 된다.
+    +/− 가 딛는 사다리에는 **맞춤 축척도 한 칸으로 낀다**(2026-08-31 요구:
+    "+ − 눌러서도 100으로 돌아갈 수 있게 해야지").
 
-    "가장 가까운 단계 ±1"이 아니라 굳이 부등호로 고른 이유: 맞춤 축척은 단계표
-    밖(예: 28 또는 73)일 수 있다. 가장 가까운 단계를 거쳐 가면 28에서 [좁게]가
-    30을 골라 오히려 넓어지는 일이 생긴다. 부등호로 고르면 그 방향으로 갈 곳이
-    없다는 사실이 그대로 -1이 되어, 아래 canZoom*이 버튼을 정확히 잠근다.
+    그 전에는 사다리가 HOUR_PX_STEPS 다섯 칸뿐이라, 맞춤(예: 47px)에서 −를
+    누르면 40으로 내려간 뒤 +로는 50으로만 올라가 47에 다시 설 수 없었다.
+    100%로 돌아가는 길이 가운데 버튼 하나뿐이었던 것이다. 맞춤 값을 사다리에
+    끼워 넣으면 한 칸씩 오르내리다 자연스럽게 100%를 밟는다.
+
+    같은 값이 겹치면(맞춤이 우연히 단계 값과 같을 때) **맞춤 쪽을 고른다** —
+    화면에 그려지는 결과는 같지만 맞춤은 창 크기를 따라가므로 늘 그쪽이 낫고,
+    그래야 "100%로 보이는데 창을 줄이면 넘친다"는 어긋남이 안 생긴다.
   */
-  const below = isFit ? lastIndexWhere((px) => px < hourPx) : clampHourPxIndex(value) - 1
-  const above = isFit ? firstIndexWhere((px) => px > hourPx) : clampHourPxIndex(value) + 1
-  const canZoomOut = below >= 0
-  const canZoomIn = above >= 0 && above < HOUR_PX_STEPS.length
-  const zoomOut = useCallback(() => {
-    if (below >= 0) setIndex(below)
-  }, [setIndex, below])
-  const zoomIn = useCallback(() => {
-    if (above >= 0 && above < HOUR_PX_STEPS.length) setIndex(above)
-  }, [setIndex, above])
+  const ladder = useMemo(() => {
+    const values = new Set(HOUR_PX_STEPS)
+    if (Number.isFinite(fitHourPx) && fitHourPx > 0) values.add(fitHourPx)
+    return [...values].sort((a, b) => a - b)
+  }, [fitHourPx])
+
+  const below = [...ladder].reverse().find((px) => px < hourPx)
+  const above = ladder.find((px) => px > hourPx)
+
+  // 사다리 값 하나를 실제 상태로 옮긴다. 맞춤 값이면 맞춤 모드로 — 단계 인덱스로
+  // 굳혀 두면 그 순간의 창 높이에 박제돼 이후 창 변화를 못 따라간다.
+  const goTo = useCallback(
+    (px) => {
+      if (px == null) return
+      if (Number.isFinite(fitHourPx) && px === fitHourPx) setValue(FIT)
+      else setValue(clampHourPxIndex(HOUR_PX_STEPS.indexOf(px)))
+    },
+    [fitHourPx],
+  )
+
+  const zoomOut = useCallback(() => goTo(below), [goTo, below])
+  const zoomIn = useCallback(() => goTo(above), [goTo, above])
 
   return {
     value,
@@ -145,8 +149,8 @@ export function useHourScale({ fitHourPx = null } = {}) {
     setFit,
     zoomIn,
     zoomOut,
-    canZoomOut,
-    canZoomIn,
+    canZoomOut: below != null,
+    canZoomIn: above != null,
   }
 }
 

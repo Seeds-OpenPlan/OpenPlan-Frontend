@@ -25,8 +25,12 @@
   머무는 동안에는 사용자가 아무것도 안 눌러도 %가 달라진다. 그래도 그 숫자가
   말하는 바("지금 한 화면에 들어차는 크기의 몇 %인가")는 늘 참이다.
 
-  화면에 "맞춤"이라는 낱말은 쓰지 않는다(오너 요구). 상태는 눌린 스타일과
-  `aria-pressed`로 전하고, 스크린리더에는 기준이 무엇인지를 말로 풀어 준다.
+  화면에 "맞춤"이라는 낱말은 쓰지 않는다(오너 요구). 색으로도 구분하지 않는다 —
+  한때 이 버튼만 파랗게 칠해 상태를 보였는데, 그것도 뺐다(오너 요구: "100%도
+  파란색 말고 그냥 하얀색으로"). **숫자 자체가 상태다**: 100%면 한 화면에
+  들어차는 크기이고, 그 값에 서면 훅이 언제나 화면 추종 모드를 고르므로
+  "100%인데 화면을 안 따라간다"는 어긋난 상태가 존재하지 않는다. 스크린리더에는
+  `aria-pressed`와 풀어 쓴 이름으로 같은 사실을 전한다.
 */
 
 export function HourScaleControl({
@@ -79,12 +83,7 @@ export function HourScaleControl({
         }
         title={atFullSize ? '한 화면에 들어차는 크기' : '100%로 되돌리기'}
         onClick={onFit}
-        className={[
-          'h-8 min-w-14 rounded-full border px-2 text-caption font-medium tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
-          isFit
-            ? 'border-brand-600 bg-brand-600 text-white'
-            : 'border-border text-text hover:bg-surface-sunken',
-        ].join(' ')}
+        className="h-8 min-w-14 rounded-full border border-border px-2 text-caption font-medium tabular-nums text-text transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
         {percent}%
       </button>

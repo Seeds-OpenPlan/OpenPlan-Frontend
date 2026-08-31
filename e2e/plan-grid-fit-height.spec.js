@@ -275,6 +275,19 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     await scaleBtn.click()
     await expect(scaleBtn).toHaveAttribute('aria-pressed', 'true')
     await expect(scaleBtn).toHaveText('100%')
+
+    /*
+      +/− 로도 100%에 다시 설 수 있어야 한다(2026-08-31 요구). 맞춤 축척이
+      단계 사다리의 한 칸으로 끼어 있으므로, −로 한 칸 내려갔다가 +로 한 칸
+      올라오면 정확히 100%다. 예전에는 사다리가 고정 5칸뿐이라 이 왕복이
+      100%를 지나치고 다른 값에 서서, 100%로 돌아갈 길이 가운데 버튼밖에
+      없었다.
+    */
+    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
+    await expect(scaleBtn).not.toHaveText('100%')
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await expect(scaleBtn).toHaveText('100%')
+    await expect(scaleBtn).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('TC-06: 배치된 블록 클릭 시 그쪽으로 스크롤 (24h 모드, 화면 밖 블록)', async ({ page }) => {
