@@ -239,7 +239,13 @@ function WeeklyPage() {
       let below = 0
       for (let node = gridWrapperRef.current; node && node !== document.body; node = node.parentElement) {
         const cs = window.getComputedStyle(node)
-        below += (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.marginBottom) || 0)
+        below +=
+          (parseFloat(cs.paddingBottom) || 0) +
+          (parseFloat(cs.marginBottom) || 0) +
+          // 테두리도 센다. 지금 이 경로에서 걸리는 건 섹션 카드의 1px 하나뿐이라
+          // BREATHING이 흡수하지만, 빼먹고 두면 나중에 여유를 줄이거나 테두리 있는
+          // 조상이 하나 더 생겼을 때 조용히 되살아난다(리뷰 지적, 2026-09-01).
+          (parseFloat(cs.borderBottomWidth) || 0)
       }
       // 서브픽셀 반올림으로 1~2px이 넘쳐 스크롤바만 생기는 일이 없도록 한 숨.
       const BREATHING = 8

@@ -60,17 +60,32 @@ export function SummaryBar({
 
   return (
     <div>
-      {/* Time text centered; the mode toggle floats at the right edge (design). */}
-      <div className="relative flex items-center justify-center">
-        <div className="absolute left-0">
+      {/*
+        Time text centered; the mode toggle floats at the right edge (design).
+
+        ⚠ 그 "가운데 정렬 + 오른쪽 absolute" 조합은 **넓을 때만** 성립한다. 둘은
+        서로의 폭을 모르므로 좁아지면 그대로 겹친다 — QA 실측(2026-09-01,
+        e2e TC-13)에서 375px 폭일 때 시간 텍스트와 축척 컨트롤이 79.7px 겹쳐
+        글자가 뒤섞여 보였다. 이 화면의 모바일 폭이 실측된 것이 그때가 처음이라
+        그동안 아무도 못 봤다(축척 컨트롤이 "맞춤"에서 "100%"로 바뀌며 조금 더
+        넓어진 것도 겹침을 키웠다).
+
+        그래서 md 미만에서는 absolute를 걷고 **진짜 흐름**으로 배치한다 —
+        justify-between으로 좌우로 벌리고, 그래도 모자라면 flex-wrap이 컨트롤을
+        아랫줄로 내린다. 겹칠 수가 없는 구조다. md 이상에서는 예전 그대로
+        가운데 정렬 + 양끝 absolute로 되돌아가므로 데스크톱 디자인은 안 바뀐다
+        (흐름에 남는 자식이 <p> 하나뿐이라 justify-center 결과가 종전과 같다).
+      */}
+      <div className="relative flex flex-wrap items-center justify-between gap-x-3 gap-y-2 md:justify-center">
+        <div className="hidden md:absolute md:left-0 md:block">
           <BlockLegend />
         </div>
-        <p className="text-body text-center">
+        <p className="text-body md:text-center">
           <span className="font-bold text-text">{formatDurationKO(usedMinutes)}</span>
           <span className="text-text-muted"> / {formatDurationKO(availableMinutes)}</span>
           {over && <span className="ml-2 text-caption font-medium text-warning-700">초과</span>}
         </p>
-        <div className="absolute right-0 flex items-center gap-2">
+        <div className="flex items-center gap-2 md:absolute md:right-0">
           <HourScaleControl
             isFit={isFit}
             hourPx={hourPx}

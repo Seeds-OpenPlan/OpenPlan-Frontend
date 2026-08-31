@@ -27,10 +27,25 @@
 
   화면에 "맞춤"이라는 낱말은 쓰지 않는다(오너 요구). 색으로도 구분하지 않는다 —
   한때 이 버튼만 파랗게 칠해 상태를 보였는데, 그것도 뺐다(오너 요구: "100%도
-  파란색 말고 그냥 하얀색으로"). **숫자 자체가 상태다**: 100%면 한 화면에
-  들어차는 크기이고, 그 값에 서면 훅이 언제나 화면 추종 모드를 고르므로
-  "100%인데 화면을 안 따라간다"는 어긋난 상태가 존재하지 않는다. 스크린리더에는
-  `aria-pressed`와 풀어 쓴 이름으로 같은 사실을 전한다.
+  파란색 말고 그냥 하얀색으로").
+
+  ## 100%와 "화면 추종"은 같은 말이 아니다 (리뷰 지적, 2026-09-01)
+
+  한때 이 자리에 "100%면 곧 화면 추종 모드이므로 어긋난 상태가 없다"고 적었는데
+  **거짓이었다.** 수동 단계에 머문 채 창을 리사이즈해 기준 축척이 우연히 지금
+  단계값과 같아지면(예: 둘 다 50px) 표시는 100%인데 모드는 수동이다. 그 상태는
+  "지금은 꽉 차 보이지만 창을 다시 줄이면 안 따라간다"는 뜻이라, 100%라는 숫자만
+  보고 "화면이 맞춰 주고 있다"고 읽으면 틀린다.
+
+  그래서 **말로 설명하는 자리(접근성 이름·툴팁)는 숫자가 아니라 모드(`isFit`)를
+  따른다.** 숫자는 지금 배율을 정직하게 보여 주고, "화면에 들어차는 크기인가"는
+  모드가 답한다. 이 둘을 서로 다른 값으로 갈라 쓰면 위와 같이 표시가 스스로를
+  부정하게 된다.
+
+  `aria-pressed`도 뺐다. 이 버튼은 눌러도 되돌아오지 않는 **단방향 동작**이지
+  토글이 아니다(눌리면 언제나 100%로 갈 뿐, 다시 눌러 수동으로 빠지지 않는다).
+  시각적 눌림 상태도 없앤 마당에 토글용 속성만 남기면 스크린리더 사용자에게
+  없는 토글을 약속하는 셈이라, 상태는 이름으로 풀어 말한다.
 */
 
 export function HourScaleControl({
@@ -51,7 +66,6 @@ export function HourScaleControl({
   // 곧바로 진짜 값으로 바뀐다).
   const reference = fitHourPx || hourPx || 1
   const percent = Math.round((hourPx / reference) * 100)
-  const atFullSize = percent === 100
 
   return (
     <div className="inline-flex shrink-0 items-center gap-1" role="group" aria-label="시간 간격">
@@ -69,19 +83,19 @@ export function HourScaleControl({
       </button>
       {/*
         지금 배율을 늘 보여 주고, 누르면 100%(=한 화면에 들어차는 크기)로 간다.
-        100%가 곧 그 크기라 갈래가 없다 — 이미 100%여도 같은 동작이고, 그때는
-        보이는 결과가 그대로라 무해하다(수동으로 우연히 100%에 와 있는 경우에는
-        상태만 화면 추종으로 바뀌어, 이후 창 크기 변화를 따라가게 된다).
+        갈래가 없다 — 이미 화면 추종 중이어도 같은 동작이고 보이는 결과가 그대로라
+        무해하다. 수동으로 우연히 100%에 와 있는 경우에는 눈에 보이는 변화 없이
+        모드만 화면 추종으로 바뀌어, 그때부터 창 크기 변화를 따라가게 된다 —
+        이 버튼이 그 상태를 고쳐 주는 유일한 길이다(파일 헤더 참고).
       */}
       <button
         type="button"
-        aria-pressed={isFit}
         aria-label={
-          atFullSize
+          isFit
             ? `세로 축척 ${percent}% — 한 화면에 들어차는 크기`
             : `세로 축척 ${percent}% — 눌러서 100%(한 화면에 들어차는 크기)로`
         }
-        title={atFullSize ? '한 화면에 들어차는 크기' : '100%로 되돌리기'}
+        title={isFit ? '한 화면에 들어차는 크기' : '100%로 되돌리기'}
         onClick={onFit}
         className="h-8 min-w-14 rounded-full border border-border px-2 text-caption font-medium tabular-nums text-text transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
@@ -100,8 +114,8 @@ export function HourScaleControl({
       {/*
         축척이 바뀐 결과를 스크린리더에 알리는 자리. 값은 위 버튼의 aria-label에도
         실려 있지만 그것만으로는 부족하다 — 포커스가 그 버튼에 없을 때(+/− 를 누른
-        직후가 바로 그렇다) label 변경은 다시 읽히지 않기 때문이다. 눈으로는 버튼의
-        숫자와 눌림 상태가 같은 정보를 이미 보여 준다.
+        직후가 바로 그렇다) label 변경은 다시 읽히지 않기 때문이다. 눈으로는 버튼에
+        찍힌 숫자가 같은 정보를 이미 보여 준다.
       */}
       <span className="sr-only" aria-live="polite">
         시간 간격 {percent}%
