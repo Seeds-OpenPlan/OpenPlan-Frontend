@@ -519,4 +519,43 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     expect(afterText).not.toBe(beforeText) // 값이 실제로 갱신됨(리전이 죽어 있지 않음).
     expect(afterText).not.toContain('화면에 맞춤') // 수동 단계로 빠졌으니 접미사가 없어야 한다.
   })
+
+  /*
+    TC-11 [오너 보고, 2026-08-31] — "맞춤 누르면 스크롤 왜 생기지".
+
+    지금까지의 모든 케이스는 **달력 컨테이너 안쪽** 스크롤(scrollHeight vs
+    clientHeight)만 쟀다. 그런데 사용자가 보는 스크롤바는 그것만이 아니다 —
+    달력이 뷰포트 바닥까지 꽉 차면 그 아래 남은 페이지 여백이 문서를 밀어내
+    **페이지(문서) 스크롤바**가 생긴다. 컨테이너는 안 넘치는데 창은 스크롤되는,
+    지금까지 아무도 안 본 사각지대다.
+
+    산수: `gridMaxHeight = innerHeight - gridTop - GRID_BOTTOM_GAP`인데, 격자
+    아래에는 섹션의 `p-4`(아래 16px)와 `<main>`의 `md:pb-10`(40px)가 더 있다.
+    GAP이 그보다 작으면 그 차이만큼 문서가 뷰포트를 넘는다.
+
+    이 케이스는 **맞춤 상태**(기본값)에서 문서 자체가 세로로 안 넘치는지 잰다.
+    2px 여유는 서브픽셀 반올림 몫이다.
+  */
+  test('TC-11: 맞춤 상태에서 페이지(문서) 세로 스크롤이 생기지 않는다', async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const page = await context.newPage()
+    try {
+      await mockPlanBackend(page)
+      await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+      await expect(page.getByRole('button', { name: /화면에 맞추기/ })).toBeVisible()
+      await page.evaluate(() => document.fonts.ready)
+      await page.waitForTimeout(200)
+
+      const doc = await page.evaluate(() => ({
+        scrollHeight: document.documentElement.scrollHeight,
+        innerHeight: window.innerHeight,
+      }))
+      expect(
+        doc.scrollHeight,
+        `문서가 뷰포트를 넘으면 페이지 스크롤바가 생긴다: scrollHeight(${doc.scrollHeight}) vs innerHeight(${doc.innerHeight})`,
+      ).toBeLessThanOrEqual(doc.innerHeight + 2)
+    } finally {
+      await context.close()
+    }
+  })
 })
