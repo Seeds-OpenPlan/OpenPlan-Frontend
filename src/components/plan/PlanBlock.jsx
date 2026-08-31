@@ -38,7 +38,7 @@ const SHORT_BLOCK_PX = 46
 */
 
 /*
-  블록 종류별 색 (팀장 제안 2026-08-29: "고정일정·태스크·일정 색깔 다르게").
+  블록 종류별 색 (2026-08-29: "고정일정·태스크·일정 색깔 다르게").
 
   세 종류가 각자 다른 계열을 쓴다 — 태스크=브랜드 파랑, 일정=초록, 고정 일정=
   회색(FixedScheduleBlock이 소유). 예전엔 일정이 `bg-surface`, 즉 빈 그리드와
@@ -57,7 +57,7 @@ const TYPE_CLASSES = {
 const TYPE_LABELS = { TASK: '태스크', SCHEDULE: '일정' }
 
 /*
-  우선순위 강조 막대 (팀장 제안: "우선순위에 따라 색상 다르게").
+  우선순위 강조 막대 ("우선순위에 따라 색상 다르게").
   블록 왼쪽 3px 띠로만 칠한다 — 배경 계열은 이미 종류를 뜻하므로, 우선순위까지
   배경에 실으면 둘을 구분할 수 없다.
 
@@ -168,7 +168,7 @@ export function PlanBlock({
     // no static substitute, so we simply don't run it.
     if (reducedMotion) return
 
-    // Owner decision: the block should wobble AFTER it finishes sliding into
+    // 결정된 동작: the block should wobble AFTER it finishes sliding into
     // view, not mid-flight. scrollIntoView({behavior:'smooth'}) is async and
     // may scroll several ancestors at once, so instead of guessing which one
     // emits `scrollend` we watch this element's own viewport position across
@@ -304,6 +304,27 @@ export function PlanBlock({
               onPointerDown?.(e, block, startMin)
             }
       }
+      onClick={() => {
+        /*
+          2026-08-31 ("배치된 블록 누르면 그쪽으로 바로 스크롤 되어도
+          괜찮을 것 같아"). 격자가 한 화면에 다 안 들어가는 경우 — 24시간
+          모드나, 가시 범위가 너무 넓어 맞춤 축척이 바닥(FIT_HOUR_PX_MIN)에 닿은
+          주 — 위아래 가장자리의 블록은 반쯤 잘린 채로 보인다. 그 조각을 누르면
+          전체가 드러나도록 최소한만 스크롤한다.
+
+          `block:'nearest'`가 핵심이다: 이미 통째로 보이는 블록에는 **아무 일도
+          일어나지 않는다**(PLAN-23의 'center'와 다른 점 — 그쪽은 패널이 "이
+          블록을 봐라"고 지목한 경우라 화면 한가운데로 끌어오는 게 맞다). 그래서
+          맞춤 축척으로 전부 보이는 평소에는 이 핸들러가 사실상 없는 것과 같고,
+          드래그 직후 따라오는 click 에서도 (블록이 커서 아래 = 보이는 상태라)
+          조용하다.
+        */
+        rootRef.current?.scrollIntoView({
+          block: 'nearest',
+          inline: 'nearest',
+          behavior: reducedMotion ? 'auto' : 'smooth',
+        })
+      }}
       onMouseEnter={openDetail}
       onMouseLeave={closeDetail}
       onFocus={openDetail}

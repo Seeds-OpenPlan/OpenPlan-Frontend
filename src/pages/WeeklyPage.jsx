@@ -48,7 +48,7 @@ import {
 } from '../features/plan/usePlanHistory'
 import { usePlacementDrag } from '../features/plan/usePlacementDrag'
 import { useHourScale } from '../features/plan/useHourScale'
-import { resolveGridSlot, visibleRange } from '../features/plan/planGeometry'
+import { fitHourPx, resolveGridSlot, visibleRange } from '../features/plan/planGeometry'
 import { findFirstFreeSlot } from '../features/plan/planPlacement'
 import { getPopoverAnchorStyle } from '../utils/popoverPosition'
 import {
@@ -109,13 +109,6 @@ function WeeklyPage() {
 
   const [weekStartISO, setWeekStartISO] = useState(() => currentWeekStartISO())
   const [mode, setMode] = useState('focus')
-  /*
-    세로 축척(팀장 요청 2026-08-29). `mode`와 나란히 여기 사는 이유는 같다 —
-    그리드가 무엇을, 얼마나 크게 그리는지를 정하는 값은 페이지가 한곳에서 들고
-    있어야 그리드 렌더·드래그 계산·드롭 히트테스트가 서로 어긋날 수 없다.
-    `mode`와 달리 이건 기기별로 기억된다(useHourScale 헤더).
-  */
-  const hourScale = useHourScale()
   const [menu, setMenu] = useState({ open: false, block: null, position: null })
   const [reviewOpen, setReviewOpen] = useState(false)
 
@@ -143,7 +136,7 @@ function WeeklyPage() {
   const [scheduleForm, setScheduleForm] = useState(null) // { mode, block?, slot? } | null
   const [execLog, setExecLog] = useState(null) // { block } | null
 
-  // ST-F1-09 (owner review, modal decision): "태스크 편집" opens TaskEditModal
+  // ST-F1-09 (모달로 결정): "태스크 편집" opens TaskEditModal
   // with the BLOCK's own taskId — a plan-store id (`plan-task-*`), which
   // projectApi.getTask can never resolve (see that function's own
   // cross-store-gap comment). The modal itself renders a graceful in-modal
@@ -196,6 +189,29 @@ function WeeklyPage() {
   const floatingControlsRef = useRef(null)
   const [panelBounds, setPanelBounds] = useState(null) // { top, height } | null until measured
 
+  /*
+    달력 상자에 실제로 내줄 수 있는 픽셀 높이 (2026-08-31: "스크롤해야
+    일정이 보여서 불편하다").
+
+    예전에는 CalendarGrid가 `62vh` 라는 고정 상수를 썼다. 그 값은 격자가 그리는
+    내용의 높이(가시 범위 × 축척)와 아무 관계가 없어서, 둘이 우연히 맞아떨어지는
+    창 크기에서만 스크롤이 없었다 — 기본 축척의 집중 모드(8–19시 = 550px)가
+    62vh 상자(≈500px)보다 늘 조금 커서, 실제로는 항상 조금씩 잘렸다.
+
+    이제는 반대로 간다: 화면이 실제로 얼마를 줄 수 있는지 재고, 그 높이에
+    맞춰 축척을 정한다(useHourScale의 맞춤 모드). 여기서는 그 "얼마"만 잰다.
+
+    아래 여백(GRID_BOTTOM_GAP)의 근거 — 데스크톱에서는 undo/redo·FAB 줄이
+    `md:absolute md:bottom-6` 으로 카드 안쪽 아래에 겹쳐 앉는 것이 이미 정해진
+    디자인이라(그 줄의 주석 참고) 격자를 그 아래까지 늘려도 새로 가리는 것이
+    없다 — 카드 패딩만큼만 비우면 된다. 모바일에서는 같은 줄이 `fixed bottom-18`
+    로 뷰포트에 붙고 그 아래 BottomTabBar(56px)까지 있으므로 훨씬 넉넉히 비운다.
+  */
+  const [gridMaxHeight, setGridMaxHeight] = useState(null) // px | null until measured
+  // 요일 헤더 실측치(CalendarGrid가 올려 준다). 맞춤 축척은 이걸 뺀 나머지에
+  // 맞춘다 — 헤더까지 포함해 계산하면 딱 헤더 높이만큼 넘쳐 스크롤이 생긴다.
+  const [dayHeaderPx, setDayHeaderPx] = useState(0)
+
   useLayoutEffect(() => {
     const measure = () => {
       const top = gridWrapperRef.current?.getBoundingClientRect().top
@@ -204,6 +220,11 @@ function WeeklyPage() {
       // Floors the height so a measurement race (or a pathologically short
       // viewport) can never hand the panel a collapsed or negative max-height.
       setPanelBounds({ top, height: Math.max(bottom - top, 240) })
+
+      const GRID_BOTTOM_GAP = window.innerWidth >= 768 ? 24 : 112
+      // 240px 바닥: 세로가 극단적으로 짧은 창(또는 측정 레이스)에서 달력이
+      // 한 줄로 찌부러지지 않게 한다. 그런 창에서는 스크롤이 생기는 게 맞다.
+      setGridMaxHeight(Math.max(240, Math.round(window.innerHeight - top - GRID_BOTTOM_GAP)))
     }
     measure()
     // Resize is the only thing that can move these landmarks without this
@@ -213,8 +234,36 @@ function WeeklyPage() {
     // (not position within a scrolling ancestor) is what changes here, which a
     // resize listener already covers.
     window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-  }, [])
+
+    /*
+      폰트 스왑 후 한 번 더 잰다. Pretendard는 CDN에서 비동기로 오고
+      `font-display:swap`이라(index.html 헤더), 첫 측정 뒤에 폴백 폰트 →
+      Pretendard 교체가 일어나면 격자 위쪽(WeekNav·PlanHeader) 글자의 줄높이가
+      바뀌면서 달력의 시작 위치가 몇 px 밀린다. 그걸 반영하지 않으면 달력이 딱
+      그만큼 화면 밖으로 넘쳐 — 이 변경 전체가 없애려던 "몇 px 때문에 스크롤바가
+      생기는" 상태가 폰트 로딩이라는 다른 경로로 되살아난다. 캐시가 더워진
+      재방문에서는 스왑이 측정보다 먼저 끝나 티가 안 나지만, 첫 방문·느린 회선에서
+      정확히 이 순서가 된다.
+
+      `document.fonts`가 없는 환경(구형·일부 테스트 러너)에서는 조용히 건너뛴다 —
+      그때는 폰트 스왑 자체가 없으므로 잃는 것도 없다.
+    */
+    let cancelled = false
+    document.fonts?.ready
+      ?.then(() => {
+        if (!cancelled) measure()
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+      window.removeEventListener('resize', measure)
+    }
+    // 주차가 바뀌면 다시 잰다. 리사이즈 말고도 이 두 랜드마크를 움직이는 것이
+    // 하나 더 있기 때문이다 — 지난 주로 넘어가면 PlanHeader가 "읽기 전용" 띠를
+    // 한 줄 더 그려서 달력 상자의 시작 위치가 그만큼 내려간다. 그걸 반영하지
+    // 않으면 달력이 화면 밖으로 그 높이만큼 흘러 나간다.
+  }, [weekStartISO])
 
   const planQuery = useWeekPlan(weekStartISO)
   const availQuery = useAvailability()
@@ -293,7 +342,7 @@ function WeeklyPage() {
   /*
     집중 모드의 창은 가용 시간뿐 아니라 **이 주에 실제로 그려지는 것들**까지
     감싸야 한다 — 그러지 않으면 가용 창 밖의 블록·고정 일정이 그리드 위아래로
-    잘려 무슨 일정인지 안 보인다(팀장 보고 2026-08-29; 자세한 사정은
+    잘려 무슨 일정인지 안 보인다(2026-08-29 보고; 자세한 사정은
     planGeometry.visibleRange 헤더). 초안 배치까지 포함하는 이유는 그것도
     같은 그리드에 같은 좌표로 그려지기 때문이다.
   */
@@ -315,6 +364,21 @@ function WeeklyPage() {
     [mode, availability, drawnSpans],
   )
   const availableMinutes = availableMinutesOf(availability)
+
+  /*
+    세로 축척. `mode`·`range`와 나란히 여기 사는 이유는 같다 — 그리드가 무엇을,
+    얼마나 크게 그리는지를 정하는 값은 페이지가 한곳에서 들고 있어야 그리드
+    렌더·드래그 계산·드롭 히트테스트가 서로 어긋날 수 없다. (`mode`와 달리
+    이건 기기별로 기억된다 — useHourScale 헤더.)
+
+    `range` 다음에 놓인 것은 우연이 아니다: "맞춤" 축척은 지금 그릴 범위가 몇
+    시간인지와 달력이 실제로 몇 픽셀을 받았는지, 둘 다 알아야 계산된다.
+  */
+  const fitPxPerHour = useMemo(
+    () => (gridMaxHeight == null ? null : fitHourPx(gridMaxHeight - dayHeaderPx, range)),
+    [gridMaxHeight, dayHeaderPx, range],
+  )
+  const hourScale = useHourScale({ fitHourPx: fitPxPerHour })
 
   // --- validation (ST-F1-05: PLAN-21~28) ------------------------------------
 
@@ -550,7 +614,7 @@ function WeeklyPage() {
     // 이 화면에 남아 있던 마지막 "말 없이 사라지는" 경로 (리드 브라우저 재현,
     // 2026-08-28): 주간 계획이 아직 안 잡혔으면 드롭이 아무 흔적 없이 버려졌다
     // — 요청도 안 나가고 토스트도 없어서, 겉보기엔 아래 planLocked 분기나
-    // 서버 실패와 구분이 되지 않는다. 오너의 "배치가 안 된다" 보고를 조사할 때
+    // 서버 실패와 구분이 되지 않는다. "배치가 안 된다"는 보고를 조사할 때
     // 바로 이 구분이 안 돼서 원인을 좁히는 데 시간이 걸렸다.
     if (!plan) {
       toast({ tone: 'info', message: '주간 계획을 불러오는 중입니다. 잠시 후 다시 시도해 주세요' })
@@ -563,7 +627,7 @@ function WeeklyPage() {
     // unreachable. It's still a real backstop though (e.g. a drag that began
     // just before `autoDraft` appeared), and until now this branch dropped the
     // drop with ZERO feedback — visually indistinguishable from "배치가 안
-    // 되는 결함" (오너 보고, 2026-08-28): the block/ghost just snaps back with
+    // 되는 결함" (2026-08-28 보고): the block/ghost just snaps back with
     // no explanation. handleUserMove's own `isPastWeek` branch already sets
     // the precedent (a toast beats a silent no-op) — mirrored here for both
     // reasons `planLocked` can be true, since a dropped drag never reaches any
@@ -664,7 +728,7 @@ function WeeklyPage() {
   // Auto placement (RB-PLAN-01): announce progress, then hold the returned draft
   // as an overlay until the user applies or cancels it.
   //
-  // No `priorityType` sent (owner/lead review, W2 API alignment): this
+  // No `priorityType` sent (리뷰 결과, W2 API alignment): this
   // button has exactly ONE ordering, and its own toast text says which one —
   // "우선순위·마감일 순" is byPriorityThenDue, postAutoPlacements's own
   // no-argument default (see its header). This USED to hardcode
@@ -1182,7 +1246,7 @@ function WeeklyPage() {
         // batch does nothing to fix an "already applied" rejection of the SAME
         // option id, since a fresh batch gets fresh ids anyway (so it's harmless,
         // just a wasted round-trip in that specific case). Kept as the AC-3
-        // wording pending a decision from the lead on which 409 meaning the real
+        // wording pending a decision on which 409 meaning the real
         // server implements.
         onError: (error) => {
           if (error?.status === 409) {
@@ -1246,8 +1310,11 @@ function WeeklyPage() {
           availableMinutes={availableMinutes}
           mode={mode}
           onModeChange={setMode}
-          scaleIndex={hourScale.index}
-          onScaleChange={hourScale.setIndex}
+          isFit={hourScale.isFit}
+          hourPx={hourScale.hourPx}
+          onFit={hourScale.setFit}
+          onZoomIn={hourScale.zoomIn}
+          onZoomOut={hourScale.zoomOut}
           canZoomIn={hourScale.canZoomIn}
           canZoomOut={hourScale.canZoomOut}
         />
@@ -1290,10 +1357,12 @@ function WeeklyPage() {
             focusRequest={focusRequest}
             fixedSchedules={fixedSchedulesQuery.data ?? []}
             onOpenFixedMenu={openFixedMenu}
-            // No bodyMaxHeight override: the grid always uses CalendarGrid's own
-            // constant default now (fix E removed the autoDraft-shrink hack this
-            // prop used to carry — AutoPlaceBar is an overlay, so nothing about
-            // it needs the grid to compensate anymore).
+            /* 달력 상자 높이는 이제 실측치다 — 예전의 `62vh` 상수는 격자가
+               그리는 내용의 높이와 아무 관계가 없어서 늘 조금씩 잘렸다(측정
+               코드의 주석 참고). 아직 측정 전이면 undefined 를 넘겨
+               CalendarGrid 자신의 기본값으로 첫 프레임을 그린다. */
+            bodyMaxHeight={gridMaxHeight == null ? undefined : `${gridMaxHeight}px`}
+            onHeaderHeight={setDayHeaderPx}
           />
         </div>
 
@@ -1351,7 +1420,7 @@ function WeeklyPage() {
             panel, so the two are right at the edge of each other. This is a
             STATIC estimate, not a measured one — I could not verify the exact
             wrap point pixel-for-pixel without a live browser (dev server is
-            on :5177 per the lead; worth an actual check at ~768px width
+            on :5177; worth an actual check at ~768px width
             specifically). Mobile is NOT held to the same nowrap guarantee —
             see AutoPlaceBar's own comment on why forcing it risks a page-wide
             horizontal-scroll bug instead of just an occasional 3rd line;

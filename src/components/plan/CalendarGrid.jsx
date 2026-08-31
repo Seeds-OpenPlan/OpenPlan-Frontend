@@ -19,7 +19,6 @@ import {
   dateOf,
   formatISODate,
   formatMinutesLabel,
-  MINUTES_PER_DAY,
   minutesOfDay,
   parseISODate,
   snapMinutes,
@@ -159,13 +158,36 @@ export function CalendarGrid({
   fixedSchedules = null,
   onOpenFixedMenu,
   bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
+  // 요일 헤더 줄의 실측 높이를 페이지로 올려 준다 (2026-08-31 맞춤 축척).
+  // 페이지는 달력 상자 전체 높이(bodyMaxHeight)만 알 뿐, 그중 격자 본문이
+  // 실제로 쓸 수 있는 높이는 헤더를 뺀 나머지다. 상수로 짐작하면 폰트·줄간격이
+  // 바뀔 때마다 몇 px씩 어긋나 "다 보이는데 스크롤바만 생기는" 상태가 되므로
+  // 재지 않고 넘겨받는다. 헤더 높이는 축척과 무관하므로 되먹임 고리가 없다.
+  onHeaderHeight,
   // 사용자가 고른 세로 축척(분당 픽셀). 페이지가 소유하고 여기로 내려온다 —
   // 이 컴포넌트 안의 모든 좌표 계산은 오직 이 값만 쓴다.
   pxPerMin = PX_PER_MIN,
 }) {
   const gridRef = useRef(null)
   const scrollRef = useRef(null)
+  const headerRef = useRef(null)
   const [resizeState, setResizeState] = useState(null) // {planBlockId,startMin,endMin}
+
+  // 요일 헤더 실측 → 페이지(맞춤 축척 계산). border-box 높이를 그대로 넘긴다.
+  // useLayoutEffect인 이유: 이 값이 도착해야 맞춤 축척이 확정되므로, 페인트
+  // 전에 올려 보내지 않으면 첫 프레임이 기본 축척으로 한 번 그려졌다가
+  // 맞춤 축척으로 다시 그려져 눈에 띄게 튄다.
+  useLayoutEffect(() => {
+    const el = headerRef.current
+    if (!el || !onHeaderHeight) return undefined
+    onHeaderHeight(el.getBoundingClientRect().height)
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver((entries) => {
+      onHeaderHeight(entries[0].target.getBoundingClientRect().height)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [onHeaderHeight])
 
   // A callback ref that mirrors the grid body element into the page's bodyRef too,
   // so the page can hit-test panel→grid drops (resolveGridSlot) against exactly
@@ -208,6 +230,21 @@ export function CalendarGrid({
   // end in 5-min steps (min 15-min tall); release commits via onResizeCommit. Runs
   // here (not in PlanBlock) because it needs the grid geometry, like the availability
   // handles. The pointerdown stops propagation so it never starts a block MOVE.
+  //
+  // 2026-08-31 정정: 클램프를 하루 전체(0..MINUTES_PER_DAY)가 아니라 지금 보이는
+  // `range`로 좁혔다. 예전엔 focus 모드에서 그리드 바닥 아래로(가시 범위 밖으로)
+  // 끌어도 값 자체는 자정까지 허용됐는데, 그 초과분을 흡수해 주던 것이 바로
+  // visibleRange의 위아래 여유였다 — 여유를 없앤 지금은(그 함수 헤더 참고) 흡수할
+  // 곳이 없어 미리보기가 그리드 밖으로 그대로 삐져나갔다(blockRect의 15분 최소
+  // 높이 캡과 같은 종류의 문제, 그쪽 헤더 참고). `usePlanDrag`의 MOVE 드래그는
+  // 이미 같은 이유로 `range`에 클램프돼 있었으므로(그 파일의 compute), 여기도
+  // 같은 경계에 맞춘다 — 한 그리드 안에서 MOVE와 RESIZE가 서로 다른 경계를 갖는
+  // 것이 더 이상한 일이다.
+  //
+  // 이 클램프는 부수적으로 "보이지 않는 시간으로 리사이즈"도 막는다: focus
+  // 모드의 `range`는 가용 시간(∪ 이 주에 실제로 그려지는 것) 밖으로는 아예 열려
+  // 있지 않으므로, 그 창 밖 시간대로 늘리는 것은 원래 의미가 없다 — 하루 전체를
+  // 보고 늘리고 싶으면 24시간 토글이 이미 그 창을 연다.
   const RESIZE_MIN_DUR = 15
   const makeResizeStart = (block, dayIndex, startMin, endMin) => (edge, e) => {
     if (readOnly || e.button !== 0) return
@@ -216,9 +253,33 @@ export function CalendarGrid({
     const compute = (clientY) => {
       const rect = gridRef.current.getBoundingClientRect()
       const m = snapMinutes(pxToMinutes(clientY - rect.top, range, pxPerMin))
+      /*
+        두 제약의 **우선순위**가 중요하다: 최소 길이(15분)가 범위 클램프를 이긴다.
+
+        둘을 순진하게 겹치면(범위로 먼저 자르고 최소 길이를 안쪽에 두면) 범위
+        경계에 15분보다 가깝게 붙은 블록에서 손잡이가 **아무 반응도 없는 상태**가
+        된다: `startMin + 15`가 이미 `range.endMinutes`를 넘으므로 어느 방향으로
+        끌든 결과가 원래 값으로 눌리고, pointerup에서도 값이 안 바뀌었으니 커밋조차
+        일어나지 않는다 — 에러도 토스트도 없이 조용히 죽는, 이 코드베이스가 가장
+        싫어하는 실패 방식이다. 여유를 없앤 뒤로 그 주에서 가장 이르거나 늦은
+        블록이 경계에 바짝 붙는 것이 흔해졌고, ScheduleForm은 15분 미만(5분 단위)
+        일정 생성을 실제로 허용하므로 도달 가능한 상태다.
+
+        그래서 최소 길이를 바깥에 둔다. 평소에는 `m`이 범위 안이라 범위 클램프가
+        그대로 먹고, 둘이 충돌할 때만 최소 길이가 이겨 블록이 범위를 잠깐 넘는다.
+        그건 안전하다 — visibleRange가 그려지는 구간을 감싸도록 창을 넓히므로,
+        커밋되는 순간 창이 그 블록을 포함하도록 자란다. 드래그 중 한때 넘치는
+        것과, 손잡이가 영영 죽어 있는 것 중에서는 전자가 낫다.
+      */
       return edge === 'start'
-        ? { startMin: Math.max(0, Math.min(m, endMin - RESIZE_MIN_DUR)), endMin }
-        : { startMin, endMin: Math.min(MINUTES_PER_DAY, Math.max(m, startMin + RESIZE_MIN_DUR)) }
+        ? {
+            startMin: Math.min(endMin - RESIZE_MIN_DUR, Math.max(range.startMinutes, m)),
+            endMin,
+          }
+        : {
+            startMin,
+            endMin: Math.max(startMin + RESIZE_MIN_DUR, Math.min(range.endMinutes, m)),
+          }
     }
     const move = (ev) => setResizeState({ planBlockId: block.planBlockId, ...compute(ev.clientY) })
     const up = (ev) => {
@@ -398,7 +459,7 @@ export function CalendarGrid({
             {/* Sticky day-header row. */}
             {/* z-40: above the dragged block / drop preview (z-30) so a block
                 scrolled to the top slides UNDER the day header, never over it. */}
-            <div className="sticky top-0 z-40 flex border-b border-border bg-surface">
+            <div ref={headerRef} className="sticky top-0 z-40 flex border-b border-border bg-surface">
               <div className="w-12 shrink-0" />
               <div className="grid flex-1 grid-cols-7">
                 {weekDays.map((dayISO, i) => (
@@ -411,22 +472,59 @@ export function CalendarGrid({
             <div className="flex">
               {/* Left hour ruler. */}
               <div className="relative w-12 shrink-0" style={{ height }}>
-                {ticks.map((h) => (
-                  <span
-                    key={h}
-                    className="absolute right-1 -translate-y-1/2 text-caption text-text-muted"
-                    style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
-                  >
-                    {String(h).padStart(2, '0')}
-                  </span>
-                ))}
+                {/* 라벨은 눈금선 위에 가운데 정렬이지만, 창의 위아래 끝에 닿는
+                    눈금만은 안쪽으로 붙여 그린다. visibleRange가 가용 시간
+                    바깥의 여유를 없앤 뒤로 첫 눈금이 top 0, 마지막 눈금이
+                    바닥에 정확히 앉기 때문에(그 함수 주석 참고), 가운데
+                    정렬이면 첫 라벨은 위쪽 절반이 헤더에 가리고 마지막 라벨은
+                    아래쪽 절반이 카드 밖으로 나간다. */}
+                {ticks.map((h) => {
+                  const atTop = h * 60 === range.startMinutes
+                  const atBottom = h * 60 === range.endMinutes
+                  return (
+                    <span
+                      key={h}
+                      className={[
+                        'absolute right-1 text-caption text-text-muted',
+                        atTop ? '' : atBottom ? '-translate-y-full' : '-translate-y-1/2',
+                      ].join(' ')}
+                      style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
+                    >
+                      {String(h).padStart(2, '0')}
+                    </span>
+                  )
+                })}
               </div>
 
         {/* Grid body — drag reference element. A right-click on empty space (not on
             a block — PlanBlock stops propagation) opens the place-here menu (PLAN-07). */}
         <div
           ref={setGridRef}
-          className="relative flex-1"
+          /*
+            `overflow-hidden`은 이 화면의 핵심 약속("집중 모드에서 스크롤이 생기지
+            않는다")을 **구조적으로** 보장하는 자리다. 지오메트리 계산만으로는
+            부족하다는 것이 실측으로 드러났다(2026-08-31, E2E TC-10):
+
+            blockRect가 경계 블록의 높이를 3.15px로 정확히 계산해 넘겨도, 블록
+            자신의 CSS(`p-1.5` 상하 6px + `border` 1px, box-sizing:border-box)가
+            만드는 **최소 렌더 높이 14px**가 그 값을 덮어쓴다. 그러면 블록의 실제
+            아래 가장자리가 격자 바닥보다 11px 아래로 나가고, 절대 위치라 그만큼
+            스크롤 컨테이너의 스크롤 영역이 늘어난다 — 가용 09-18에 17:57-18:00
+            블록 하나만 있어도 scrollHeight 640 vs clientHeight 629가 됐다. 여유
+            제거도 맞춤 축척도 아닌 **블록의 패딩**에서 같은 증상이 재발한 것이다.
+
+            그래서 "픽셀을 정확히 계산한다"에만 기대지 않고 여기서 잘라 낸다. 인라인
+            높이로 표현할 수 없는 것(CSS 최소 크기, 소수점 반올림, 리사이즈 미리보기가
+            잠시 범위를 넘는 경우)이 무엇이든 스크롤 영역을 못 늘린다.
+
+            잘려 나가는 것이 없어야 이 클립이 안전하다는 점이 중요하다 — visibleRange가
+            이 주에 그려지는 모든 구간(블록·고정 일정·초안)을 감싸도록 창을 넓히므로
+            (그 함수 헤더), 범위 밖에 놓이는 정상 요소는 원래 존재하지 않는다. 이
+            클립은 그 규칙을 대체하는 것이 아니라, 규칙이 표현하지 못하는 몇 px을
+            받아 내는 마지막 방어선이다. hover 상세 카드·액션 메뉴는 포털이라 여기
+            갇히지 않는다.
+          */
+          className="relative flex-1 overflow-hidden"
           style={{ height }}
           onContextMenu={(e) => {
             if (readOnly || !onEmptySlot) return
@@ -463,15 +561,23 @@ export function CalendarGrid({
             })}
           </div>
 
-          {/* Hour gridlines. */}
-          {ticks.map((h) => (
-            <div
-              key={h}
-              className="pointer-events-none absolute inset-x-0 border-t border-border/70"
-              style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
-              aria-hidden="true"
-            />
-          ))}
+          {/* Hour gridlines.
+
+              창 맨 아래 눈금(= range.endMinutes)은 건너뛴다. 그 선은 격자 높이
+              바로 아래 1px에 그려지는데, 절대 위치라 스크롤 컨테이너의 스크롤
+              영역을 그만큼 늘린다 — 축척을 화면에 딱 맞춰 놨는데 이 1px 때문에
+              스크롤바가 생기는, 가장 허무한 실패다. 그 자리에는 카드 테두리가
+              이미 같은 선을 긋고 있어 시각적으로 잃는 것도 없다. */}
+          {ticks
+            .filter((h) => h * 60 !== range.endMinutes)
+            .map((h) => (
+              <div
+                key={h}
+                className="pointer-events-none absolute inset-x-0 border-t border-border/70"
+                style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
+                aria-hidden="true"
+              />
+            ))}
 
           {/* Availability edge handles (24h mode only, editable weeks only). */}
           {mode === '24h' &&

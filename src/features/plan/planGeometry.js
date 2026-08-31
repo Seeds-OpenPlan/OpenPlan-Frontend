@@ -10,7 +10,7 @@ import { MINUTES_PER_DAY, snapMinutes, WEEKDAY_KEYS } from './planTime'
 /*
   1시간이 차지하는 세로 픽셀 — 즉 그리드의 세로 축척.
 
-  2026-08-29 (팀장): 처음엔 "화면이 작아 스크롤이 불편하다"는 지적에 75 → 50으로
+  2026-08-29: 처음엔 "화면이 작아 스크롤이 불편하다"는 지적에 75 → 50으로
   낮췄는데, 이어서 "사용자가 직접 조절해서 한눈에 보이는 일정 량을 조절하고
   싶다"는 요청이 왔다. 그래서 이 값은 더 이상 고정 상수가 아니라 **사용자
   설정값**이다 — 달력 박스 높이는 그대로 두고 축척만 바꾸므로, 촘촘히 하면 같은
@@ -43,11 +43,6 @@ export function clampHourPxIndex(index) {
   return Math.max(0, Math.min(HOUR_PX_STEPS.length - 1, index))
 }
 
-/** 단계 인덱스 → 분당 픽셀. 지오메트리 헬퍼들이 받는 값이 바로 이것이다. */
-export function pxPerMinAt(index) {
-  return HOUR_PX_STEPS[clampHourPxIndex(index)] / 60
-}
-
 // 기본 축척. 아래 헬퍼들의 기본 인자이자, 축척을 조절하지 않는 화면
 // (TaskEditPreview의 작은 미리보기)이 그대로 쓰는 값이다.
 export const HOUR_PX = HOUR_PX_STEPS[DEFAULT_HOUR_PX_INDEX]
@@ -60,7 +55,7 @@ export const PX_PER_MIN = HOUR_PX / 60
  *            so non-available early/late hours collapse away (design shows ~09–18).
  *            Falls back to a sensible default when no availability is set.
  *
- * 2026-08-29 (팀장 보고: "집중모드일 때 일정이 잘려서 무슨 일정인지 안 보인다").
+ * 2026-08-29 보고: "집중모드일 때 일정이 잘려서 무슨 일정인지 안 보인다".
  * 집중 모드의 창은 **가용 시간**만 보고 정했었다. 그런데 화면에 실제로 그려지는
  * 것은 가용 시간 밖에도 얼마든지 있다 — 이른 아침 고정 일정, 가용 창 앞뒤로
  * 끌어다 놓은 블록, 가용 시간을 나중에 좁힌 뒤 남은 예전 배치. 그런 블록은
@@ -112,10 +107,26 @@ export function visibleRange(mode, availability, spans) {
     }
   }
 
-  // Pad by 30 min each side so edge blocks aren't flush against the frame, and
-  // clamp to whole hours for a tidy ruler.
-  const padStart = Math.max(0, Math.floor((start - 30) / 60) * 60)
-  const padEnd = Math.min(MINUTES_PER_DAY, Math.ceil((end + 30) / 60) * 60)
+  /*
+    창을 감싸는 정시 경계까지만 넓힌다 — 여유는 두지 않는다.
+
+    2026-08-31 이전에는 앞뒤로 30분씩 붙인 뒤 정시로 반올림했다. 그러면 9–18시
+    가용이 8–19시, 즉 **11시간**이 되어 위아래로 각각 한 시간씩 빈 띠가 생겼다.
+    "가장자리 블록이 테두리에 딱 붙지 않게" 하려던 것인데, 축척이 화면 높이에
+    맞춰지는 지금은(fitHourPx) 그 두 시간이 곧바로 나머지 시간대의 축척을
+    깎는다 — 9시간이면 될 것을 11시간에 나눠 담으니 시간당 픽셀이 18% 작아지고,
+    정작 보려던 일정이 그만큼 작아진다. 빈 띠를 위해 치를 값이 아니다.
+
+    정시 클램프는 남긴다: 눈금은 정시에만 찍히므로(hourTicks) 경계가 정시여야
+    첫·마지막 눈금이 창의 위아래 끝과 정확히 맞고, 블록 좌표도 정수 픽셀에
+    떨어진다. 9:30–18:00 같은 가용이면 9:00–18:00으로만 넓어진다.
+
+    ⚠ 이제 첫 눈금이 창 맨 위(top 0)에 앉으므로, 눈금 라벨을 선 위에 가운데
+    정렬로 그리면 위쪽 절반이 잘린다. CalendarGrid의 눈금 렌더가 첫/마지막
+    라벨만 안쪽으로 붙여 그리는 이유다 — 둘은 같이 움직여야 한다.
+  */
+  const padStart = Math.max(0, Math.floor(start / 60) * 60)
+  const padEnd = Math.min(MINUTES_PER_DAY, Math.ceil(end / 60) * 60)
   return { startMinutes: padStart, endMinutes: padEnd }
 }
 
@@ -145,7 +156,32 @@ export function hourTicks(range) {
 /** Top/height px for a block given its minutes-of-day span and the visible range. */
 export function blockRect(startMin, endMin, range, pxPerMin = PX_PER_MIN) {
   const top = (startMin - range.startMinutes) * pxPerMin
-  const height = Math.max(pxPerMin * 15, (endMin - startMin) * pxPerMin) // >=15min tall
+  const raw = Math.max(pxPerMin * 15, (endMin - startMin) * pxPerMin) // >=15min tall
+  /*
+    2026-08-31: visibleRange stopped padding the band with a buffer above/below
+    the actual content (see that function's own header) — the range's bottom
+    edge can now sit EXACTLY at a real block's end. A block whose true duration
+    is under 15 minutes still renders at the 15-min floor above, so pinned to
+    that edge it would poke past the grid's own height by however many minutes
+    the floor added — the exact "몇 px 때문에 스크롤바가 생기는" failure this
+    whole change exists to remove, just moved from the range's padding to this
+    floor.
+    (A live A2 resize-drag preview COULD do the same thing more easily, since it
+    isn't one of the real spans visibleRange grows the range to enclose — but
+    that path is closed at the source instead, by clamping the drag itself to
+    `range` in CalendarGrid's makeResizeStart, so the preview's endMin/startMin
+    can never leave the range to begin with. Capping it again here would only
+    hide a bug in that clamp, not fix one — so this cap has exactly one job.)
+    Capped at the range's own bottom instead of raising `raw`: a real block's
+    span (endMin-startMin)*pxPerMin always fits inside the range (visibleRange
+    grows to enclose every drawn span), so this can only ever shave off the
+    artificial 15-min inflation, never a block's actual content. The outer
+    `Math.max` below is the same guarantee made explicit — it stays as a
+    safety net so a future caller whose span genuinely exceeds the range (a
+    contract this function doesn't itself enforce) still gets its real content
+    rendered in full rather than silently clipped.
+  */
+  const height = Math.max((endMin - startMin) * pxPerMin, Math.min(raw, rangeHeightPx(range, pxPerMin) - top))
   return { top, height }
 }
 
@@ -191,4 +227,45 @@ export function resolveGridSlot(point, rect, range, pxPerMin = PX_PER_MIN) {
   const dayIndex = Math.max(0, Math.min(6, Math.floor((point.x - rect.left) / colWidth)))
   const startMin = snapMinutes(pxToMinutes(point.y - rect.top, range, pxPerMin))
   return { dayIndex, startMin }
+}
+
+/*
+  "맞춤" 축척 (2026-08-31 요구: "집중 모드일 때 가용시간 범위가 한 화면에
+  바로 들어오도록").
+
+  왜 새 단계 하나가 아니라 계산인가 — 한 화면에 들어오느냐는 두 값의 비(比)로만
+  정해진다: 가시 범위가 몇 시간인가, 그리고 달력 본문에 실제로 몇 픽셀이
+  주어졌는가. 둘 다 화면·주차·가용 설정에 따라 매번 다르므로 고정 단계표
+  (HOUR_PX_STEPS)로는 원리상 맞출 수 없다 — 어떤 창에서 딱 맞는 값이 다른
+  창에서는 넘치거나 남는다.
+
+  그래도 결과는 **정수 px/시간**으로 내린다. HOUR_PX_STEPS가 정수만 담은 이유와
+  똑같다 — 시간선 top이 `h*60*pxPerMin` 으로 계산되므로, 분당 픽셀이 60으로
+  나누어떨어지지 않으면 눈금이 소수점에서 반올림돼 줄마다 1px씩 어긋난다.
+  내림(floor)인 것도 의도다: 올림하면 딱 1~2px이 넘쳐 "거의 다 보이는데 스크롤바가
+  생기는" 가장 짜증나는 상태가 된다.
+
+  아래위 클램프의 근거:
+  - MIN 28 — 24시간 모드처럼 아무리 줄여도 못 담는 범위에서 축척이 무한정
+    작아지지 않게 막는 바닥. 이보다 작으면 1시간 블록이 28px 미만이 되어
+    PlanBlock의 SHORT_BLOCK_PX(46) 한참 아래, 시각 라벨조차 안 들어간다.
+    바닥에 닿으면 맞춤은 포기하고 스크롤로 넘긴다 — 그때 스크롤이 조금만
+    남도록 최대한 좁혀 둔 상태가 된다.
+  - MAX  — 단계표의 맨 윗값. 가용 창이 아주 좁은 주(예: 3시간)에 블록이
+    화면을 가득 채우는 거대한 덩어리로 부풀지 않게 한다.
+*/
+export const FIT_HOUR_PX_MIN = 28
+export const FIT_HOUR_PX_MAX = HOUR_PX_STEPS[HOUR_PX_STEPS.length - 1]
+
+/**
+ * 달력 본문에 주어진 픽셀 높이에 `range`가 통째로 들어가는 1시간당 픽셀.
+ *
+ * @param {number} bodyPx  요일 헤더를 뺀, 격자 본문이 쓸 수 있는 픽셀 높이
+ * @param {{startMinutes:number,endMinutes:number}} range
+ * @returns {number|null} 정수 px/시간. 아직 측정 전(bodyPx 미확정)이면 null.
+ */
+export function fitHourPx(bodyPx, range) {
+  const hours = (range.endMinutes - range.startMinutes) / 60
+  if (!Number.isFinite(bodyPx) || bodyPx <= 0 || !(hours > 0)) return null
+  return Math.max(FIT_HOUR_PX_MIN, Math.min(FIT_HOUR_PX_MAX, Math.floor(bodyPx / hours)))
 }

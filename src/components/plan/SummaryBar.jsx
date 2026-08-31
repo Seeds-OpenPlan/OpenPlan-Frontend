@@ -9,14 +9,14 @@ import { formatDurationKO } from '../../features/plan/planTime'
   the numbers remain the source of truth (color is never the only signal).
 */
 /*
-  블록 색 범례 (팀장 제안 2026-08-29). 세 종류의 색을 글자로 풀어 주는 자리 —
+  블록 색 범례 (2026-08-29). 세 종류의 색을 글자로 풀어 주는 자리 —
   색이 유일한 단서가 되지 않게 하는 쪽(NFR-017)이자, 새 색 규칙을 처음 보는
   사람이 추측하지 않아도 되게 하는 쪽이다. 색 값은 PlanBlock의 TYPE_CLASSES /
   FixedScheduleBlock의 회색과 짝을 이룬다 — 한쪽만 바뀌면 범례가 거짓말이 되니
   둘을 같이 고쳐야 한다.
 
-  세로 공간을 새로 먹지 않도록 이미 있던 요약 줄의 빈 왼쪽에 얹었다(팀장이
-  "화면이 너무 작다"고 한 마당에 범례가 한 줄을 더 차지하면 앞뒤가 안 맞는다).
+  세로 공간을 새로 먹지 않도록 이미 있던 요약 줄의 빈 왼쪽에 얹었다("화면이
+  너무 작다"는 마당에 범례가 한 줄을 더 차지하면 앞뒤가 안 맞는다).
   좁은 화면에서는 요약 텍스트와 겹치므로 감춘다.
 */
 const LEGEND = [
@@ -43,9 +43,13 @@ export function SummaryBar({
   availableMinutes,
   mode,
   onModeChange,
-  // 세로 축척 조절(팀장 요청) — 상태는 페이지가 소유하고 여기선 표시만 한다.
-  scaleIndex,
-  onScaleChange,
+  // 세로 축척 조절 — 상태는 페이지가 소유하고 여기선 표시만 한다.
+  // `isFit`/`hourPx`는 useHourScale이 계산한 현재 상태 그대로다.
+  isFit,
+  hourPx,
+  onFit,
+  onZoomIn,
+  onZoomOut,
   canZoomIn,
   canZoomOut,
 }) {
@@ -67,8 +71,11 @@ export function SummaryBar({
         </p>
         <div className="absolute right-0 flex items-center gap-2">
           <HourScaleControl
-            index={scaleIndex}
-            onChange={onScaleChange}
+            isFit={isFit}
+            hourPx={hourPx}
+            onFit={onFit}
+            onZoomIn={onZoomIn}
+            onZoomOut={onZoomOut}
             canZoomIn={canZoomIn}
             canZoomOut={canZoomOut}
           />
