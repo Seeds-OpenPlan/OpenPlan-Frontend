@@ -500,7 +500,31 @@ export function CalendarGrid({
             a block — PlanBlock stops propagation) opens the place-here menu (PLAN-07). */}
         <div
           ref={setGridRef}
-          className="relative flex-1"
+          /*
+            `overflow-hidden`은 이 화면의 핵심 약속("집중 모드에서 스크롤이 생기지
+            않는다")을 **구조적으로** 보장하는 자리다. 지오메트리 계산만으로는
+            부족하다는 것이 실측으로 드러났다(2026-08-31, E2E TC-10):
+
+            blockRect가 경계 블록의 높이를 3.15px로 정확히 계산해 넘겨도, 블록
+            자신의 CSS(`p-1.5` 상하 6px + `border` 1px, box-sizing:border-box)가
+            만드는 **최소 렌더 높이 14px**가 그 값을 덮어쓴다. 그러면 블록의 실제
+            아래 가장자리가 격자 바닥보다 11px 아래로 나가고, 절대 위치라 그만큼
+            스크롤 컨테이너의 스크롤 영역이 늘어난다 — 가용 09-18에 17:57-18:00
+            블록 하나만 있어도 scrollHeight 640 vs clientHeight 629가 됐다. 여유
+            제거도 맞춤 축척도 아닌 **블록의 패딩**에서 같은 증상이 재발한 것이다.
+
+            그래서 "픽셀을 정확히 계산한다"에만 기대지 않고 여기서 잘라 낸다. 인라인
+            높이로 표현할 수 없는 것(CSS 최소 크기, 소수점 반올림, 리사이즈 미리보기가
+            잠시 범위를 넘는 경우)이 무엇이든 스크롤 영역을 못 늘린다.
+
+            잘려 나가는 것이 없어야 이 클립이 안전하다는 점이 중요하다 — visibleRange가
+            이 주에 그려지는 모든 구간(블록·고정 일정·초안)을 감싸도록 창을 넓히므로
+            (그 함수 헤더), 범위 밖에 놓이는 정상 요소는 원래 존재하지 않는다. 이
+            클립은 그 규칙을 대체하는 것이 아니라, 규칙이 표현하지 못하는 몇 px을
+            받아 내는 마지막 방어선이다. hover 상세 카드·액션 메뉴는 포털이라 여기
+            갇히지 않는다.
+          */
+          className="relative flex-1 overflow-hidden"
           style={{ height }}
           onContextMenu={(e) => {
             if (readOnly || !onEmptySlot) return

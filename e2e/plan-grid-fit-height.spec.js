@@ -426,6 +426,77 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     expect(patchCount, '값이 안 바뀌었으니 PATCH가 나가면 안 된다').toBe(0)
   })
 
+  /*
+    TC-10 [회귀 가드, 2026-08-31 발견·수정] — 경계에 15분 미만으로 붙은 블록이
+    CSS 패딩/보더 바닥 때문에 grid 자체를 넘쳐 핵심 불변식(scrollHeight<=clientHeight)을
+    깨던 결함(Major)의 재발 방지 케이스.
+
+    발견 경위: 리드가 TC-05(17:57-18:00 블록)의 렌더 높이를 의심해 "blockRect의 캡
+    계산상 ~4px일 텐데 8px 손잡이를 어떻게 잡았느냐"고 물었다. 실측(getComputedStyle)
+    으로 확인한 결과 둘 다 맞았다 — `blockRect`가 계산한 inline `height`는 실제로
+    3.15px(=3분×pxPerMin, 경계 캡이 15분 인플레이션을 완전히 무력화한 값)이었지만,
+    이 블록의 Tailwind 클래스(`p-1.5`=상하 패딩 6px씩 + `border`=1px씩, box-sizing:
+    border-box)가 만드는 최소 렌더 높이(6+6+1+1=14px)가 그보다 커서 브라우저가
+    실제로는 14px로 렌더했다 — `computedHeight` 14px, `offsetHeight` 14px로 재확인.
+
+    TC-05의 손잡이는 실제로 잡힌다(14px 안에 8px 손잡이가 들어간다 — 그 자체는
+    맞는 동작이고 TC-05는 그대로 유효했다). 문제는 다른 데 있었다: `blockRect`의
+    캡은 "이 블록의 top+height가 정확히 range의 바닥(그리드 컨테이너의 실제 바닥)과
+    맞아떨어지게" 만들려는 계산인데, 패딩/보더가 그 계산을 무시하고 박스를 더 키워
+    버려 블록의 실제 바닥 가장자리가 그리드 컨테이너 바닥보다 아래로 삐져나갔다.
+
+    수정 전 실측: 이 블록 하나만 있는 상태에서(뷰포트 1280×900, 가용 09-18) 스크롤
+    컨테이너의 `scrollHeight(640) - clientHeight(629) = 11px` — 이 기능 전체가
+    없애려던 바로 그 "몇 px 때문에 스크롤바가 생기는" 증상이, 여유 제거(§8.3)나
+    맞춤 축척(§8.4)이 아니라 **블록 자신의 CSS 패딩/보더**로부터 재발했었다.
+
+    재현 조건(수정 전): 블록의 실제 길이가 15분 미만이고(`ScheduleForm`이 5분 단위로
+    이런 일정을 만들 수 있다 — `blockRect`의 자기 주석이 이미 지목한 바로 그 경로),
+    그 블록의 시작 시각이 `range.endMinutes`로부터 약 13.3분(=14px÷pxPerMin, 이
+    축척 기준) 이내여야 재현됐다 — 캡이 14px 미만으로 찌그러뜨리는 지점.
+
+    수정: 픽셀을 더 정확히 계산하는 쪽으로는 이 문제를 닫을 수 없다 — 인라인 height로는
+    CSS 최소 렌더 크기(패딩+보더)를 표현할 방법이 없기 때문이다. 그래서 지오메트리가
+    아니라 구조로 막았다 — `CalendarGrid`의 격자 본문(`relative flex-1`)에
+    `overflow-hidden`을 추가해 "무엇이 넘치든 스크롤 영역 자체를 못 늘린다"로 바꿨다.
+    이 클립이 안전한 근거: `visibleRange`가 이 주에 그려지는 모든 구간을 감싸도록
+    창을 넓히므로 범위 밖에 놓이는 "정상" 요소가 원래 없다 — hover 상세 카드·액션
+    메뉴는 포털이라 이 클립에 갇히지 않는다(`PlanBlock.jsx`).
+
+    이 테스트는 이제 **회귀 가드**다 — `test.fail()`을 걷어냈다(수정 확인 시
+    `Expected to fail, but passed`로 뒤집힌 것을 실측했다). 다시 실패하면 이 클립이
+    깨졌거나 우회됐다는 뜻이다.
+  */
+  test('TC-10: 경계에 15분 미만으로 붙은 블록이 있어도 grid를 안 넘친다 (Major 결함 회귀 가드)', async ({
+    page,
+  }) => {
+      await mockPlanBackend(page, {
+        blocks: [
+          {
+            planBlockId: 101,
+            blockType: 'TASK',
+            title: '경계 초단시간 블록',
+            status: 'PLANNED',
+            startAt: (weekStartDate) => `${weekStartDate}T17:57:00`,
+            endAt: (weekStartDate) => `${weekStartDate}T18:00:00`,
+          },
+        ],
+      })
+      await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+      await page.evaluate(() => document.fonts.ready)
+      await page.waitForTimeout(300)
+
+      const dims = await scroller(page).evaluate((el) => ({
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      }))
+      expect(
+        dims.scrollHeight,
+        `경계 블록(17:57-18:00) 존재 시에도 컨테이너가 안 넘쳐야 한다: scrollHeight(${dims.scrollHeight}) vs clientHeight(${dims.clientHeight})`,
+      ).toBeLessThanOrEqual(dims.clientHeight)
+    },
+  )
+
   test('TC-09: 시간 간격 변경이 aria-live 리전으로 스크린리더에 알려진다', async ({ page }) => {
     // HourScaleControl.jsx의 sr-only aria-live="polite" 리전(Thomas Minor 대응,
     // 2026-08-31 2차 수정) — "시간 간격 {percent}%{, 화면에 맞춤}" 텍스트가
