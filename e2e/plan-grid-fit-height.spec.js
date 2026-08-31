@@ -115,7 +115,7 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
   test('TC-01: 핵심 불변식 — 집중 모드, 가용시간만 있을 때 3개 뷰포트 모두 스크롤 없음', async ({ page }) => {
     await mockPlanBackend(page) // 가용 09-18(9h), 블록 없음 — 창을 넓히는 것이 없는 깨끗한 케이스.
     await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
-    await expect(page.getByRole('button', { name: /화면에 맞추기/ })).toBeVisible()
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toBeVisible()
 
     for (const height of [700, 900, 1200]) {
       await page.setViewportSize({ width: 1280, height })
@@ -165,7 +165,7 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
       try {
         await mockPlanBackend(page)
         await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
-        await expect(page.getByRole('button', { name: /화면에 맞추기/ })).toBeVisible()
+        await expect(page.getByRole('button', { name: /세로 축척/ })).toBeVisible()
         await page.evaluate(() => document.fonts.ready)
         // 폰트 스왑이 유발한 재측정이 커밋될 한 프레임.
         await page.waitForTimeout(200)
@@ -227,7 +227,24 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     expect(tickBox.y).toBeGreaterThanOrEqual(scrollerBox.y)
   })
 
-  test('TC-03: 24시간 모드 — 세로 스크롤은 정상, 가로는 오버플로 없음', async ({ page }) => {
+  /*
+    [W6 델타 QA, 2026-09-01] "가로는 오버플로 없음"은 원래 데스크톱 전제였다 —
+    이 케이스가 project 기본 뷰포트(bare `page`)를 썼는데, 지금까지 이 스펙
+    전체가 desktop-chromium 프로젝트로만 돌아 그 전제가 한 번도 깨진 적이
+    없었다. mobile-chromium 프로젝트(375×812)로 처음 돌려 보니 여기서
+    **실패**했다 — `scrollWidth(640) > clientWidth`. 7일 열이 24h 전체를
+    담으려면 640px 안팎이 필요한데 375px 폭에는 원리상 못 들어간다.
+    `div.overflow-x-auto` 클래스 자체가 "이럴 땐 가로로 스크롤해라"는 뜻이라,
+    이건 결함이 아니라 애초에 데스크톱 전용으로 쓰인 단언이 좁은 화면 일반에는
+    안 맞았던 것뿐이다 — 그래서 뷰포트를 명시적으로 고정해 원래 의도(데스크톱
+    가로 무오버플로)만 잠근다. 모바일의 가로 스크롤 자체가 괜찮은 UX인지는
+    별개 질문이고, 아래 TC-03b가 그 값만 실측해 회귀 가드로 남긴다(정상/비정상
+    판정은 리드 몫으로 남겨 둔다).
+  */
+  test('TC-03: 24시간 모드 — 세로 스크롤은 정상, 가로는 오버플로 없음 (데스크톱)', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
     await mockPlanBackend(page)
     await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
     await page.getByRole('button', { name: '24h', exact: true }).click()
@@ -246,18 +263,85 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     expect(vdims.scrollHeight).toBeGreaterThan(vdims.clientHeight)
   })
 
-  test('TC-04: [맞춤] 토글 — 기본 눌림, −로 풀리고 다시 누르면 복귀', async ({ page }) => {
+  test('TC-03b [모바일, 실측만]: 24시간 모드에서 375px 폭은 가로 스크롤이 남는다(원인 기록, 판정 보류)', async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({ viewport: { width: 375, height: 812 } })
+    const page = await context.newPage()
+    try {
+      await mockPlanBackend(page)
+      await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+      await page.getByRole('button', { name: '24h', exact: true }).click()
+      await page.waitForTimeout(300)
+      const outer = page.locator('div.overflow-x-auto')
+      const hdims = await outer.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+      // 판정 없음 — 이 값 자체를 남겨 리드가 "모바일 24h는 가로 스크롤로 둘지,
+      // 열 폭을 줄일지"를 결정할 근거로 쓰게 한다. overflow-x-auto가 있으므로
+      // 스크롤 자체는 최소한 깨지지 않고 동작한다(가로 스크롤바가 실제로 뜬다)는
+      // 것만 확인한다.
+      expect(hdims.scrollWidth, `375px 폭: scrollWidth(${hdims.scrollWidth}) vs clientWidth(${hdims.clientWidth})`).toBeGreaterThan(
+        hdims.clientWidth,
+      )
+    } finally {
+      await context.close()
+    }
+  })
+
+  /*
+    2026-08-31 (3차 요구: "맞춤이라는 단어를 빼", "100 = 맞춤 사이즈면 안 돼?")
+    — 가운데 버튼은 이제 낱말 없이 **%만** 보여 주고, 그 %는 한 화면에 들어차는
+    축척을 100%로 놓고 잰 값이다. 그래서 "누르면 100%로"와 "화면 크기로 복귀"가
+    같은 동작이 됐다(예전에 필요했던 숨은 갈래가 사라졌다).
+
+    [W6 델타 QA 재조정, 2026-09-01] — 이 테스트를 처음 돌렸을 때 `aria-pressed`
+    단언이 초기 로드부터 실패했다. 원인은 결함이 아니라 **QA 도중에 실시간으로
+    들어온 코드 변경**이었다 — `HourScaleControl.jsx` 헤더의 새 절("100%와
+    '화면 추종'은 같은 말이 아니다", 2026-09-01 리뷰 지적)이 `aria-pressed`를
+    통째로 없앴다: 수동 단계에 머문 채 창 크기가 우연히 지금 단계와 같은 기준을
+    만들면 표시는 100%인데 모드는 여전히 수동이라, "100%=눌림"이라는
+    `aria-pressed`가 그 상태에서 스스로 거짓말을 하기 때문이다(파일 헤더 참고).
+    이제 상태는 **버튼의 aria-label 문구**(모드 `isFit`을 그대로 따름)로만
+    전해진다 — `title`도 같은 정보를 담아 함께 확인한다.
+  */
+  test('TC-04: 축척 버튼 — 기본이 100%, −로 100%를 벗어나고, 누르면 100%로 복귀', async ({
+    page,
+  }) => {
     await mockPlanBackend(page)
     await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
 
-    const fitBtn = page.getByRole('button', { name: /화면에 맞추기/ })
-    await expect(fitBtn).toHaveAttribute('aria-pressed', 'true')
+    const scaleBtn = page.getByRole('button', { name: /세로 축척/ })
 
+    // 기본은 화면에 들어차는 축척이고, 그 기준이 100%다. "맞춤"이라는 낱말은
+    // 화면에 없어야 한다(오너 요구). isFit=true는 aria-label에 "눌러서"가
+    // 없는 것으로 드러난다(HourScaleControl.jsx의 두 분기 문구 참고).
+    await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
+    await expect(scaleBtn).toHaveAttribute('title', '한 화면에 들어차는 크기')
+    await expect(scaleBtn).toHaveText('100%')
+    await expect(scaleBtn).not.toContainText('맞춤')
+
+    // −를 누르면 수동 단계로 빠지고 100%를 벗어난다.
     await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
-    await expect(fitBtn).toHaveAttribute('aria-pressed', 'false')
+    await expect(scaleBtn).toHaveAttribute('aria-label', /눌러서 100%/)
+    await expect(scaleBtn).toHaveAttribute('title', '100%로 되돌리기')
+    await expect(scaleBtn).not.toHaveText('100%')
 
-    await fitBtn.click()
-    await expect(fitBtn).toHaveAttribute('aria-pressed', 'true')
+    // %를 누르면 100%(= 한 화면에 들어차는 크기)로 되돌아온다.
+    await scaleBtn.click()
+    await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
+    await expect(scaleBtn).toHaveText('100%')
+
+    /*
+      +/− 로도 100%에 다시 설 수 있어야 한다(2026-08-31 요구). 맞춤 축척이
+      단계 사다리의 한 칸으로 끼어 있으므로, −로 한 칸 내려갔다가 +로 한 칸
+      올라오면 정확히 100%다. 예전에는 사다리가 고정 5칸뿐이라 이 왕복이
+      100%를 지나치고 다른 값에 서서, 100%로 돌아갈 길이 가운데 버튼밖에
+      없었다.
+    */
+    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
+    await expect(scaleBtn).not.toHaveText('100%')
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await expect(scaleBtn).toHaveText('100%')
+    await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
   })
 
   test('TC-06: 배치된 블록 클릭 시 그쪽으로 스크롤 (24h 모드, 화면 밖 블록)', async ({ page }) => {
@@ -509,7 +593,7 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     // sr-only는 clip으로 시각적으로만 숨긴다 — DOM엔 실재하고 Playwright 기준으로도
     // "visible"(크기 0이 아님, display:none 아님)이다. 여기선 존재·attach 여부만 확인한다.
     await expect(liveRegion).toBeAttached()
-    await expect(liveRegion).toContainText('화면에 맞춤') // 기본이 맞춤이므로 접미사가 붙어야 한다.
+    await expect(liveRegion).toContainText('100%') // 기본은 화면에 들어차는 축척 = 100%.
 
     const beforeText = await liveRegion.textContent()
     await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
@@ -517,6 +601,341 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     const afterText = await liveRegion.textContent()
 
     expect(afterText).not.toBe(beforeText) // 값이 실제로 갱신됨(리전이 죽어 있지 않음).
-    expect(afterText).not.toContain('화면에 맞춤') // 수동 단계로 빠졌으니 접미사가 없어야 한다.
+    expect(afterText).not.toContain('100%') // 수동 단계로 빠졌으니 더는 100%가 아니다.
   })
+
+  /*
+    TC-11 [오너 보고, 2026-08-31] — "맞춤 누르면 스크롤 왜 생기지".
+
+    지금까지의 모든 케이스는 **달력 컨테이너 안쪽** 스크롤(scrollHeight vs
+    clientHeight)만 쟀다. 그런데 사용자가 보는 스크롤바는 그것만이 아니다 —
+    달력이 뷰포트 바닥까지 꽉 차면 그 아래 남은 페이지 여백이 문서를 밀어내
+    **페이지(문서) 스크롤바**가 생긴다. 컨테이너는 안 넘치는데 창은 스크롤되는,
+    지금까지 아무도 안 본 사각지대다.
+
+    산수: `gridMaxHeight = innerHeight - gridTop - GRID_BOTTOM_GAP`인데, 격자
+    아래에는 섹션의 `p-4`(아래 16px)와 `<main>`의 `md:pb-10`(40px)가 더 있다.
+    GAP이 그보다 작으면 그 차이만큼 문서가 뷰포트를 넘는다.
+
+    이 케이스는 **맞춤 상태**(기본값)에서 문서 자체가 세로로 안 넘치는지 잰다.
+    2px 여유는 서브픽셀 반올림 몫이다.
+  */
+  test('TC-11: 맞춤 상태에서 페이지(문서) 세로 스크롤이 생기지 않는다', async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const page = await context.newPage()
+    try {
+      await mockPlanBackend(page)
+      await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+      await expect(page.getByRole('button', { name: /세로 축척/ })).toBeVisible()
+      await page.evaluate(() => document.fonts.ready)
+      await page.waitForTimeout(200)
+
+      const doc = await page.evaluate(() => ({
+        scrollHeight: document.documentElement.scrollHeight,
+        innerHeight: window.innerHeight,
+      }))
+      expect(
+        doc.scrollHeight,
+        `문서가 뷰포트를 넘으면 페이지 스크롤바가 생긴다: scrollHeight(${doc.scrollHeight}) vs innerHeight(${doc.innerHeight})`,
+      ).toBeLessThanOrEqual(doc.innerHeight + 2)
+    } finally {
+      await context.close()
+    }
+  })
+
+  /*
+    TC-11b/c [W6 델타 QA, 2026-09-01] — TC-11은 1280×900 한 뷰포트에서만 쟀다.
+    이 짝은 그 결과가 얼마나 일반적인지, 그리고 `Math.max(240, …)` 바닥에
+    걸리는 쪽에서는 무엇이 맞는 동작인지를 실측으로 정한다.
+
+    실측(사전 탐침, 뷰포트 폭 1280 고정, 문서 scrollHeight vs innerHeight):
+      900px → 900/900(스크롤 없음)   700px → 700/700   650px → 650/650
+      600px → 600/600(컨테이너 내부에서만 18px 오버플로 시작)
+      550px → 550/550(내부 오버플로 68px, 문서는 아직 안 넘음)
+      520px 이하 → gridMaxHeight가 240px 바닥에 닿아 **고정**되고, 그 아래로는
+        창을 아무리 줄여도(400~520px 전부 동일) 컨테이너 내부 콘텐츠가
+        314px로 그대로다 — 문서 scrollHeight도 539로 고정. 즉 바닥에 닿는
+        순간부터는 innerHeight만 줄어들고 문서 높이는 안 줄어드므로 문서
+        스크롤이 나타난다. 코드 자신의 주석("그런 창에서는 스크롤이 생기는
+        게 맞다")과 일치하는, **의도된** 동작임을 이 실측으로 확인했다.
+
+      바닥이 걸리는 정확한 경계는 이 스펙의 다른 실측(dayHeaderPx, 조상
+      패딩 합)에 따라 흔들릴 수 있으므로 여기서 하드코딩하지 않는다 — 대신
+      "일반적으로 안전한 범위"(650)와 "확실히 바닥 아래"(500) 두 지점만
+      고정해 재현 가능하게 잠근다.
+  */
+  test('TC-11b: 중간 정도로 짧은 창(650px)에서도 페이지 스크롤이 안 생긴다', async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 650 } })
+    const page = await context.newPage()
+    try {
+      await mockPlanBackend(page)
+      await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+      await expect(page.getByRole('button', { name: /세로 축척/ })).toBeVisible()
+      await page.evaluate(() => document.fonts.ready)
+      await page.waitForTimeout(200)
+      const doc = await page.evaluate(() => ({
+        scrollHeight: document.documentElement.scrollHeight,
+        innerHeight: window.innerHeight,
+      }))
+      expect(
+        doc.scrollHeight,
+        `650px: scrollHeight(${doc.scrollHeight}) vs innerHeight(${doc.innerHeight})`,
+      ).toBeLessThanOrEqual(doc.innerHeight + 2)
+    } finally {
+      await context.close()
+    }
+  })
+
+  test('TC-11c: FIT_HOUR_PX_MIN/240px 바닥에 닿을 만큼 짧은 창(500px)에서는 페이지 스크롤이 남는 것이 설계대로다', async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 500 } })
+    const page = await context.newPage()
+    try {
+      await mockPlanBackend(page)
+      await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+      await expect(page.getByRole('button', { name: /세로 축척/ })).toBeVisible()
+      await page.evaluate(() => document.fonts.ready)
+      await page.waitForTimeout(200)
+      const doc = await page.evaluate(() => ({
+        scrollHeight: document.documentElement.scrollHeight,
+        innerHeight: window.innerHeight,
+      }))
+      // TC-11/TC-11b와 반대 방향 단언 — 바닥에 닿으면 스크롤이 생기는 게 맞다.
+      // 다만 값이 무한정 자라진 않는지(문서가 폭주하지 않는지)를 상한으로 확인한다.
+      expect(doc.scrollHeight, '바닥에서는 문서가 뷰포트를 넘는 것이 정상').toBeGreaterThan(doc.innerHeight)
+      expect(
+        doc.scrollHeight - doc.innerHeight,
+        '남는 스크롤이 폭주하지 않고 240px 바닥 근처(수십~백여 px)에 머문다',
+      ).toBeLessThan(150)
+
+      const dims = await scroller(page).evaluate((el) => ({
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      }))
+      // 격자 상자 자체는 240px 바닥에 닿아 있어야 한다(WeeklyPage의 Math.max(240,…)).
+      expect(dims.clientHeight, '격자 상자가 240px 바닥에 닿아 있다').toBeLessThanOrEqual(242)
+    } finally {
+      await context.close()
+    }
+  })
+
+  /*
+    TC-04b [W6 델타 QA, 2026-09-01] — TC-04는 −→+ 한 번씩만 밟는다. 사다리
+    양 끝(가장 좁게/가장 넓게)까지 걸어갔다 돌아와도 100%에 정확히 서는지,
+    비활성화가 정확한 지점에서 걸리는지를 왕복 전체로 확인한다.
+
+    실측(사전 탐침, 기본 1280×800 뷰포트, fitHourPx≈48px/h): 사다리는
+    HOUR_PX_STEPS(30·40·50·65·80) ∪ {48} = 30·40·48·50·65·80 여섯 칸이었다.
+    100%→83%→63%(비활성화, =30) 로 두 번만에 바닥, 다시 83%→100%(맞춤 재진입)→
+    104%→135%→167%(비활성화, =80)로 꼭대기. 매 %가 `round(px/48*100)`과 정확히
+    일치했다 — 사다리 계산 자체는 결함 없음(발견 아님, 회귀 가드로 편입).
+
+    isFit 확인은 `aria-pressed`가 아니라 aria-label 문구로 한다(TC-04 헤더의
+    2026-09-01 재조정 사유와 동일 — QA 도중 실시간으로 들어온 코드 변경).
+    +/− 사다리 걷기로 정확히 맞춤 칸(rung)에 서는 경우는 `useHourScale.goTo`가
+    `px === fitHourPx`를 직접 비교해 모드를 'fit'으로 세우므로(우연한 텍스트
+    일치가 아니라 실제로 그 칸을 밟은 것), 이 왕복에서 pctText가 '100%'일
+    때는 언제나 isFit=true여야 한다 — 그 반대(표시는 100%인데 모드는 수동)는
+    TC-04b가 겨냥하는 경로가 아니라, 창 리사이즈로만 만들어지는 별개의
+    경우(파일 헤더 "100%와 화면 추종은 같은 말이 아니다" 참고, TC-12가 그
+    갈래를 다룬다).
+  */
+  test('TC-04b: 사다리 양 끝까지 왕복해도 100%에 정확히 다시 서고, 양쪽 비활성화가 정확한 지점에서 걸린다', async ({
+    page,
+  }) => {
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+
+    const scaleBtn = page.getByRole('button', { name: /세로 축척/ })
+    const minus = page.getByRole('button', { name: /시간 간격 좁게/ })
+    const plus = page.getByRole('button', { name: /시간 간격 넓게/ })
+
+    await expect(scaleBtn).toHaveText('100%')
+    await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
+
+    // 바닥까지 걷는다 — 매 걸음 % 가 단조 감소해야 하고, 20걸음 안에 반드시
+    // 비활성화(무한 루프 방지 상한)에 닿아야 한다.
+    let prevPct = 100
+    let reachedMin = false
+    for (let i = 0; i < 20; i += 1) {
+      if (await minus.isDisabled()) {
+        reachedMin = true
+        break
+      }
+      await minus.click()
+      await page.waitForTimeout(60)
+      const pct = Number((await scaleBtn.textContent()).replace('%', ''))
+      expect(pct, `− 누를 때마다 %가 단조 감소해야 한다(${prevPct} → ${pct})`).toBeLessThan(prevPct)
+      prevPct = pct
+    }
+    expect(reachedMin, '20걸음 안에 좁은 쪽 끝에서 비활성화돼야 한다').toBe(true)
+    await expect(scaleBtn).not.toHaveText('100%')
+    await expect(plus).not.toBeDisabled() // 반대쪽은 여전히 눌려야 한다.
+
+    // 꼭대기까지 걷는다 — % 가 단조 증가해야 하고, 중간에 정확히 100%를
+    // 한 번은 지나야 한다(맞춤 값이 사다리의 한 칸이므로).
+    let sawFitAgain = false
+    let reachedMax = false
+    for (let i = 0; i < 20; i += 1) {
+      if (await plus.isDisabled()) {
+        reachedMax = true
+        break
+      }
+      await plus.click()
+      await page.waitForTimeout(60)
+      const pctText = await scaleBtn.textContent()
+      const pct = Number(pctText.replace('%', ''))
+      expect(pct, `+ 누를 때마다 %가 단조 증가해야 한다(${prevPct} → ${pct})`).toBeGreaterThan(prevPct)
+      prevPct = pct
+      if (pctText === '100%') {
+        sawFitAgain = true
+        await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
+      }
+    }
+    expect(reachedMax, '20걸음 안에 넓은 쪽 끝에서 비활성화돼야 한다').toBe(true)
+    expect(sawFitAgain, '왕복 중 정확히 100%(모드도 isFit)를 다시 지나야 한다').toBe(true)
+    await expect(minus).not.toBeDisabled() // 반대쪽은 여전히 눌려야 한다.
+
+    // 넓은 끝에서 창을 안 넘긴다는 것도 같이 확인 — TC-01b와 반대 방향(맞춤이
+    // 아니라 수동 최대이므로 스크롤이 남는 것 자체는 정상, 여기서는 크래시나
+    // 무한정 값이 없는지만 본다).
+    const dims = await scroller(page).evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }))
+    expect(Number.isFinite(dims.scrollHeight) && dims.scrollHeight > 0, '값이 유한하고 정상 범위').toBe(true)
+  })
+
+  /*
+    TC-12 [W6 델타 QA, 2026-09-01] — 수동 단계에 머문 채 창 높이를 바꾸면
+    기준(fitHourPx)이 바뀌어 %만 갱신되고 실제 축척(hourPx)은 그대로여야
+    한다(HourScaleControl 헤더 주석: "그때는 보이는 결과가 그대로라 무해").
+
+    실측(사전 탐침): 900px에서 최대 수동 단계(80px/h, 136%)로 고정한 뒤
+    500px로 줄이면 %만 286%로 바뀌고 컨테이너는 782/240(내부 스크롤, 바닥
+    240px)로 안전하게 수렴했다. 다시 900px로 되돌리면 %가 136%로, 컨테이너가
+    782/596으로 **완전히 복구**됐다 — 잔여 손상 없음을 확인했다.
+  */
+  test('TC-12: 수동 단계에서 창을 줄였다 늘려도 %만 따라가고 축척은 그대로, 원복 후 잔여 손상 없음', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+
+    const scaleBtn = page.getByRole('button', { name: /세로 축척/ })
+    const plus = page.getByRole('button', { name: /시간 간격 넓게/ })
+    for (let i = 0; i < 6; i += 1) {
+      if (await plus.isDisabled()) break
+      await plus.click()
+      await page.waitForTimeout(60)
+    }
+    await expect(plus).toBeDisabled() // 이제 수동 최대 단계(80px/h)에 있다.
+    const pctBefore = await scaleBtn.textContent()
+    const dimsBefore = await scroller(page).evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }))
+
+    await page.setViewportSize({ width: 1280, height: 500 })
+    await page.waitForTimeout(300)
+    const pctAfterShrink = await scaleBtn.textContent()
+    expect(pctAfterShrink, '기준이 줄었으니 %는 커져야 한다').not.toBe(pctBefore)
+    const dimsShrunk = await scroller(page).evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }))
+    // 축척(hourPx) 자체는 안 바뀌므로 콘텐츠 실제 높이(scrollHeight)는 그대로여야 한다.
+    expect(dimsShrunk.scrollHeight, '수동 단계는 창 크기로 콘텐츠 높이를 안 바꾼다').toBe(dimsBefore.scrollHeight)
+
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.waitForTimeout(300)
+    const pctAfterRegrow = await scaleBtn.textContent()
+    expect(pctAfterRegrow, '원래 창으로 돌아오면 %도 원래 값으로 돌아와야 한다').toBe(pctBefore)
+    const dimsRegrown = await scroller(page).evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }))
+    expect(dimsRegrown, '원래 창으로 돌아오면 컨테이너 치수도 완전히 복구돼야 한다(잔여 손상 없음)').toEqual(
+      dimsBefore,
+    )
+  })
+
+  /*
+    TC-13 [W6 델타 QA, 2026-09-01, BLOCKER 후보 — 모바일 최초 실측] — 리드
+    보고: "지금까지 모바일은 한 번도 실측 안 했다." 처음 재 본 결과, 요약 줄
+    가운데 정렬 시간 텍스트("n시간 / 45시간")와 오른쪽에 절대 위치로 앉는
+    세로 축척 컨트롤(`div[role=group][aria-label="시간 간격"]`, 너비 128px:
+    32+32+56px 버튼 셋 + gap)이 겹친다.
+
+    실측(SummaryBar.jsx: 가운데 텍스트는 `relative flex justify-center` 안의
+    일반 흐름 요소, 컨트롤은 `absolute right-0` — 가운데 정렬이 오른쪽 절대
+    요소의 폭을 고려하지 않는다):
+      너비 320px → 겹침 55.6px   360px → 75.6px   375px → 79.7px(텍스트
+      전체 폭과 같음 = 텍스트가 통째로 컨트롤 뒤/아래 깔림)   390~414px →
+      79.7px(그대로)   480px → 72.1px   600px → 12.1px   768px(데스크톱
+      경계) → 0px(안 겹침).
+    스크린샷(375×812, 375×667)에서도 "0%" 버튼 글자와 "45시간" 글자가
+    한 자리에 겹쳐 보이는 것을 육안으로도 확인했다.
+
+    이 구조(중앙 정렬 vs 절대 우측 배치가 서로의 폭을 모른다)는 이번 4개
+    커밋이 만든 게 아니라 SummaryBar.jsx 자체의 레이아웃이지만, **모바일은
+    이번이 첫 실측**이라 W6 델타 리뷰에서 처음 드러난 것으로 보고한다.
+    "맞춤" 낱말 제거로 버튼 텍스트가 짧아진 것은 겹침을 줄이는 방향(전에는
+    더 넓었을 것)이었을 가능성이 높지만, 완전히 없애지는 못했다 — src를
+    못 고치므로 정확한 이전 폭은 비교하지 않았다.
+
+    수정됨(2026-09-01) — SummaryBar가 md 미만에서는 absolute를 걷고 진짜 흐름으로
+    배치한다(justify-between + flex-wrap). 그래서 이 테스트는 `test.fail()` 잠금을
+    걷어내고 **회귀 가드**가 됐다.
+
+    이 케이스를 확정하는 데 테스트 쪽 결함이 둘 나왔고 함께 고쳤다:
+    ① 셀렉터가 `p.text-body.text-center`라 클래스에 묶여 있었다 — 정렬을 md 이상으로
+       미루는 바로 그 수정이 들어오자 요소를 못 찾고 타임아웃났다. 고치려는 대상을
+       건드리면 깨지는 셀렉터는 그 대상을 지킬 수 없다. 내용 기반으로 바꿨다.
+    ② 겹침을 X축만으로 쟀다 — 컨트롤이 아랫줄로 내려가 안 겹치는 상태에서도 둘 다
+       왼쪽 끝에서 시작하니 X는 겹쳐 보여 "여전히 결함"으로 오판했다. 사각형 교차
+       면적으로 바꿨다.
+  */
+  test(
+    'TC-13 [BLOCKER 후보]: 모바일 폭(375px)에서 요약 시간 텍스트와 세로 축척 컨트롤이 겹치지 않아야 한다',
+    async ({ browser }) => {
+      const context = await browser.newContext({ viewport: { width: 375, height: 812 } })
+      const page = await context.newPage()
+      try {
+        await mockPlanBackend(page)
+        await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+        await page.evaluate(() => document.fonts.ready)
+        await page.waitForTimeout(200)
+
+        // 클래스가 아니라 **내용**으로 잡는다. 예전엔 `p.text-body.text-center`를
+        // 썼는데, 모바일에서 가운데 정렬을 md 이상으로 미루는 수정이 들어오자
+        // 그 클래스가 사라져 요소를 영영 못 찾고 타임아웃났다 — 레이아웃을 고치는
+        // 순간 깨지는 셀렉터는 이 케이스가 지켜야 할 대상 자체를 놓친다.
+        const timeText = page.locator('p').filter({ hasText: /\/\s*\d+시간/ }).first()
+        const scaleGroup = page.locator('div[role="group"][aria-label="시간 간격"]')
+        const tb = await timeText.boundingBox()
+        const sb = await scaleGroup.boundingBox()
+        /*
+          겹침은 **두 축이 동시에** 겹칠 때만 겹침이다. 처음엔 X축만 쟀는데, 좁은
+          폭에서 컨트롤이 아랫줄로 내려간(= 안 겹치는) 상태에서도 둘 다 컨테이너
+          왼쪽 끝에서 시작하니 X는 그대로 겹쳐 보여 오판했다. 사각형 교차 면적으로
+          판정한다.
+        */
+        const overlapX = Math.max(0, Math.min(tb.x + tb.width, sb.x + sb.width) - Math.max(tb.x, sb.x))
+        const overlapY = Math.max(0, Math.min(tb.y + tb.height, sb.y + sb.height) - Math.max(tb.y, sb.y))
+        expect(
+          Math.round(overlapX * overlapY),
+          `요약 시간 텍스트(x:${tb.x}~${tb.x + tb.width}, y:${tb.y}~${tb.y + tb.height})와 ` +
+            `축척 컨트롤(x:${sb.x}~${sb.x + sb.width}, y:${sb.y}~${sb.y + sb.height})이 겹치면 안 된다 ` +
+            `— 겹침 ${Math.round(overlapX)}×${Math.round(overlapY)}px`,
+        ).toBe(0)
+      } finally {
+        await context.close()
+      }
+    },
+  )
 })

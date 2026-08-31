@@ -221,10 +221,37 @@ function WeeklyPage() {
       // viewport) can never hand the panel a collapsed or negative max-height.
       setPanelBounds({ top, height: Math.max(bottom - top, 240) })
 
-      const GRID_BOTTOM_GAP = window.innerWidth >= 768 ? 24 : 112
+      /*
+        달력 아래에 남는 여백은 **재서** 뺀다. 예전에는 이 자리가 상수였는데
+        (데스크톱 24 / 모바일 112) 그 값이 실제 레이아웃과 안 맞았다: 격자
+        아래에는 섹션의 아래 패딩과 `<main>`의 `pb-24 md:pb-10`가 더 있어서,
+        달력을 `뷰포트 − 24`까지 늘리면 그 아래 여백이 문서를 밀어내 **페이지
+        스크롤바**가 생겼다(오너 보고 "맞춤 누르면 스크롤 왜 생기지" — 실측
+        문서 높이 928 vs 뷰포트 900). 달력 상자 안쪽은 정확히 맞아떨어지는데
+        창이 스크롤되는, 컨테이너만 재서는 절대 안 보이는 실패였다(E2E TC-11).
+
+        그래서 격자에서 body까지 조상들의 아래 패딩·마진을 합산한다. 이 값들은
+        달력 높이와 무관하므로(패딩이 내용 높이를 따라가지 않는다) 되먹임이
+        없고, 나중에 레이아웃 여백이 바뀌어도 상수를 같이 고칠 필요가 없다.
+        모바일의 BottomTabBar 몫도 `<main>`의 `pb-24`가 이미 그 목적으로 들고
+        있는 값이라 여기서 자연히 포함된다.
+      */
+      let below = 0
+      for (let node = gridWrapperRef.current; node && node !== document.body; node = node.parentElement) {
+        const cs = window.getComputedStyle(node)
+        below +=
+          (parseFloat(cs.paddingBottom) || 0) +
+          (parseFloat(cs.marginBottom) || 0) +
+          // 테두리도 센다. 지금 이 경로에서 걸리는 건 섹션 카드의 1px 하나뿐이라
+          // BREATHING이 흡수하지만, 빼먹고 두면 나중에 여유를 줄이거나 테두리 있는
+          // 조상이 하나 더 생겼을 때 조용히 되살아난다(리뷰 지적, 2026-09-01).
+          (parseFloat(cs.borderBottomWidth) || 0)
+      }
+      // 서브픽셀 반올림으로 1~2px이 넘쳐 스크롤바만 생기는 일이 없도록 한 숨.
+      const BREATHING = 8
       // 240px 바닥: 세로가 극단적으로 짧은 창(또는 측정 레이스)에서 달력이
       // 한 줄로 찌부러지지 않게 한다. 그런 창에서는 스크롤이 생기는 게 맞다.
-      setGridMaxHeight(Math.max(240, Math.round(window.innerHeight - top - GRID_BOTTOM_GAP)))
+      setGridMaxHeight(Math.max(240, Math.round(window.innerHeight - top - below - BREATHING)))
     }
     measure()
     // Resize is the only thing that can move these landmarks without this
@@ -1312,6 +1339,7 @@ function WeeklyPage() {
           onModeChange={setMode}
           isFit={hourScale.isFit}
           hourPx={hourScale.hourPx}
+          fitHourPx={fitPxPerHour}
           onFit={hourScale.setFit}
           onZoomIn={hourScale.zoomIn}
           onZoomOut={hourScale.zoomOut}
