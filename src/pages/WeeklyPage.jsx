@@ -648,13 +648,16 @@ function WeeklyPage() {
     else toast({ tone: 'info', message: '이번 주에 배치할 빈 시간이 부족합니다' })
   }
 
-  // Right-click an empty slot → open a small picker of unplaced tasks (PLAN-07).
+  // Right-click an empty slot → open the place-here menu (PLAN-07·PLAN-08).
+  //
+  // 🔴 미배치 태스크 수로 이 메뉴를 막지 않는다. 여기엔 태스크 배치만 있었고
+  //    그때는 "미배치 0건 → 열 이유 없음"이 맞았지만(ST-F1-03), 같은 날
+  //    ST-F1-04가 이 메뉴 안에 「+ 새 일정 만들기」를 넣으면서 전제가 깨졌다.
+  //    일정 생성은 미배치 태스크와 무관한데 openScheduleCreate 호출부가 이
+  //    메뉴 하나뿐이라, 태스크를 다 배치해 둔 사용자는 일정을 아예 만들 수
+  //    없었다 — 계획을 잘 세워 둘수록 더 확실히 잠겼다. 비어 있는 사유는
+  //    메뉴를 닫는 대신 목록 자리에 적는다(아래).
   const handleEmptySlot = (point, slot) => {
-    const tasks = unplacedQuery.data ?? []
-    if (tasks.length === 0) {
-      toast({ tone: 'info', message: '배치할 미배치 태스크가 없습니다' })
-      return
-    }
     setSlotMenu({ point, slot })
   }
 
@@ -1550,7 +1553,7 @@ function WeeklyPage() {
             <div className="fixed inset-0 z-40" onPointerDown={() => setSlotMenu(null)} aria-hidden="true" />
             <div
               role="menu"
-              aria-label="여기에 배치할 태스크 선택"
+              aria-label="여기에 배치"
               // Same cursor-flip anchoring as BlockActionMenu — a fixed clamp
               // assumed a max popover size and clipped once the task list grew.
               style={getPopoverAnchorStyle(slotMenu.point)}
@@ -1566,22 +1569,37 @@ function WeeklyPage() {
                 + 새 일정 만들기
               </button>
               <div className="h-px bg-border" />
-              <ul>
-                {(unplacedQuery.data ?? []).map((task) => (
-                  <li key={task.taskId}>
-                    <button
-                      type="button"
-                      onClick={() => placeTaskAt(task, slotMenu.slot)}
-                      className="flex w-full flex-col items-start px-3 py-2 text-left transition-colors hover:bg-surface-sunken focus-visible:bg-surface-sunken focus-visible:outline-none"
-                    >
-                      <span className="text-label font-medium text-text line-clamp-1">{task.title}</span>
-                      <span className="text-caption text-text-muted">
-                        예상 {Math.round((task.estimatedMinutes ?? 60))}분
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              {/* 목록이 비어도 메뉴는 닫지 않는다 — 위의 「새 일정 만들기」가
+                  미배치 태스크와 무관하기 때문. 대신 왜 비었는지를 여기 적는다.
+                  조회 실패와 진짜 0건은 서로 다른 사유라 문구를 가른다(둘을
+                  같은 토스트로 뭉개던 것이 원인 진단을 막고 있었다). 문구는
+                  UnplacedPanel 과 같은 것을 쓴다. */}
+              {(unplacedQuery.data ?? []).length > 0 ? (
+                <ul>
+                  {(unplacedQuery.data ?? []).map((task) => (
+                    <li key={task.taskId}>
+                      <button
+                        type="button"
+                        onClick={() => placeTaskAt(task, slotMenu.slot)}
+                        className="flex w-full flex-col items-start px-3 py-2 text-left transition-colors hover:bg-surface-sunken focus-visible:bg-surface-sunken focus-visible:outline-none"
+                      >
+                        <span className="text-label font-medium text-text line-clamp-1">{task.title}</span>
+                        <span className="text-caption text-text-muted">
+                          예상 {Math.round((task.estimatedMinutes ?? 60))}분
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="px-3 py-2 text-caption text-text-muted">
+                  {unplacedQuery.isError
+                    ? '미배치 목록을 불러오지 못했습니다'
+                    : unplacedQuery.isLoading
+                      ? '불러오는 중…'
+                      : '미배치 태스크가 없습니다'}
+                </p>
+              )}
             </div>
           </>,
           document.body,
