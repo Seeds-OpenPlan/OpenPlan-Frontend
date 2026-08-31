@@ -1334,6 +1334,7 @@ function WeeklyPage() {
           isFit={hourScale.isFit}
           hourPx={hourScale.hourPx}
           onFit={hourScale.setFit}
+          onReset={hourScale.reset}
           onZoomIn={hourScale.zoomIn}
           onZoomOut={hourScale.zoomOut}
           canZoomIn={hourScale.canZoomIn}

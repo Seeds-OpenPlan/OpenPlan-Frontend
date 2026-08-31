@@ -48,6 +48,7 @@ export function SummaryBar({
   isFit,
   hourPx,
   onFit,
+  onReset,
   onZoomIn,
   onZoomOut,
   canZoomIn,
@@ -74,6 +75,7 @@ export function SummaryBar({
             isFit={isFit}
             hourPx={hourPx}
             onFit={onFit}
+            onReset={onReset}
             onZoomIn={onZoomIn}
             onZoomOut={onZoomOut}
             canZoomIn={canZoomIn}

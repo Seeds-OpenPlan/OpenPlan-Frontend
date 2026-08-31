@@ -115,7 +115,7 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
   test('TC-01: 핵심 불변식 — 집중 모드, 가용시간만 있을 때 3개 뷰포트 모두 스크롤 없음', async ({ page }) => {
     await mockPlanBackend(page) // 가용 09-18(9h), 블록 없음 — 창을 넓히는 것이 없는 깨끗한 케이스.
     await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
-    await expect(page.getByRole('button', { name: /화면에 맞추기/ })).toBeVisible()
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toBeVisible()
 
     for (const height of [700, 900, 1200]) {
       await page.setViewportSize({ width: 1280, height })
@@ -165,7 +165,7 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
       try {
         await mockPlanBackend(page)
         await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
-        await expect(page.getByRole('button', { name: /화면에 맞추기/ })).toBeVisible()
+        await expect(page.getByRole('button', { name: /세로 축척/ })).toBeVisible()
         await page.evaluate(() => document.fonts.ready)
         // 폰트 스왑이 유발한 재측정이 커밋될 한 프레임.
         await page.waitForTimeout(200)
@@ -246,18 +246,37 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     expect(vdims.scrollHeight).toBeGreaterThan(vdims.clientHeight)
   })
 
-  test('TC-04: [맞춤] 토글 — 기본 눌림, −로 풀리고 다시 누르면 복귀', async ({ page }) => {
+  /*
+    2026-08-31 요구로 가운데 버튼의 역할이 늘었다 — 이제 **지금 몇 %인지를 늘
+    보여 주고**, 누르면 100%로 되돌린다(이미 100%면 맞춤으로 복귀). 그래서
+    이 케이스도 "토글"이 아니라 그 세 갈래를 전부 밟는다.
+  */
+  test('TC-04: 축척 버튼 — %를 표시하고, 눌러서 100%로, 100%에서 다시 누르면 맞춤 복귀', async ({
+    page,
+  }) => {
     await mockPlanBackend(page)
     await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
 
-    const fitBtn = page.getByRole('button', { name: /화면에 맞추기/ })
-    await expect(fitBtn).toHaveAttribute('aria-pressed', 'true')
+    const scaleBtn = page.getByRole('button', { name: /세로 축척/ })
 
+    // 기본은 맞춤이고, 라벨에 "맞춤"과 %가 함께 보인다.
+    await expect(scaleBtn).toHaveAttribute('aria-pressed', 'true')
+    await expect(scaleBtn).toContainText('맞춤')
+    await expect(scaleBtn).toContainText('%')
+
+    // 누르면 100%로 되돌아간다(맞춤 해제 + 라벨이 정확히 100%).
+    await scaleBtn.click()
+    await expect(scaleBtn).toHaveAttribute('aria-pressed', 'false')
+    await expect(scaleBtn).toHaveText('100%')
+
+    // 100%에서 한 번 더 누르면 맞춤으로 복귀한다 — 이 갈래가 없으면 한 번
+    // 누른 뒤 맞춤으로 돌아올 길이 화면에서 사라진다.
+    await scaleBtn.click()
+    await expect(scaleBtn).toHaveAttribute('aria-pressed', 'true')
+
+    // −로도 맞춤이 풀린다(기존 동작 유지).
     await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
-    await expect(fitBtn).toHaveAttribute('aria-pressed', 'false')
-
-    await fitBtn.click()
-    await expect(fitBtn).toHaveAttribute('aria-pressed', 'true')
+    await expect(scaleBtn).toHaveAttribute('aria-pressed', 'false')
   })
 
   test('TC-06: 배치된 블록 클릭 시 그쪽으로 스크롤 (24h 모드, 화면 밖 블록)', async ({ page }) => {
@@ -542,7 +561,7 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     try {
       await mockPlanBackend(page)
       await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
-      await expect(page.getByRole('button', { name: /화면에 맞추기/ })).toBeVisible()
+      await expect(page.getByRole('button', { name: /세로 축척/ })).toBeVisible()
       await page.evaluate(() => document.fonts.ready)
       await page.waitForTimeout(200)
 
