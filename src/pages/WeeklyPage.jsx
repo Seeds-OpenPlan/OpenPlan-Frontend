@@ -1333,8 +1333,8 @@ function WeeklyPage() {
           onModeChange={setMode}
           isFit={hourScale.isFit}
           hourPx={hourScale.hourPx}
+          fitHourPx={fitPxPerHour}
           onFit={hourScale.setFit}
-          onReset={hourScale.reset}
           onZoomIn={hourScale.zoomIn}
           onZoomOut={hourScale.zoomOut}
           canZoomIn={hourScale.canZoomIn}

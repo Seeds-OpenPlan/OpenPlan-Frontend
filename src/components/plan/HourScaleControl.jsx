@@ -11,28 +11,29 @@
   나란히 두면 줄 전체가 어긋나 보인다. WBS 쪽은 여백이 넉넉한 툴바라 44px가
   맞았고, 여기는 이웃에 맞추는 편이 맞다.
 
-  2026-08-31 ("스크롤해야 일정이 보여서 불편하다") — 가운데 읽어 주던 자리가
-  이제 **[맞춤] 토글**이다. 눌린 상태(기본값)면 축척을 화면이 정해 가시 범위가
-  통째로 들어오고, +/− 를 누르면 그 자리에서 수동 단계로 빠지며 토글이 풀린다.
-  다시 누르면 맞춤으로 돌아온다.
+  ## 100%의 기준 (2026-08-31 요구: "100 = 맞춤 사이즈면 안 돼?")
 
-  2026-08-31 (2차) — %를 다시 눈에 보이게 되돌렸다. 한때 "맞춤이 기본이면
-  사용자가 알고 싶은 건 몇 %인가가 아니라 화면이 맞춰 주고 있는가"라고 보고
-  숫자를 title/aria로만 뺐는데, 실제로 써 보니 지금 배율이 얼마인지가 여전히
-  궁금하다는 요구가 왔다. 그래서 가운데 버튼이 **상태(맞춤/수동)와 숫자(%)를
-  한꺼번에** 지고, 누르면 100%로 되돌리는 동작까지 맡는다. 자세한 갈래는 그
-  버튼 바로 위 주석에 있다. 정확한 값은 여전히
-  스크린리더와 툴팁으로 읽을 수 있다.
+  가운데 버튼이 읽어 주는 %는 **화면에 딱 들어차는 축척(fitHourPx)을 100%로**
+  놓고 잰 값이다. 고정 상수(50px/시간)를 기준으로 삼던 것을 바꿨다.
+
+  이 기준을 고른 덕에 컨트롤이 훨씬 단순해졌다. 예전에는 "누르면 100%로"와
+  "맞춤으로 돌아가기"가 서로 다른 동작이라, 100%에서 한 번 더 누르면 맞춤으로
+  간다는 숨은 갈래가 필요했다. 이제 **100% 자체가 맞춤 크기**이므로 누르면
+  하는 일은 언제나 하나다 — 100%로 간다. 사용자가 외울 규칙이 하나 줄었다.
+
+  대신 감수하는 것: 창 높이가 바뀌면 맞춤 축척이 따라 바뀌므로, 수동 단계에
+  머무는 동안에는 사용자가 아무것도 안 눌러도 %가 달라진다. 그래도 그 숫자가
+  말하는 바("지금 한 화면에 들어차는 크기의 몇 %인가")는 늘 참이다.
+
+  화면에 "맞춤"이라는 낱말은 쓰지 않는다(오너 요구). 상태는 눌린 스타일과
+  `aria-pressed`로 전하고, 스크린리더에는 기준이 무엇인지를 말로 풀어 준다.
 */
-import { HOUR_PX_STEPS, DEFAULT_HOUR_PX_INDEX } from '../../features/plan/planGeometry'
-
-const BASE_HOUR_PX = HOUR_PX_STEPS[DEFAULT_HOUR_PX_INDEX]
 
 export function HourScaleControl({
   isFit,
   hourPx,
+  fitHourPx,
   onFit,
-  onReset,
   onZoomIn,
   onZoomOut,
   canZoomIn,
@@ -40,10 +41,13 @@ export function HourScaleControl({
 }) {
   const btn =
     'flex h-8 w-8 items-center justify-center rounded-full border border-border text-label text-text transition-colors hover:bg-surface-sunken disabled:opacity-40 disabled:hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring'
-  const percent = Math.round((hourPx / BASE_HOUR_PX) * 100)
-  // 기본 축척에 정확히 와 있는가 — 표시가 100%인 상태. 맞춤이 우연히 100%를
-  // 가리킬 수도 있으므로(창 높이가 딱 맞을 때) 맞춤 여부는 따로 본다.
-  const atBase = hourPx === BASE_HOUR_PX
+
+  // 아직 측정 전이면 기준이 없다 — 그때는 지금 축척 자신을 기준으로 삼아 100%로
+  // 읽는다(NaN이나 Infinity를 화면에 내보내지 않기 위한 방어이자, 측정이 끝나면
+  // 곧바로 진짜 값으로 바뀐다).
+  const reference = fitHourPx || hourPx || 1
+  const percent = Math.round((hourPx / reference) * 100)
+  const atFullSize = percent === 100
 
   return (
     <div className="inline-flex shrink-0 items-center gap-1" role="group" aria-label="시간 간격">
@@ -60,41 +64,29 @@ export function HourScaleControl({
         −
       </button>
       {/*
-        가운데 버튼은 **지금 몇 %인지를 늘 보여 준다**(2026-08-31 요구: "맞춤
-        버튼에 지금 몇%인지 떴으면 좋겠어, % 뜨는 걸 누르면 100으로 돌아가도록").
-
-        누르면 하는 일이 상태에 따라 갈린다 — 브라우저 확대/축소 컨트롤과 같은
-        손놀림이다:
-          100%가 아니면  → 100%로 되돌린다(요구 그대로).
-          이미 100%면    → 맞춤으로 돌아간다.
-        마지막 갈래가 필요한 이유: 100%로만 되돌리는 버튼이면 한 번 누른 뒤
-        맞춤으로 돌아올 길이 화면에서 사라진다(축척은 localStorage에 남으므로
-        영영 못 돌아온다). 100%에 있을 때는 "되돌릴 곳"이 없으니 그 자리를
-        맞춤 복귀에 내주는 것이 자연스럽다.
-
-        맞춤 상태는 눌린 스타일 + `aria-pressed`로 보여 주고, 라벨에 "맞춤"을
-        함께 적어 색에만 기대지 않는다(NFR-017).
+        지금 배율을 늘 보여 주고, 누르면 100%(=한 화면에 들어차는 크기)로 간다.
+        100%가 곧 그 크기라 갈래가 없다 — 이미 100%여도 같은 동작이고, 그때는
+        보이는 결과가 그대로라 무해하다(수동으로 우연히 100%에 와 있는 경우에는
+        상태만 화면 추종으로 바뀌어, 이후 창 크기 변화를 따라가게 된다).
       */}
       <button
         type="button"
         aria-pressed={isFit}
         aria-label={
-          isFit
-            ? `세로 축척 ${percent}%, 화면에 맞춤 — 눌러서 100%로`
-            : atBase
-              ? `세로 축척 ${percent}% — 눌러서 화면에 맞춤`
-              : `세로 축척 ${percent}% — 눌러서 100%로`
+          atFullSize
+            ? `세로 축척 ${percent}% — 한 화면에 들어차는 크기`
+            : `세로 축척 ${percent}% — 눌러서 100%(한 화면에 들어차는 크기)로`
         }
-        title={atBase && !isFit ? '화면에 맞추기' : '100%로 되돌리기'}
-        onClick={atBase && !isFit ? onFit : onReset}
+        title={atFullSize ? '한 화면에 들어차는 크기' : '100%로 되돌리기'}
+        onClick={onFit}
         className={[
-          'h-8 min-w-16 rounded-full border px-2 text-caption font-medium tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
+          'h-8 min-w-14 rounded-full border px-2 text-caption font-medium tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
           isFit
             ? 'border-brand-600 bg-brand-600 text-white'
             : 'border-border text-text hover:bg-surface-sunken',
         ].join(' ')}
       >
-        {isFit ? `맞춤 ${percent}%` : `${percent}%`}
+        {percent}%
       </button>
       <button
         type="button"
@@ -107,15 +99,13 @@ export function HourScaleControl({
         +
       </button>
       {/*
-        축척이 바뀐 결과를 스크린리더에 알리는 자리. 예전에는 가운데 %표시가
-        `aria-live`를 달고 이 역할을 했는데, 그 자리를 [맞춤] 토글이 가져가면서
-        알림이 사라졌다. 값은 [맞춤] 버튼의 aria-label에도 실려 있지만 그것만으로는
-        부족하다 — 포커스가 그 버튼에 없을 때(+/− 를 누른 직후가 바로 그렇다)
-        label 변경은 다시 읽히지 않기 때문이다. 그래서 결과를 말해 주는 라이브
-        리전을 따로 둔다. 눈으로는 버튼의 눌림 상태가 같은 정보를 이미 보여 준다.
+        축척이 바뀐 결과를 스크린리더에 알리는 자리. 값은 위 버튼의 aria-label에도
+        실려 있지만 그것만으로는 부족하다 — 포커스가 그 버튼에 없을 때(+/− 를 누른
+        직후가 바로 그렇다) label 변경은 다시 읽히지 않기 때문이다. 눈으로는 버튼의
+        숫자와 눌림 상태가 같은 정보를 이미 보여 준다.
       */}
       <span className="sr-only" aria-live="polite">
-        시간 간격 {percent}%{isFit ? ', 화면에 맞춤' : ''}
+        시간 간격 {percent}%
       </span>
     </div>
   )

@@ -247,11 +247,12 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
   })
 
   /*
-    2026-08-31 요구로 가운데 버튼의 역할이 늘었다 — 이제 **지금 몇 %인지를 늘
-    보여 주고**, 누르면 100%로 되돌린다(이미 100%면 맞춤으로 복귀). 그래서
-    이 케이스도 "토글"이 아니라 그 세 갈래를 전부 밟는다.
+    2026-08-31 (3차 요구: "맞춤이라는 단어를 빼", "100 = 맞춤 사이즈면 안 돼?")
+    — 가운데 버튼은 이제 낱말 없이 **%만** 보여 주고, 그 %는 한 화면에 들어차는
+    축척을 100%로 놓고 잰 값이다. 그래서 "누르면 100%로"와 "화면 크기로 복귀"가
+    같은 동작이 됐다(예전에 필요했던 숨은 갈래가 사라졌다).
   */
-  test('TC-04: 축척 버튼 — %를 표시하고, 눌러서 100%로, 100%에서 다시 누르면 맞춤 복귀', async ({
+  test('TC-04: 축척 버튼 — 기본이 100%, −로 100%를 벗어나고, 누르면 100%로 복귀', async ({
     page,
   }) => {
     await mockPlanBackend(page)
@@ -259,24 +260,21 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
 
     const scaleBtn = page.getByRole('button', { name: /세로 축척/ })
 
-    // 기본은 맞춤이고, 라벨에 "맞춤"과 %가 함께 보인다.
+    // 기본은 화면에 들어차는 축척이고, 그 기준이 100%다. "맞춤"이라는 낱말은
+    // 화면에 없어야 한다(오너 요구).
     await expect(scaleBtn).toHaveAttribute('aria-pressed', 'true')
-    await expect(scaleBtn).toContainText('맞춤')
-    await expect(scaleBtn).toContainText('%')
-
-    // 누르면 100%로 되돌아간다(맞춤 해제 + 라벨이 정확히 100%).
-    await scaleBtn.click()
-    await expect(scaleBtn).toHaveAttribute('aria-pressed', 'false')
     await expect(scaleBtn).toHaveText('100%')
+    await expect(scaleBtn).not.toContainText('맞춤')
 
-    // 100%에서 한 번 더 누르면 맞춤으로 복귀한다 — 이 갈래가 없으면 한 번
-    // 누른 뒤 맞춤으로 돌아올 길이 화면에서 사라진다.
-    await scaleBtn.click()
-    await expect(scaleBtn).toHaveAttribute('aria-pressed', 'true')
-
-    // −로도 맞춤이 풀린다(기존 동작 유지).
+    // −를 누르면 수동 단계로 빠지고 100%를 벗어난다.
     await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
     await expect(scaleBtn).toHaveAttribute('aria-pressed', 'false')
+    await expect(scaleBtn).not.toHaveText('100%')
+
+    // %를 누르면 100%(= 한 화면에 들어차는 크기)로 되돌아온다.
+    await scaleBtn.click()
+    await expect(scaleBtn).toHaveAttribute('aria-pressed', 'true')
+    await expect(scaleBtn).toHaveText('100%')
   })
 
   test('TC-06: 배치된 블록 클릭 시 그쪽으로 스크롤 (24h 모드, 화면 밖 블록)', async ({ page }) => {
@@ -528,7 +526,7 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     // sr-only는 clip으로 시각적으로만 숨긴다 — DOM엔 실재하고 Playwright 기준으로도
     // "visible"(크기 0이 아님, display:none 아님)이다. 여기선 존재·attach 여부만 확인한다.
     await expect(liveRegion).toBeAttached()
-    await expect(liveRegion).toContainText('화면에 맞춤') // 기본이 맞춤이므로 접미사가 붙어야 한다.
+    await expect(liveRegion).toContainText('100%') // 기본은 화면에 들어차는 축척 = 100%.
 
     const beforeText = await liveRegion.textContent()
     await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
@@ -536,7 +534,7 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     const afterText = await liveRegion.textContent()
 
     expect(afterText).not.toBe(beforeText) // 값이 실제로 갱신됨(리전이 죽어 있지 않음).
-    expect(afterText).not.toContain('화면에 맞춤') // 수동 단계로 빠졌으니 접미사가 없어야 한다.
+    expect(afterText).not.toContain('100%') // 수동 단계로 빠졌으니 더는 100%가 아니다.
   })
 
   /*

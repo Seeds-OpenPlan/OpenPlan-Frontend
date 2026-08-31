@@ -47,8 +47,8 @@ export function SummaryBar({
   // `isFit`/`hourPx`는 useHourScale이 계산한 현재 상태 그대로다.
   isFit,
   hourPx,
+  fitHourPx,
   onFit,
-  onReset,
   onZoomIn,
   onZoomOut,
   canZoomIn,
@@ -74,8 +74,8 @@ export function SummaryBar({
           <HourScaleControl
             isFit={isFit}
             hourPx={hourPx}
+            fitHourPx={fitHourPx}
             onFit={onFit}
-            onReset={onReset}
             onZoomIn={onZoomIn}
             onZoomOut={onZoomOut}
             canZoomIn={canZoomIn}

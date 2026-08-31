@@ -82,8 +82,7 @@ function readStored() {
  *   hourPx: number,          // 지금 실제로 쓰이는 1시간당 픽셀
  *   pxPerMin: number,        // 그리드·드래그·블록에 그대로 넘기는 축척
  *   setIndex: (i:number)=>void,
- *   setFit: ()=>void,
- *   reset: ()=>void,        // 기본 축척(100%)으로
+ *   setFit: ()=>void,        // 화면에 들어차는 축척으로 (= 표시 100%)
  *   zoomIn: ()=>void,
  *   zoomOut: ()=>void,
  *   canZoomOut: boolean,
@@ -99,10 +98,6 @@ export function useHourScale({ fitHourPx = null } = {}) {
   }, [])
 
   const setFit = useCallback(() => setValue(FIT), [])
-
-  // 기본 축척(100%)으로 되돌린다. 읽어 주는 %가 이 값 대비 백분율이므로
-  // (HourScaleControl의 BASE_HOUR_PX), 여기로 오면 표시가 정확히 100%가 된다.
-  const reset = useCallback(() => setValue(DEFAULT_HOUR_PX_INDEX), [])
 
   useEffect(() => {
     try {
@@ -148,7 +143,6 @@ export function useHourScale({ fitHourPx = null } = {}) {
     pxPerMin: hourPx / 60,
     setIndex,
     setFit,
-    reset,
     zoomIn,
     zoomOut,
     canZoomOut,
