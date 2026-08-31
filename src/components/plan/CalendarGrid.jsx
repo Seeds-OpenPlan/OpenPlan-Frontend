@@ -159,13 +159,36 @@ export function CalendarGrid({
   fixedSchedules = null,
   onOpenFixedMenu,
   bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
+  // 요일 헤더 줄의 실측 높이를 페이지로 올려 준다 (2026-08-31 맞춤 축척).
+  // 페이지는 달력 상자 전체 높이(bodyMaxHeight)만 알 뿐, 그중 격자 본문이
+  // 실제로 쓸 수 있는 높이는 헤더를 뺀 나머지다. 상수로 짐작하면 폰트·줄간격이
+  // 바뀔 때마다 몇 px씩 어긋나 "다 보이는데 스크롤바만 생기는" 상태가 되므로
+  // 재지 않고 넘겨받는다. 헤더 높이는 축척과 무관하므로 되먹임 고리가 없다.
+  onHeaderHeight,
   // 사용자가 고른 세로 축척(분당 픽셀). 페이지가 소유하고 여기로 내려온다 —
   // 이 컴포넌트 안의 모든 좌표 계산은 오직 이 값만 쓴다.
   pxPerMin = PX_PER_MIN,
 }) {
   const gridRef = useRef(null)
   const scrollRef = useRef(null)
+  const headerRef = useRef(null)
   const [resizeState, setResizeState] = useState(null) // {planBlockId,startMin,endMin}
+
+  // 요일 헤더 실측 → 페이지(맞춤 축척 계산). border-box 높이를 그대로 넘긴다.
+  // useLayoutEffect인 이유: 이 값이 도착해야 맞춤 축척이 확정되므로, 페인트
+  // 전에 올려 보내지 않으면 첫 프레임이 기본 축척으로 한 번 그려졌다가
+  // 맞춤 축척으로 다시 그려져 눈에 띄게 튄다.
+  useLayoutEffect(() => {
+    const el = headerRef.current
+    if (!el || !onHeaderHeight) return undefined
+    onHeaderHeight(el.getBoundingClientRect().height)
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver((entries) => {
+      onHeaderHeight(entries[0].target.getBoundingClientRect().height)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [onHeaderHeight])
 
   // A callback ref that mirrors the grid body element into the page's bodyRef too,
   // so the page can hit-test panel→grid drops (resolveGridSlot) against exactly
@@ -398,7 +421,7 @@ export function CalendarGrid({
             {/* Sticky day-header row. */}
             {/* z-40: above the dragged block / drop preview (z-30) so a block
                 scrolled to the top slides UNDER the day header, never over it. */}
-            <div className="sticky top-0 z-40 flex border-b border-border bg-surface">
+            <div ref={headerRef} className="sticky top-0 z-40 flex border-b border-border bg-surface">
               <div className="w-12 shrink-0" />
               <div className="grid flex-1 grid-cols-7">
                 {weekDays.map((dayISO, i) => (
@@ -411,15 +434,28 @@ export function CalendarGrid({
             <div className="flex">
               {/* Left hour ruler. */}
               <div className="relative w-12 shrink-0" style={{ height }}>
-                {ticks.map((h) => (
-                  <span
-                    key={h}
-                    className="absolute right-1 -translate-y-1/2 text-caption text-text-muted"
-                    style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
-                  >
-                    {String(h).padStart(2, '0')}
-                  </span>
-                ))}
+                {/* 라벨은 눈금선 위에 가운데 정렬이지만, 창의 위아래 끝에 닿는
+                    눈금만은 안쪽으로 붙여 그린다. visibleRange가 가용 시간
+                    바깥의 여유를 없앤 뒤로 첫 눈금이 top 0, 마지막 눈금이
+                    바닥에 정확히 앉기 때문에(그 함수 주석 참고), 가운데
+                    정렬이면 첫 라벨은 위쪽 절반이 헤더에 가리고 마지막 라벨은
+                    아래쪽 절반이 카드 밖으로 나간다. */}
+                {ticks.map((h) => {
+                  const atTop = h * 60 === range.startMinutes
+                  const atBottom = h * 60 === range.endMinutes
+                  return (
+                    <span
+                      key={h}
+                      className={[
+                        'absolute right-1 text-caption text-text-muted',
+                        atTop ? '' : atBottom ? '-translate-y-full' : '-translate-y-1/2',
+                      ].join(' ')}
+                      style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
+                    >
+                      {String(h).padStart(2, '0')}
+                    </span>
+                  )
+                })}
               </div>
 
         {/* Grid body — drag reference element. A right-click on empty space (not on
@@ -463,15 +499,23 @@ export function CalendarGrid({
             })}
           </div>
 
-          {/* Hour gridlines. */}
-          {ticks.map((h) => (
-            <div
-              key={h}
-              className="pointer-events-none absolute inset-x-0 border-t border-border/70"
-              style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
-              aria-hidden="true"
-            />
-          ))}
+          {/* Hour gridlines.
+
+              창 맨 아래 눈금(= range.endMinutes)은 건너뛴다. 그 선은 격자 높이
+              바로 아래 1px에 그려지는데, 절대 위치라 스크롤 컨테이너의 스크롤
+              영역을 그만큼 늘린다 — 축척을 화면에 딱 맞춰 놨는데 이 1px 때문에
+              스크롤바가 생기는, 가장 허무한 실패다. 그 자리에는 카드 테두리가
+              이미 같은 선을 긋고 있어 시각적으로 잃는 것도 없다. */}
+          {ticks
+            .filter((h) => h * 60 !== range.endMinutes)
+            .map((h) => (
+              <div
+                key={h}
+                className="pointer-events-none absolute inset-x-0 border-t border-border/70"
+                style={{ top: (h * 60 - range.startMinutes) * pxPerMin }}
+                aria-hidden="true"
+              />
+            ))}
 
           {/* Availability edge handles (24h mode only, editable weeks only). */}
           {mode === '24h' &&
