@@ -234,7 +234,31 @@ function WeeklyPage() {
     // (not position within a scrolling ancestor) is what changes here, which a
     // resize listener already covers.
     window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
+
+    /*
+      폰트 스왑 후 한 번 더 잰다. Pretendard는 CDN에서 비동기로 오고
+      `font-display:swap`이라(index.html 헤더), 첫 측정 뒤에 폴백 폰트 →
+      Pretendard 교체가 일어나면 격자 위쪽(WeekNav·PlanHeader) 글자의 줄높이가
+      바뀌면서 달력의 시작 위치가 몇 px 밀린다. 그걸 반영하지 않으면 달력이 딱
+      그만큼 화면 밖으로 넘쳐 — 이 변경 전체가 없애려던 "몇 px 때문에 스크롤바가
+      생기는" 상태가 폰트 로딩이라는 다른 경로로 되살아난다. 캐시가 더워진
+      재방문에서는 스왑이 측정보다 먼저 끝나 티가 안 나지만, 첫 방문·느린 회선에서
+      정확히 이 순서가 된다.
+
+      `document.fonts`가 없는 환경(구형·일부 테스트 러너)에서는 조용히 건너뛴다 —
+      그때는 폰트 스왑 자체가 없으므로 잃는 것도 없다.
+    */
+    let cancelled = false
+    document.fonts?.ready
+      ?.then(() => {
+        if (!cancelled) measure()
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+      window.removeEventListener('resize', measure)
+    }
     // 주차가 바뀌면 다시 잰다. 리사이즈 말고도 이 두 랜드마크를 움직이는 것이
     // 하나 더 있기 때문이다 — 지난 주로 넘어가면 PlanHeader가 "읽기 전용" 띠를
     // 한 줄 더 그려서 달력 상자의 시작 위치가 그만큼 내려간다. 그걸 반영하지

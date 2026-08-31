@@ -70,6 +70,17 @@ export function HourScaleControl({ isFit, hourPx, onFit, onZoomIn, onZoomOut, ca
       >
         +
       </button>
+      {/*
+        축척이 바뀐 결과를 스크린리더에 알리는 자리. 예전에는 가운데 %표시가
+        `aria-live`를 달고 이 역할을 했는데, 그 자리를 [맞춤] 토글이 가져가면서
+        알림이 사라졌다. 값은 [맞춤] 버튼의 aria-label에도 실려 있지만 그것만으로는
+        부족하다 — 포커스가 그 버튼에 없을 때(+/− 를 누른 직후가 바로 그렇다)
+        label 변경은 다시 읽히지 않기 때문이다. 그래서 결과를 말해 주는 라이브
+        리전을 따로 둔다. 눈으로는 버튼의 눌림 상태가 같은 정보를 이미 보여 준다.
+      */}
+      <span className="sr-only" aria-live="polite">
+        시간 간격 {percent}%{isFit ? ', 화면에 맞춤' : ''}
+      </span>
     </div>
   )
 }

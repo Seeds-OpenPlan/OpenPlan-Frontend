@@ -253,9 +253,33 @@ export function CalendarGrid({
     const compute = (clientY) => {
       const rect = gridRef.current.getBoundingClientRect()
       const m = snapMinutes(pxToMinutes(clientY - rect.top, range, pxPerMin))
+      /*
+        두 제약의 **우선순위**가 중요하다: 최소 길이(15분)가 범위 클램프를 이긴다.
+
+        둘을 순진하게 겹치면(범위로 먼저 자르고 최소 길이를 안쪽에 두면) 범위
+        경계에 15분보다 가깝게 붙은 블록에서 손잡이가 **아무 반응도 없는 상태**가
+        된다: `startMin + 15`가 이미 `range.endMinutes`를 넘으므로 어느 방향으로
+        끌든 결과가 원래 값으로 눌리고, pointerup에서도 값이 안 바뀌었으니 커밋조차
+        일어나지 않는다 — 에러도 토스트도 없이 조용히 죽는, 이 코드베이스가 가장
+        싫어하는 실패 방식이다. 여유를 없앤 뒤로 그 주에서 가장 이르거나 늦은
+        블록이 경계에 바짝 붙는 것이 흔해졌고, ScheduleForm은 15분 미만(5분 단위)
+        일정 생성을 실제로 허용하므로 도달 가능한 상태다.
+
+        그래서 최소 길이를 바깥에 둔다. 평소에는 `m`이 범위 안이라 범위 클램프가
+        그대로 먹고, 둘이 충돌할 때만 최소 길이가 이겨 블록이 범위를 잠깐 넘는다.
+        그건 안전하다 — visibleRange가 그려지는 구간을 감싸도록 창을 넓히므로,
+        커밋되는 순간 창이 그 블록을 포함하도록 자란다. 드래그 중 한때 넘치는
+        것과, 손잡이가 영영 죽어 있는 것 중에서는 전자가 낫다.
+      */
       return edge === 'start'
-        ? { startMin: Math.max(range.startMinutes, Math.min(m, endMin - RESIZE_MIN_DUR)), endMin }
-        : { startMin, endMin: Math.min(range.endMinutes, Math.max(m, startMin + RESIZE_MIN_DUR)) }
+        ? {
+            startMin: Math.min(endMin - RESIZE_MIN_DUR, Math.max(range.startMinutes, m)),
+            endMin,
+          }
+        : {
+            startMin,
+            endMin: Math.max(startMin + RESIZE_MIN_DUR, Math.min(range.endMinutes, m)),
+          }
     }
     const move = (ev) => setResizeState({ planBlockId: block.planBlockId, ...compute(ev.clientY) })
     const up = (ev) => {
