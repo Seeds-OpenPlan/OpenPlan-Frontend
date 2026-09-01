@@ -27,7 +27,18 @@ import {
   WEEKEND_COLUMN_INDICES,
 } from '../../features/plan/planTime'
 
-const DEFAULT_BODY_MAX_HEIGHT = '62vh'
+/*
+  달력 상자의 세로 크기. **max-height가 아니라 height다** — 축척을 바꿔도 상자
+  크기가 변하지 않아야 하기 때문이다(2026-09-01 요구: "100%랑 114%일 때랑 크기가
+  조금씩 변하는디").
+
+  왜 변했었나: max-height일 때 내용이 상자보다 짧으면 컨테이너가 내용 높이로
+  줄어든다. 100%(맞춤)에서는 fitHourPx가 정수로 **내림**되므로 내용이 상자보다
+  최대 (시간 수 − 1)px 짧고, 한 칸 확대하면 내용이 상자를 넘겨 상자가 최대치로
+  커진다 — 그 몇 px이 "조금씩 변하는" 정체였다. 높이를 고정하면 남는 몇 px은
+  아래쪽 빈 공간이 되고 상자는 그대로다.
+*/
+const DEFAULT_BODY_HEIGHT = '62vh'
 
 /* Column header: 요일 label + date, with today circled (design). */
 function DayHeader({ dayISO, columnIndex, todayISO }) {
@@ -153,13 +164,15 @@ export function CalendarGrid({
   // the review panel most recently asked to focus (PLAN-23).
   violationsByBlockId = null,
   focusRequest = null,
+  // 블록을 눌렀을 때 그 블록에 포커스를 요청한다(페이지가 focusRequest를 갱신).
+  onFocusBlock,
   // ST-F1-06: this week's recurring fixed schedules (weekday + minutes, plus
   // activeThisWeek) and the handler that opens their block-action menu.
   fixedSchedules = null,
   onOpenFixedMenu,
-  bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
+  bodyHeight = DEFAULT_BODY_HEIGHT,
   // 요일 헤더 줄의 실측 높이를 페이지로 올려 준다 (2026-08-31 맞춤 축척).
-  // 페이지는 달력 상자 전체 높이(bodyMaxHeight)만 알 뿐, 그중 격자 본문이
+  // 페이지는 달력 상자 전체 높이(bodyHeight)만 알 뿐, 그중 격자 본문이
   // 실제로 쓸 수 있는 높이는 헤더를 뺀 나머지다. 상수로 짐작하면 폰트·줄간격이
   // 바뀔 때마다 몇 px씩 어긋나 "다 보이는데 스크롤바만 생기는" 상태가 되므로
   // 재지 않고 넘겨받는다. 헤더 높이는 축척과 무관하므로 되먹임 고리가 없다.
@@ -315,11 +328,35 @@ export function CalendarGrid({
   useEffect(() => {
     pxPerMinRef.current = pxPerMin
   }, [pxPerMin])
-  useEffect(() => {
-    if (!scrollRef.current) return
-    scrollRef.current.scrollTop =
-      mode === '24h' ? Math.max(0, (8 * 60 - range.startMinutes) * pxPerMinRef.current) : 0
-  }, [mode, range.startMinutes])
+  /*
+    보이는 범위가 바뀌어도(집중 ↔ 24시간) **지금 화면 맨 위에 있던 시각을 그대로
+    붙잡아 둔다** (2026-09-01 요구: "집중→24시로 변환할 때 지금 보고 있는 화면에
+    맞춰졌으면 좋겠어").
+
+    예전에는 24시간으로 가면 무조건 8시로 감고 집중으로 돌아오면 맨 위로 되감았다.
+    그러면 오후 3시께를 보다가 토글 한 번에 아침으로 튕겨, 방금 보던 자리를 다시
+    찾아 내려가야 했다.
+
+    계산은 간단하다 — 스크롤 위치는 "범위 시작에서 몇 분 내려왔는가"이므로,
+    바뀌기 전 범위 기준으로 맨 윗 시각을 구한 뒤 새 범위 기준으로 되돌려 놓으면
+    된다. 넘치는 값은 브라우저가 알아서 클램프한다(집중으로 돌아올 때 그 시각이
+    창보다 이르면 0으로).
+
+    useLayoutEffect인 이유: 새 높이가 페인트되기 전에 스크롤을 옮겨야 한 프레임
+    깜빡임이 안 생긴다. 축척은 ref로 읽는다 — 축척 변화는 아래 이펙트가 따로
+    맡으므로 둘이 같은 커밋에서 서로 덮어쓰지 않게 한다.
+  */
+  const prevRangeStartRef = useRef(range.startMinutes)
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const prevStart = prevRangeStartRef.current
+    prevRangeStartRef.current = range.startMinutes
+    if (!el || prevStart === range.startMinutes) return
+    const ppm = pxPerMinRef.current
+    if (!(ppm > 0)) return
+    const topMinutes = prevStart + el.scrollTop / ppm
+    el.scrollTop = Math.max(0, (topMinutes - range.startMinutes) * ppm)
+  }, [range.startMinutes])
 
   /*
     확대/축소했을 때 "보고 있던 시각"을 그대로 붙잡아 둔다. 축척만 바뀌면 같은
@@ -455,7 +492,7 @@ export function CalendarGrid({
           {/* A SINGLE vertical scroll container holds the header and the body, so a
               vertical scrollbar narrows both by the same amount and the columns
               stay aligned (a scrollbar on the body alone would offset the header). */}
-          <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: bodyMaxHeight }}>
+          <div ref={scrollRef} className="overflow-y-auto" style={{ height: bodyHeight }}>
             {/* Sticky day-header row. */}
             {/* z-40: above the dragged block / drop preview (z-30) so a block
                 scrolled to the top slides UNDER the day header, never over it. */}
@@ -688,6 +725,8 @@ export function CalendarGrid({
                 focusToken={
                   focusRequest?.planBlockId === block.planBlockId ? focusRequest.token : null
                 }
+                focusIntent={focusRequest?.intent ?? 'reveal'}
+                onFocusRequest={onFocusBlock ? () => onFocusBlock(block) : undefined}
                 style={style}
                 onPointerDown={(e) => onBlockPointerDown(e, block, dayIndex, startMin)}
                 onOpenMenu={(pos) => onOpenMenu(block, pos)}
