@@ -563,8 +563,23 @@ function WeeklyPage() {
       쪽 — 즉 멀쩡한 블록 — 을 가리키고 정작 위반한 블록은 그냥 지나쳤다. 규칙이
       바로 그 모호함을 풀라고 있는데 제목이 가로챈 셈이다.
 
-      제목은 서버가 준 정보이므로 여전히 규칙보다 신뢰도가 높다 — 다만 그것은
-      **후보를 좁힌 뒤 그 안에서** 쓸 때의 이야기다.
+      🔴 제목 단계는 **실서버에서 절대 동작하지 않는다**(리뷰 지적, 2026-09-02).
+      계약의 ValidationIssue에는 `params`도 `blockTitle`도 없다 — 필드는
+      validationIssueId·ruleId·severity·planBlockId·counterpartId·taskId·weekday·
+      reason·resolutionStatus뿐이다. normalizeIssue의 `params`는 "구조 키를 뺀
+      나머지"로 만들어지므로 실서버 응답에서는 비어 있고, 이 필드를 채우는 것은
+      dev 목(planFixtures)뿐이다. 즉 아래 제목 단계는 **dev에서만 켜지고 배포에서는
+      늘 건너뛴다** — 한때 이 자리에 "제목은 서버가 준 정보라 규칙보다 신뢰도가
+      높다"고 적어 뒀는데, 실서버 기준으로는 그 전제 자체가 성립하지 않는다.
+
+      그래서 배포에서 실제로 일어나는 일은 이렇다: V4는 아래 규칙 좁히기가 답을
+      주고, **V3처럼 규칙 좁히기 대상이 아닌 항목은 곧장 마지막 폴백으로 떨어진다.**
+      그 한계는 폴백 주석에 적어 둔 그대로다.
+
+      단계를 지우지 않고 남겨 두는 이유: dev 목에서는 실제로 더 정확한 대상을
+      골라 주고(로컬에서 이 화면을 다듬을 때 값어치가 있다), 서버가 나중에 이
+      정보를 실어 주면 그대로 살아나는 자리이기 때문이다. 다만 **지금 배포에서는
+      죽어 있는 코드**라는 사실을 모르고 읽으면 안 된다.
     */
     let candidates = onDay
     if (issue.code === 'V4_OUT_OF_AVAILABILITY') {
@@ -579,6 +594,7 @@ function WeeklyPage() {
       if (outside.length > 0) candidates = outside
     }
 
+    // dev 목 전용 경로(위 주석) — 실서버 응답에는 params.blockTitle이 없어 늘 스킵된다.
     const titled = issue.params?.blockTitle
       ? candidates.find((b) => b.title === issue.params.blockTitle)
       : null
@@ -592,6 +608,11 @@ function WeeklyPage() {
       길이 되기 때문이다(그게 원래 보고된 문제였다). 즉 이 반환값은 "원인"이 아니라
       "그 요일을 보라"는 뜻에 가깝다 — 항목의 문구가 실제 사유를 설명하고 있으므로
       사용자가 이것을 원인으로 오독할 여지는 그 문구가 막는다.
+
+      실서버에서는 위 제목 단계가 늘 스킵되므로, V3는 **언제나** 여기로 온다. 그리고
+      여기서 고르는 "첫 TASK"는 서버가 준 블록 배열 순서에 달렸을 뿐 시간순도
+      원인순도 아니다 — 서버의 reason이 실제로 가리키는 블록과 다를 수 있다.
+      이보다 나아지려면 계약이 그 규칙의 대상 블록(들)을 실어 줘야 한다.
     */
     return candidates.find((b) => b.blockType === 'TASK') ?? candidates[0]
   }
