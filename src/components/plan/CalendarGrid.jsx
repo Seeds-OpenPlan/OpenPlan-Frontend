@@ -190,13 +190,21 @@ export function CalendarGrid({
   // useLayoutEffect인 이유: 이 값이 도착해야 맞춤 축척이 확정되므로, 페인트
   // 전에 올려 보내지 않으면 첫 프레임이 기본 축척으로 한 번 그려졌다가
   // 맞춤 축척으로 다시 그려져 눈에 띄게 튄다.
+  // 헤더 높이는 페이지(맞춤 축척)뿐 아니라 여기서도 쓴다 — 이 헤더가 sticky라
+  // 스크롤 컨테이너 맨 위를 덮으므로, "블록이 정말 다 보이는가"를 판정하려면
+  // 그만큼을 가려진 영역으로 빼야 한다(PlanBlock의 viewportInsetTop).
+  const [headerPx, setHeaderPx] = useState(0)
   useLayoutEffect(() => {
     const el = headerRef.current
-    if (!el || !onHeaderHeight) return undefined
-    onHeaderHeight(el.getBoundingClientRect().height)
+    if (!el) return undefined
+    const report = (h) => {
+      setHeaderPx(h)
+      onHeaderHeight?.(h)
+    }
+    report(el.getBoundingClientRect().height)
     if (typeof ResizeObserver === 'undefined') return undefined
     const ro = new ResizeObserver((entries) => {
-      onHeaderHeight(entries[0].target.getBoundingClientRect().height)
+      report(entries[0].target.getBoundingClientRect().height)
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -492,7 +500,12 @@ export function CalendarGrid({
           {/* A SINGLE vertical scroll container holds the header and the body, so a
               vertical scrollbar narrows both by the same amount and the columns
               stay aligned (a scrollbar on the body alone would offset the header). */}
-          <div ref={scrollRef} className="overflow-y-auto" style={{ height: bodyHeight }}>
+          <div
+            ref={scrollRef}
+            data-plan-scroller=""
+            className="overflow-y-auto"
+            style={{ height: bodyHeight }}
+          >
             {/* Sticky day-header row. */}
             {/* z-40: above the dragged block / drop preview (z-30) so a block
                 scrolled to the top slides UNDER the day header, never over it. */}
@@ -726,6 +739,7 @@ export function CalendarGrid({
                   focusRequest?.planBlockId === block.planBlockId ? focusRequest.token : null
                 }
                 focusIntent={focusRequest?.intent ?? 'reveal'}
+                viewportInsetTop={headerPx}
                 onFocusRequest={onFocusBlock ? () => onFocusBlock(block) : undefined}
                 style={style}
                 onPointerDown={(e) => onBlockPointerDown(e, block, dayIndex, startMin)}

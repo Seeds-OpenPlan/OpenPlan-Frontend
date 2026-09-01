@@ -1250,4 +1250,85 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     await expect(scaleBtn).toHaveText('100%')
     await expect(minus, '24시간 모드는 100%에서도 넘치므로 줄일 수 있어야 한다').not.toBeDisabled()
   })
+
+  /*
+    TC-20 [오너 보고 2026-09-01: "24h에서 블록 누르면 블록의 반밖에 안 보이게
+    움직여 … 거의 차이가 안 나"] — 누른 뒤에는 블록이 **sticky 요일 헤더에
+    가리지 않고 온전히** 보여야 한다.
+
+    예전 `block:'nearest'`가 부족했던 이유: 헤더가 `sticky top-0`라 스크롤
+    컨테이너 맨 위를 덮는데 브라우저는 그 가림을 모른다. 그래서 블록을 컨테이너
+    꼭대기에 붙여 놓고 "보이게 했다"고 끝내면, 실제로는 헤더 뒤에 반쯤 들어간다.
+
+    여기서는 그 상황을 그대로 만든다 — 24시간 모드에서 블록이 헤더에 반쯤 걸리도록
+    스크롤한 뒤 눌러, 헤더 아래로 완전히 내려오는지 잰다.
+  */
+  test('TC-20: 24시간 모드에서 헤더에 반쯤 가린 블록을 누르면 온전히 드러난다', async ({ page }) => {
+    await mockPlanBackend(page, {
+      blocks: [
+        {
+          planBlockId: 101,
+          blockType: 'TASK',
+          title: 'E2E 헤더 가림 블록',
+          status: 'PLANNED',
+          startAt: (weekStartDate) => `${weekStartDate}T14:00:00`,
+          endAt: (weekStartDate) => `${weekStartDate}T15:00:00`,
+        },
+      ],
+    })
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(300)
+    await page.evaluate(() => document.fonts.ready)
+
+    const sc = page.locator('[data-plan-scroller]')
+    const header = sc.locator('> div.sticky').first()
+    const block = page.getByRole('button', { name: /E2E 헤더 가림 블록/ })
+
+    const headerBox = await header.boundingBox()
+
+    // 먼저 블록을 화면 안으로 들인 다음(한 번에 계산하면 컨테이너 밖으로 밀려
+    // boundingBox가 null이 된다), 위쪽 절반이 헤더 뒤로 들어가도록 조금만 민다.
+    await block.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(200)
+    const b0 = await block.boundingBox()
+    const v0 = await sc.boundingBox()
+    expect(b0, '전제 확인: 블록이 화면 안에 들어와야 한다').not.toBeNull()
+    await sc.evaluate(
+      (node, dy) => {
+        node.scrollTop += dy
+      },
+      b0.y - (v0.y + headerBox.height - b0.height / 2),
+    )
+    await page.waitForTimeout(200)
+
+    const beforeBox = await block.boundingBox()
+    const viewBefore = await sc.boundingBox()
+    expect(beforeBox, '전제 확인: 블록이 여전히 화면 안에 있어야 한다').not.toBeNull()
+    expect(
+      beforeBox.y,
+      '전제 확인: 누르기 전엔 블록 윗부분이 헤더에 가려 있어야 한다',
+    ).toBeLessThan(viewBefore.y + headerBox.height)
+
+    /*
+      `.click()`을 쓰면 안 된다 — Playwright는 클릭 전에 **스스로 요소를 화면
+      안으로 스크롤**한다. 그러면 우리 코드가 아무 일도 안 해도 블록이 드러나
+      이 케이스가 항상 통과한다(음성 대조로 확인: 옛 'nearest' 구현에서도 통과했다).
+      제품 코드의 스크롤만 재려면 스크롤 없이 이벤트만 쏘아야 한다.
+    */
+    await block.dispatchEvent('click')
+    await page.waitForTimeout(600) // smooth 스크롤이 멎을 시간
+
+    const afterBox = await block.boundingBox()
+    const viewAfter = await sc.boundingBox()
+    expect(
+      afterBox.y,
+      `누른 뒤에는 헤더(높이 ${Math.round(headerBox.height)}px) 아래로 내려와야 한다 ` +
+        `(블록 top ${Math.round(afterBox.y)}, 가려지는 경계 ${Math.round(viewAfter.y + headerBox.height)})`,
+    ).toBeGreaterThanOrEqual(viewAfter.y + headerBox.height)
+    expect(
+      afterBox.y + afterBox.height,
+      '아래쪽도 잘리면 안 된다',
+    ).toBeLessThanOrEqual(viewAfter.y + viewAfter.height + 1)
+  })
 })
