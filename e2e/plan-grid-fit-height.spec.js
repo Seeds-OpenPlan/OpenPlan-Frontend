@@ -315,7 +315,7 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     // 화면에 없어야 한다(오너 요구). isFit=true는 aria-label에 "눌러서"가
     // 없는 것으로 드러난다(HourScaleControl.jsx의 두 분기 문구 참고).
     await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
-    await expect(scaleBtn).toHaveAttribute('title', '한 화면에 들어차는 크기')
+    await expect(scaleBtn).toHaveAttribute('title', /한 화면에 들어차는 크기$/)
     await expect(scaleBtn).toHaveText('100%')
     await expect(scaleBtn).not.toContainText('맞춤')
 
@@ -938,4 +938,72 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
       }
     },
   )
+
+  /*
+    TC-14 [2026-09-01 요구: "집중/24시 전환했을 때 100% 크기가 동일했으면 좋겠어"] —
+    모드를 오가도 **블록 크기(시간당 픽셀)가 그대로**여야 한다.
+
+    그 전에는 기준 축척을 "지금 그리는 범위"로 잡아서, 24시간 모드로 넘어가면
+    나누는 시간 수가 9에서 24로 뛰며 같은 100%가 절반 이하로 쪼그라들었다. 이제
+    기준 창을 집중 모드의 창으로 고정했으므로, 달라지는 것은 "몇 시간을 펼쳐
+    보이느냐"뿐이다.
+
+    재는 법: 한 시간 눈금선 사이의 실제 거리. 눈금선은 `h*60*pxPerMin`으로 놓이니
+    이웃한 두 줄의 간격이 곧 시간당 픽셀이다. 블록을 심지 않아도 되고 축척을
+    직접 읽지 않아도 되는, 화면에서 곧바로 확인 가능한 값이다.
+  */
+  test('TC-14: 집중 ↔ 24시간 모드를 오가도 100%의 시간당 픽셀이 같다', async ({ page }) => {
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    // 이웃한 두 시간 눈금선의 세로 간격 = 시간당 픽셀.
+    const hourPitch = async () =>
+      page.evaluate(() => {
+        const lines = [...document.querySelectorAll('div.pointer-events-none.absolute.inset-x-0')]
+          .map((el) => el.getBoundingClientRect().top)
+          .sort((a, b) => a - b)
+        return lines.length >= 2 ? Math.round((lines[1] - lines[0]) * 100) / 100 : null
+      })
+
+    const focusPitch = await hourPitch()
+    expect(focusPitch, '집중 모드에서 시간 눈금 간격을 재지 못했다').toBeGreaterThan(0)
+
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(250)
+    const dayPitch = await hourPitch()
+
+    expect(
+      dayPitch,
+      `모드를 바꿔도 시간당 픽셀이 같아야 한다: 집중 ${focusPitch}px vs 24시간 ${dayPitch}px`,
+    ).toBe(focusPitch)
+
+    // 축척 표시도 100% 그대로여야 한다 — 기준이 모드와 무관하기 때문이다.
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+
+    /*
+      100%에서만이 아니라 **확대한 상태에서도** 모드 간 크기가 같아야 한다
+      (2026-09-01 요구를 그렇게 읽었다: "집중 100%일 때랑 100 이상일 때 크기가
+      같았으면"). 축척 상태가 모드와 무관한 값 하나이므로 원리상 성립하지만,
+      원리는 테스트가 아니다 — 실제로 잰다.
+    */
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await page.waitForTimeout(250)
+    const zoomedDayPitch = await hourPitch()
+    const zoomedPercent = await page.getByRole('button', { name: /세로 축척/ }).textContent()
+    expect(zoomedDayPitch, '확대 후 24시간 모드에서 눈금 간격을 재지 못했다').toBeGreaterThan(0)
+
+    await page.getByRole('button', { name: '집중', exact: true }).click()
+    await page.waitForTimeout(250)
+    const zoomedFocusPitch = await hourPitch()
+
+    expect(
+      zoomedFocusPitch,
+      `확대(${zoomedPercent}) 상태에서도 모드 간 시간당 픽셀이 같아야 한다: ` +
+        `24시간 ${zoomedDayPitch}px vs 집중 ${zoomedFocusPitch}px`,
+    ).toBe(zoomedDayPitch)
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText(zoomedPercent)
+  })
 })
