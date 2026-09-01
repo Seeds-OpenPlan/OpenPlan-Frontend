@@ -117,6 +117,9 @@ export function PlanBlock({
   focusToken = null,
   // 'announce'(검토 패널이 지목) | 'reveal'(사용자가 블록을 눌러 확인)
   focusIntent = 'announce',
+  // 스크롤 컨테이너 맨 위에서 sticky 헤더가 덮는 높이. "정말 다 보이는가"를
+  // 판정할 때 이만큼을 가려진 영역으로 뺀다.
+  viewportInsetTop = 0,
   onFocusRequest,
   onPointerDown,
   onOpenMenu,
@@ -168,11 +171,41 @@ export function PlanBlock({
       하이라이트 링은 둘 다 준다 — "이 블록이다"라는 대답은 양쪽 모두에 필요하다.
     */
     const announce = focusIntent === 'announce'
-    el.scrollIntoView({
-      block: announce ? 'center' : 'nearest',
-      inline: 'nearest',
-      behavior: reducedMotion ? 'auto' : 'smooth',
-    })
+
+    /*
+      'reveal'에서 예전에는 `block:'nearest'`를 썼는데, 그게 **눈에 띄게 부족했다**
+      (오너 보고 2026-09-01: "24h에서 블록 누르면 블록의 반밖에 안 보이게 움직여
+      … 거의 차이가 안 나"). 이유는 요일 헤더가 `sticky top-0`라 스크롤 컨테이너
+      맨 위를 덮기 때문이다 — 브라우저는 그 가림을 모르므로 블록을 컨테이너
+      꼭대기에 붙여 놓고 "보이게 했다"고 판단하고, 실제로는 헤더 뒤에 반쯤
+      들어간다. 반쯤 보이던 것을 눌렀는데 여전히 반쯤 보이니 아무 일도 안 한
+      것처럼 느껴진다.
+
+      그래서 헤더가 덮는 높이(viewportInsetTop)를 뺀 **진짜 보이는 영역**으로
+      판정한다. 이미 그 안에 온전히 들어와 있으면 화면을 건드리지 않고(누른
+      사람이 이미 보고 있는 것을 흔들 이유가 없다), 조금이라도 걸쳐 있으면
+      가운데로 확실히 끌어온다 — 어중간하게 가장자리에 붙여 놓는 것보다 낫다.
+    */
+    let center = announce
+    if (!announce) {
+      const scroller = el.closest('[data-plan-scroller]')
+      if (scroller) {
+        const view = scroller.getBoundingClientRect()
+        const box = el.getBoundingClientRect()
+        const visibleTop = view.top + viewportInsetTop
+        center = box.top < visibleTop || box.bottom > view.bottom
+      } else {
+        center = true
+      }
+    }
+
+    if (center) {
+      el.scrollIntoView({
+        block: 'center',
+        inline: 'nearest',
+        behavior: reducedMotion ? 'auto' : 'smooth',
+      })
+    }
     el.focus({ preventScroll: true })
 
     // PLAN-23 shake: one horizontal wobble on the block, layered on the same
@@ -214,7 +247,7 @@ export function PlanBlock({
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [focusToken, reducedMotion, focusIntent])
+  }, [focusToken, reducedMotion, focusIntent, viewportInsetTop])
 
   // Detail card for short blocks: anchored to the block's on-screen rect and
   // rendered in a portal so the grid's overflow can't clip it.
