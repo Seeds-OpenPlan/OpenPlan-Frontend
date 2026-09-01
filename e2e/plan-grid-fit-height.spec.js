@@ -47,7 +47,10 @@ function addDaysISO(iso, days) {
  * @param {import('@playwright/test').Page} page
  * @param {{ blocks?: object[], availability?: object[], onPatch?: (body: any) => void }} [opts]
  */
-async function mockPlanBackend(page, { blocks = [], availability = WEEKDAY_AVAILABILITY, onPatch } = {}) {
+async function mockPlanBackend(
+  page,
+  { blocks = [], availability = WEEKDAY_AVAILABILITY, onPatch, issues = null } = {},
+) {
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace(/^\/api\/v1/, '')
@@ -97,6 +100,20 @@ async function mockPlanBackend(page, { blocks = [], availability = WEEKDAY_AVAIL
       const body = route.request().postDataJSON()
       onPatch?.(body)
       return route.fulfill({ status: 200, json: { data: { planBlockId: 101 } } })
+    }
+    if (path.endsWith('/validations') && method === 'POST') {
+      // ValidationReport (openapi). issues를 안 주면 "문제 없음"으로 응답한다.
+      return route.fulfill({
+        status: 200,
+        json: {
+          data: {
+            dryRun: true,
+            savable: !(issues ?? []).some((i) => i.severity === 'BLOCK'),
+            issues: issues ?? [],
+            evaluatedAt: new Date().toISOString(),
+          },
+        },
+      })
     }
     if (path === '/fixed-schedules') return route.fulfill({ status: 200, json: { data: [] } })
     if (path === '/tasks') return route.fulfill({ status: 200, json: { data: [] } })
@@ -319,8 +336,13 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     await expect(scaleBtn).toHaveText('100%')
     await expect(scaleBtn).not.toContainText('맞춤')
 
-    // −를 누르면 수동 단계로 빠지고 100%를 벗어난다.
-    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
+    /*
+      100%(집중, 스크롤 없음)에서는 **−가 잠긴다** — 더 줄여도 블록만 작아지고
+      아래 빈 공간이 늘 뿐이라(상자 높이가 고정) 얻는 게 없다. 그래서 100%를
+      벗어나려면 +를 쓴다.
+    */
+    await expect(page.getByRole('button', { name: /시간 간격 좁게/ })).toBeDisabled()
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
     await expect(scaleBtn).toHaveAttribute('aria-label', /눌러서 100%/)
     await expect(scaleBtn).toHaveAttribute('title', '100%로 되돌리기')
     await expect(scaleBtn).not.toHaveText('100%')
@@ -332,14 +354,16 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
 
     /*
       +/− 로도 100%에 다시 설 수 있어야 한다(2026-08-31 요구). 맞춤 축척이
-      단계 사다리의 한 칸으로 끼어 있으므로, −로 한 칸 내려갔다가 +로 한 칸
-      올라오면 정확히 100%다. 예전에는 사다리가 고정 5칸뿐이라 이 왕복이
-      100%를 지나치고 다른 값에 서서, 100%로 돌아갈 길이 가운데 버튼밖에
-      없었다.
+      단계 사다리의 한 칸으로 끼어 있으므로, 한 칸 움직였다가 되돌아오면 정확히
+      100%다. 예전에는 사다리가 고정 5칸뿐이라 이 왕복이 100%를 지나치고 다른
+      값에 서서, 100%로 돌아갈 길이 가운데 버튼밖에 없었다.
+
+      +로 먼저 올라가는 이유: 100%(집중)에서는 스크롤이 없어 −가 잠겨 있다
+      (TC-19). 확대해서 넘치게 만든 뒤라야 −가 살아난다.
     */
-    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
-    await expect(scaleBtn).not.toHaveText('100%')
     await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await expect(scaleBtn).not.toHaveText('100%')
+    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
     await expect(scaleBtn).toHaveText('100%')
     await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
   })
@@ -596,7 +620,8 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     await expect(liveRegion).toContainText('100%') // 기본은 화면에 들어차는 축척 = 100%.
 
     const beforeText = await liveRegion.textContent()
-    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
+    // 100%에서는 −가 잠겨 있으므로(스크롤 없음) +로 축척을 바꾼다.
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
     await page.waitForTimeout(150)
     const afterText = await liveRegion.textContent()
 
@@ -754,6 +779,16 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
 
     await expect(scaleBtn).toHaveText('100%')
     await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
+
+    /*
+      사다리 왕복은 **24시간 모드에서** 잰다. 집중 100%에서는 스크롤이 없어 −가
+      잠기므로(그게 의도다 — TC-19) 아래쪽 끝이라는 것이 존재하지 않는다.
+      24시간 모드는 같은 축척에서도 하루가 다 안 들어가 계속 넘치므로, 양쪽 끝이
+      모두 살아 있어 사다리 자체를 검증할 수 있다.
+    */
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(250)
+    await expect(scaleBtn).toHaveText('100%')
 
     // 바닥까지 걷는다 — 매 걸음 % 가 단조 감소해야 하고, 20걸음 안에 반드시
     // 비활성화(무한 루프 방지 상한)에 닿아야 한다.
@@ -1005,5 +1040,214 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
         `24시간 ${zoomedDayPitch}px vs 집중 ${zoomedFocusPitch}px`,
     ).toBe(zoomedDayPitch)
     await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText(zoomedPercent)
+  })
+
+  /*
+    TC-15 [2026-09-01 요구: "100%랑 114%일 때랑 크기가 조금씩 변하는디"] —
+    축척을 바꿔도 **달력 상자 자체의 높이**는 그대로여야 한다.
+
+    원인은 상자가 max-height였다는 것이다. 내용이 상자보다 짧으면 컨테이너가
+    내용 높이로 줄어드는데, 100%(맞춤)에서는 fitHourPx가 정수로 내림되므로 내용이
+    상자보다 최대 (시간 수 − 1)px 짧다. 한 칸 확대하면 내용이 상자를 넘겨 상자가
+    최대치가 되고, 그 몇 px 차이가 눈에 띄었다.
+  */
+  test('TC-15: 축척(100% ↔ 확대/축소)을 바꿔도 달력 상자 높이가 변하지 않는다', async ({ page }) => {
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    const boxHeight = async () => (await scroller(page).boundingBox()).height
+    const atFit = await boxHeight()
+    expect(atFit, '달력 상자 높이를 재지 못했다').toBeGreaterThan(0)
+
+    for (const label of [/시간 간격 넓게/, /시간 간격 넓게/, /시간 간격 좁게/, /시간 간격 좁게/, /시간 간격 좁게/]) {
+      const btn = page.getByRole('button', { name: label })
+      if (await btn.isDisabled()) continue
+      await btn.click()
+      await page.waitForTimeout(200)
+      const percent = await page.getByRole('button', { name: /세로 축척/ }).textContent()
+      expect(await boxHeight(), `축척 ${percent}에서 상자 높이가 달라졌다`).toBe(atFit)
+    }
+  })
+
+  /*
+    TC-16 [2026-09-01 요구: "집중→24시로 변환할 때 지금 보고 있는 화면에
+    맞춰졌으면 좋겠어"] — 모드를 바꿔도 화면 맨 위에 있던 **시각**이 유지돼야 한다.
+
+    예전에는 24시간으로 가면 무조건 8시로 감았다. 그래서 오후를 보다 토글하면
+    아침으로 튕겼다. 여기서는 24시간 모드에서 한참 아래(오후)로 스크롤한 뒤
+    집중 → 24시간을 오가며 맨 윗 시각이 보존되는지 잰다.
+  */
+  test('TC-16: 모드를 바꿔도 화면 맨 위의 시각이 유지된다', async ({ page }) => {
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    // 집중 모드에서 아래로 스크롤할 여지를 만들기 위해 한 칸 확대한다.
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await page.waitForTimeout(200)
+
+    const el = scroller(page)
+    await el.evaluate((node) => {
+      node.scrollTop = Math.round((node.scrollHeight - node.clientHeight) / 2)
+    })
+    await page.waitForTimeout(150)
+    const before = await el.evaluate((node) => node.scrollTop)
+    expect(before, '스크롤할 여지가 없어 이 케이스가 의미를 잃었다').toBeGreaterThan(0)
+
+    // 집중 → 24시간: 범위 시작이 앞당겨지므로 같은 시각을 유지하려면 스크롤이
+    // 그만큼 더 내려가 있어야 한다.
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(300)
+    const after = await el.evaluate((node) => node.scrollTop)
+
+    expect(
+      after,
+      `24시간으로 바꿨을 때 맨 윗 시각이 유지돼야 한다(집중 scrollTop ${before} → 24시간 ${after}). ` +
+        `예전처럼 8시로 되감으면 이 값이 훨씬 작아진다.`,
+    ).toBeGreaterThan(before)
+  })
+
+  /*
+    TC-17 [2026-09-01 요구: "블럭 클릭했을 때 그 블럭으로 포커싱되는 기능"] —
+    블록을 누르면 **하이라이트 링이 실제로 뜬다**.
+
+    TC-06은 스크롤만 확인한다. 링이 뜨는지는 별개이고(오너 질문: "블록 포커싱
+    되는 거 맞아?"), 링은 focusRequest가 그 블록을 가리키는 동안만 렌더되므로
+    존재 여부로 곧장 잴 수 있다. 링을 내리는 것까지 확인한다 — 하이라이트는
+    선택 상태가 아니라 한 번의 대답이라, 남아 있으면 그것대로 결함이다.
+  */
+  test('TC-17: 블록을 누르면 하이라이트 링이 떴다가 사라진다', async ({ page }) => {
+    await mockPlanBackend(page, {
+      blocks: [
+        {
+          planBlockId: 101,
+          blockType: 'TASK',
+          title: 'E2E 포커스 링 테스트',
+          status: 'PLANNED',
+          startAt: (weekStartDate) => `${weekStartDate}T10:00:00`,
+          endAt: (weekStartDate) => `${weekStartDate}T11:00:00`,
+        },
+      ],
+    })
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    const block = page.getByRole('button', { name: /E2E 포커스 링 테스트/ })
+    const ring = block.locator('span.ring-2.ring-focus-ring')
+
+    await expect(ring, '누르기 전에는 링이 없어야 한다').toHaveCount(0)
+
+    await block.click()
+    await expect(ring, '누르면 그 블록에 링이 떠야 한다').toHaveCount(1)
+    // 눌린 블록이 키보드 포커스도 받는다 — 검토 패널 경로와 같은 처리다.
+    await expect(block).toBeFocused()
+
+    // FOCUS_HIGHLIGHT_MS(900ms) 뒤에는 스스로 내려간다.
+    await expect(ring, '하이라이트는 잠시 뒤 스스로 사라져야 한다').toHaveCount(0, {
+      timeout: 3000,
+    })
+  })
+
+  /*
+    TC-18 [오너 보고 2026-09-01: "검토에서 대상항목 눌러도 포커싱이 안 되네 —
+    이 항목의 대상 블록을 찾을 수 없다고 떠"] — **요일 수준 규칙**도 그 요일의
+    문제 블록으로 포커싱돼야 한다.
+
+    계약(openapi ValidationIssue)상 `planBlockId`는 nullable이고, 가용 시간 밖
+    배치(V4)·초과(V3)는 weekday만 낸다. 그래서 예전에는 그 항목이 언제나 막다른
+    길이었다. 여기서는 **계약 그대로**(planBlockId 없음, params 없음, weekday만)
+    응답을 만들어, 클라이언트가 그 요일에서 가용 창을 벗어난 TASK를 찾아
+    가리키는지 확인한다.
+  */
+  test('TC-18: 요일 수준 검토 항목(V4)을 누르면 그 요일의 문제 블록이 포커싱된다', async ({
+    page,
+  }) => {
+    await mockPlanBackend(page, {
+      // 월요일 20:00-21:00 — 가용(09-18) 밖 TASK.
+      blocks: [
+        {
+          planBlockId: 101,
+          blockType: 'TASK',
+          title: 'E2E 가용시간 밖 블록',
+          status: 'PLANNED',
+          startAt: (weekStartDate) => `${weekStartDate}T20:00:00`,
+          endAt: (weekStartDate) => `${weekStartDate}T21:00:00`,
+        },
+      ],
+      issues: [
+        {
+          validationIssueId: null,
+          ruleId: 'V4_OUT_OF_AVAILABILITY',
+          severity: 'WARNING',
+          planBlockId: null, // ← 계약대로 블록을 안 준다
+          counterpartId: null,
+          taskId: null,
+          weekday: 'MONDAY',
+          reason: '규칙 V4_OUT_OF_AVAILABILITY에 의해 판정되었습니다',
+          resolutionStatus: 'OPEN',
+        },
+      ],
+    })
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+    // 검증은 디바운스 뒤 실행된다 — 배지가 뜰 때까지 기다린다.
+    const reviewBtn = page.getByRole('button', { name: /검토 열기/ })
+    await expect(reviewBtn).toBeVisible({ timeout: 10000 })
+    await reviewBtn.click()
+
+    /*
+      검토 항목만 잡는다. 그냥 /가용 시간/ 으로 찾으면 축척 버튼의 접근성 이름
+      ("세로 축척 100% — 가용 시간대가 …")까지 걸려 엉뚱한 것을 누른다 — 실제로
+      한 번 그렇게 걸렸다. 패널의 리스트 항목(<li> 안의 버튼)으로 한정한다.
+    */
+    const row = page.locator('li > button').filter({ hasText: /가용 시간/ }).first()
+    await expect(row, '검토 패널에 V4 항목이 있어야 한다').toBeVisible({ timeout: 10000 })
+    await row.click()
+
+    // 대상 블록이 포커스 링을 받아야 한다 — "찾을 수 없습니다" 토스트가 아니라.
+    const block = page.getByRole('button', { name: /E2E 가용시간 밖 블록/ })
+    await expect(block.locator('span.ring-2.ring-focus-ring'), '그 요일의 문제 블록이 포커싱돼야 한다').toHaveCount(1)
+    await expect(page.getByText('이 항목의 대상 블록을 찾을 수 없습니다')).toHaveCount(0)
+  })
+
+  /*
+    TC-19 [2026-09-01 요구: "달력 스크롤 없을 때는(예: 집중모드 100%일 때)
+    100%보다 작아질 필요는 없을 것 같기도 해"] — 넘치지 않으면 − 가 잠긴다.
+
+    상자 높이가 고정이므로(TC-15) 이미 다 보이는 상태에서 더 줄이면 블록만
+    작아지고 아래 빈 공간이 늘 뿐이다. 반대로 넘치는 상태에서는 줄이는 것이
+    실제로 더 보이게 하므로 열려 있어야 한다 — 24시간 모드가 그 경우다.
+  */
+  test('TC-19: 스크롤이 없으면 − 가 잠기고, 넘치면 다시 열린다', async ({ page }) => {
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    const scaleBtn = page.getByRole('button', { name: /세로 축척/ })
+    const minus = page.getByRole('button', { name: /시간 간격 좁게/ })
+
+    // 집중 100% — 스크롤 없음(TC-01) → 잠김.
+    await expect(scaleBtn).toHaveText('100%')
+    await expect(minus, '집중 100%에서는 더 줄일 이유가 없다').toBeDisabled()
+
+    // 한 칸 확대하면 넘치므로 다시 열린다(되돌아올 길이 막히면 안 된다).
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await page.waitForTimeout(200)
+    await expect(minus, '확대해 넘치면 줄이는 것이 의미를 갖는다').not.toBeDisabled()
+
+    // 24시간 모드는 같은 100%에서도 넘치므로 열려 있어야 한다.
+    await scaleBtn.click() // 100%로 복귀
+    await page.waitForTimeout(200)
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(250)
+    await expect(scaleBtn).toHaveText('100%')
+    await expect(minus, '24시간 모드는 100%에서도 넘치므로 줄일 수 있어야 한다').not.toBeDisabled()
   })
 })

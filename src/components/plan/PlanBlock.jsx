@@ -115,6 +115,9 @@ export function PlanBlock({
   // (PLAN-23). The value itself is meaningless — only the change matters, which
   // is what lets the same block be re-focused repeatedly.
   focusToken = null,
+  // 'announce'(검토 패널이 지목) | 'reveal'(사용자가 블록을 눌러 확인)
+  focusIntent = 'announce',
+  onFocusRequest,
   onPointerDown,
   onOpenMenu,
   onNudge,
@@ -155,8 +158,18 @@ export function PlanBlock({
     if (focusToken == null) return
     const el = rootRef.current
     if (!el) return
+    /*
+      의도에 따라 두 갈래다.
+        'announce' — 패널이 "이 블록을 봐라"고 지목한 경우. 화면 한가운데로
+                     끌어오고 한 번 흔들어 시선을 끈다.
+        'reveal'   — 사용자가 그 블록을 직접 누른 경우. 어디 있는지 이미 알고
+                     누른 것이므로 화면을 크게 움직이면 오히려 방해다. 잘려 있을
+                     때만 드러날 만큼(`nearest`) 옮기고 흔들지 않는다.
+      하이라이트 링은 둘 다 준다 — "이 블록이다"라는 대답은 양쪽 모두에 필요하다.
+    */
+    const announce = focusIntent === 'announce'
     el.scrollIntoView({
-      block: 'center',
+      block: announce ? 'center' : 'nearest',
       inline: 'nearest',
       behavior: reducedMotion ? 'auto' : 'smooth',
     })
@@ -165,8 +178,9 @@ export function PlanBlock({
     // PLAN-23 shake: one horizontal wobble on the block, layered on the same
     // focusToken pulse-ring request (no separate state or timer). Skipped
     // under reduced motion — a lateral wobble is a vestibular trigger and has
-    // no static substitute, so we simply don't run it.
-    if (reducedMotion) return
+    // no static substitute, so we simply don't run it — and skipped for
+    // 'reveal', which is a quiet answer to a click, not an announcement.
+    if (reducedMotion || !announce) return
 
     // 결정된 동작: the block should wobble AFTER it finishes sliding into
     // view, not mid-flight. scrollIntoView({behavior:'smooth'}) is async and
@@ -200,7 +214,7 @@ export function PlanBlock({
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [focusToken, reducedMotion])
+  }, [focusToken, reducedMotion, focusIntent])
 
   // Detail card for short blocks: anchored to the block's on-screen rect and
   // rendered in a portal so the grid's overflow can't clip it.
@@ -306,24 +320,17 @@ export function PlanBlock({
       }
       onClick={() => {
         /*
-          2026-08-31 ("배치된 블록 누르면 그쪽으로 바로 스크롤 되어도
-          괜찮을 것 같아"). 격자가 한 화면에 다 안 들어가는 경우 — 24시간
-          모드나, 가시 범위가 너무 넓어 맞춤 축척이 바닥(FIT_HOUR_PX_MIN)에 닿은
-          주 — 위아래 가장자리의 블록은 반쯤 잘린 채로 보인다. 그 조각을 누르면
-          전체가 드러나도록 최소한만 스크롤한다.
+          블록을 누르면 그 블록에 **포커스**를 준다 — 검토 패널이 항목을 지목했을
+          때와 같은 하이라이트 링을 한 번 주고, 잘려 있으면 드러날 만큼 스크롤한다
+          (2026-09-01 요구: "블럭 클릭했을 때 그 블럭으로 포커싱되는 기능도 넣어줘.
+          검토에서 막힌 거 누르면 포커싱되는 것처럼, 흔들리지만 않고 비슷하게").
 
-          `block:'nearest'`가 핵심이다: 이미 통째로 보이는 블록에는 **아무 일도
-          일어나지 않는다**(PLAN-23의 'center'와 다른 점 — 그쪽은 패널이 "이
-          블록을 봐라"고 지목한 경우라 화면 한가운데로 끌어오는 게 맞다). 그래서
-          맞춤 축척으로 전부 보이는 평소에는 이 핸들러가 사실상 없는 것과 같고,
-          드래그 직후 따라오는 click 에서도 (블록이 커서 아래 = 보이는 상태라)
-          조용하다.
+          여기서 직접 스크롤하지 않고 페이지에 요청만 보내는 이유: 링을 켜고 끄는
+          타이머를 페이지가 하나로 들고 있기 때문이다. 두 경로가 따로 스크롤하고
+          따로 타이머를 걸면 하이라이트가 엇갈려 남는다. 실제 동작(어디로 스크롤할지,
+          흔들지 말지)은 요청에 실린 intent로 갈린다 — 위 focusToken 이펙트 참고.
         */
-        rootRef.current?.scrollIntoView({
-          block: 'nearest',
-          inline: 'nearest',
-          behavior: reducedMotion ? 'auto' : 'smooth',
-        })
+        onFocusRequest?.()
       }}
       onMouseEnter={openDetail}
       onMouseLeave={closeDetail}

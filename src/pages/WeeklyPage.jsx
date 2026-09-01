@@ -48,7 +48,12 @@ import {
 } from '../features/plan/usePlanHistory'
 import { usePlacementDrag } from '../features/plan/usePlacementDrag'
 import { useHourScale } from '../features/plan/useHourScale'
-import { fitHourPx, resolveGridSlot, visibleRange } from '../features/plan/planGeometry'
+import {
+  availabilityForColumn,
+  fitHourPx,
+  resolveGridSlot,
+  visibleRange,
+} from '../features/plan/planGeometry'
 import { findFirstFreeSlot } from '../features/plan/planPlacement'
 import { getPopoverAnchorStyle } from '../utils/popoverPosition'
 import {
@@ -427,6 +432,15 @@ function WeeklyPage() {
   )
   const hourScale = useHourScale({ fitHourPx: fitPxPerHour })
 
+  /*
+    지금 축척에서 격자가 상자를 넘치는가 — 축소 버튼을 열어 둘지의 기준이다.
+    `range`(지금 그리는 범위)로 재는 것이 맞다: 24시간 모드는 같은 축척에서도
+    넘치므로 거기서는 축소가 여전히 쓸모 있다.
+  */
+  const gridOverflows =
+    gridMaxHeight == null ||
+    ((range.endMinutes - range.startMinutes) / 60) * hourScale.hourPx > gridMaxHeight - dayHeaderPx
+
   // --- validation (ST-F1-05: PLAN-21~28) ------------------------------------
 
   // A past week is read-only, so there is nothing to validate and nothing to save.
@@ -497,8 +511,61 @@ function WeeklyPage() {
     would either swallow the focus move or leave focus inside an overlay covering
     the block the user just asked to see.
   */
+  /*
+    검토 항목이 가리키는 블록을 찾는다.
+
+    바로 찾히지 않는 경우가 있다 — 계약상 `ValidationIssue.planBlockId`는
+    nullable이고, **가용 시간 밖 배치(V4)·가용 시간 초과(V3)는 요일 수준 규칙이라
+    블록을 아예 안 준다**(openapi의 weekday 필드 설명, planFixtures의 V4 주석).
+    그래서 예전에는 그 항목을 누르면 "대상 블록을 찾을 수 없습니다"만 뜨는
+    막다른 길이었다(오너 보고, 2026-09-01).
+
+    이제 요일만 아는 항목도 그 요일에서 문제 블록을 찾아 가리킨다. 순서가 중요하다 —
+    **추측을 최대한 늦게** 한다:
+      ① 서버가 직접 지목한 블록(targetBlockIds)
+      ② 서버가 서술에 실어 준 블록 제목(params.blockTitle) — 추측이 아니라
+         서버가 "무엇을 두고 한 말인지" 밝힌 것이다
+      ③ 규칙별로 좁히기 — V4는 그 요일에서 가용 창을 벗어난 TASK
+      ④ 그래도 못 고르면 그 요일의 첫 TASK
+
+    ③④는 **클라이언트가 서버 판정을 다시 추론하는 것**이라 원리상 어긋날 수 있다
+    (오너에게 그 위험을 밝히고 이 방식으로 결정). 그래서 ①②를 앞에 두고, ③은
+    규칙을 아는 경우로만 한정하며, 아무것도 못 찾으면 종전대로 조용히 알린다.
+  */
+  const resolveIssueTarget = (issue) => {
+    const direct = blocks.find((b) =>
+      (issue.targetBlockIds ?? []).some((id) => String(id) === String(b.planBlockId)),
+    )
+    if (direct) return direct
+
+    const dayIndex = WEEKDAY_KEYS.indexOf(issue.weekday)
+    if (dayIndex < 0) return null
+    const dayISO = days[dayIndex]
+    const onDay = blocks.filter((b) => dateOf(b.startAt) === dayISO)
+    if (onDay.length === 0) return null
+
+    const titled = issue.params?.blockTitle
+      ? onDay.find((b) => b.title === issue.params.blockTitle)
+      : null
+    if (titled) return titled
+
+    if (issue.code === 'V4_OUT_OF_AVAILABILITY') {
+      const win = availabilityForColumn(dayIndex, availability)
+      const outside = onDay.find(
+        (b) =>
+          b.blockType === 'TASK' &&
+          (!win ||
+            minutesOfDay(b.startAt) < win.startMinutes ||
+            minutesOfDay(b.endAt) > win.endMinutes),
+      )
+      if (outside) return outside
+    }
+
+    return onDay.find((b) => b.blockType === 'TASK') ?? onDay[0]
+  }
+
   const handleSelectIssue = (issue) => {
-    const target = blocks.find((b) => issue.targetBlockIds.includes(b.planBlockId))
+    const target = resolveIssueTarget(issue)
     setReviewOpen(false)
     if (!target) {
       toast({ tone: 'info', message: '이 항목의 대상 블록을 찾을 수 없습니다' })
@@ -514,13 +581,42 @@ function WeeklyPage() {
 
     // A counter, not the id: re-selecting the SAME block must retrigger the
     // scroll/focus/pulse, which only a changed value can do.
-    setFocusRequest((prev) => ({ planBlockId: target.planBlockId, token: (prev?.token ?? 0) + 1 }))
+    setFocusRequest((prev) => ({
+      planBlockId: target.planBlockId,
+      token: (prev?.token ?? 0) + 1,
+      // 'announce' — 패널이 "이 블록을 봐라"고 지목한 경우다. 화면 한가운데로
+      // 끌어오고 흔들어서 시선을 끈다.
+      intent: 'announce',
+    }))
 
     // The highlight is an ANNOUNCEMENT, not a selection state, so it has to be
     // taken back down: the ring is rendered as long as focusRequest names this
     // block, and a CSS animation reverts to its base style when it ends rather
     // than staying at its final keyframe. Clearing here covers both the animated
     // and the reduced-motion (static ring) paths with one rule.
+    clearTimeout(focusClearTimerRef.current)
+    focusClearTimerRef.current = setTimeout(() => setFocusRequest(null), FOCUS_HIGHLIGHT_MS)
+  }
+
+  /*
+    블록을 누르면 그 블록에 포커스를 준다 (2026-09-01 요구: "블럭 클릭했을 때 그
+    블럭으로 포커싱되는 기능도 넣어줘. 검토에서 막힌 거 누르면 포커싱되는 것처럼,
+    흔들리지만 않고 비슷하게").
+
+    검토 패널 경로(handleSelectIssue)와 **같은 메커니즘**을 쓰되 의도만 다르다 —
+    'reveal'은 흔들지 않고, 화면 한가운데로 끌어오지도 않는다(이미 보이는 블록을
+    누른 것뿐인데 화면이 크게 움직이면 오히려 방해다). 잘려 있으면 드러날 만큼만
+    스크롤하고 하이라이트 링만 한 번 준다.
+
+    상태·타이머를 새로 만들지 않고 focusRequest 하나를 나눠 쓰는 이유: 두 경로가
+    동시에 살아 있으면 링을 내리는 타이머가 서로 엇갈려 하이라이트가 남는다.
+  */
+  const handleFocusBlock = (block) => {
+    setFocusRequest((prev) => ({
+      planBlockId: block.planBlockId,
+      token: (prev?.token ?? 0) + 1,
+      intent: 'reveal',
+    }))
     clearTimeout(focusClearTimerRef.current)
     focusClearTimerRef.current = setTimeout(() => setFocusRequest(null), FOCUS_HIGHLIGHT_MS)
   }
@@ -1364,7 +1460,17 @@ function WeeklyPage() {
           onZoomIn={hourScale.zoomIn}
           onZoomOut={hourScale.zoomOut}
           canZoomIn={hourScale.canZoomIn}
-          canZoomOut={hourScale.canZoomOut}
+          /*
+            스크롤이 없으면 더 줄일 수 없다 (2026-09-01 요구: "달력 스크롤 없을
+            때는(예: 집중모드 100%일 때) 100%보다 작아질 필요는 없을 것 같기도
+            해"). 상자 높이가 고정이므로, 이미 다 보이는 상태에서 더 줄이면
+            블록만 작아지고 아래 빈 공간이 늘 뿐 얻는 게 없다. 넘칠 때만 —
+            즉 줄여서 실제로 더 보이게 되는 상황에서만 — 열어 둔다.
+
+            아직 측정 전(gridMaxHeight null)이면 잠그지 않는다: 모르는 채로
+            버튼을 막는 것보다 열어 두는 편이 안전하다.
+          */
+          canZoomOut={hourScale.canZoomOut && gridOverflows}
         />
 
         <div ref={gridWrapperRef} className="relative">
@@ -1403,13 +1509,14 @@ function WeeklyPage() {
             onBlockDropOutside={handleBlockDropOutside}
             violationsByBlockId={violationsByBlockId}
             focusRequest={focusRequest}
+            onFocusBlock={handleFocusBlock}
             fixedSchedules={fixedSchedulesQuery.data ?? []}
             onOpenFixedMenu={openFixedMenu}
-            /* 달력 상자 높이는 이제 실측치다 — 예전의 `62vh` 상수는 격자가
-               그리는 내용의 높이와 아무 관계가 없어서 늘 조금씩 잘렸다(측정
-               코드의 주석 참고). 아직 측정 전이면 undefined 를 넘겨
+            /* 달력 상자 높이는 이제 실측치이고, max-height가 아니라 **고정
+               높이**다(CalendarGrid의 DEFAULT_BODY_HEIGHT 주석 — 축척을 바꿔도
+               상자가 안 변해야 한다). 아직 측정 전이면 undefined 를 넘겨
                CalendarGrid 자신의 기본값으로 첫 프레임을 그린다. */
-            bodyMaxHeight={gridMaxHeight == null ? undefined : `${gridMaxHeight}px`}
+            bodyHeight={gridMaxHeight == null ? undefined : `${gridMaxHeight}px`}
             onHeaderHeight={setDayHeaderPx}
           />
         </div>
