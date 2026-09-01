@@ -556,24 +556,44 @@ function WeeklyPage() {
     const onDay = blocks.filter((b) => dateOf(b.startAt) === dayISO)
     if (onDay.length === 0) return null
 
-    const titled = issue.params?.blockTitle
-      ? onDay.find((b) => b.title === issue.params.blockTitle)
-      : null
-    if (titled) return titled
+    /*
+      **규칙으로 먼저 좁히고, 좁혀진 후보 안에서 제목으로 고른다.** 순서가 중요하다
+      (리뷰 지적, 2026-09-01): 예전에는 제목 매칭이 규칙보다 먼저 반환했는데, 같은
+      날 같은 제목의 TASK가 둘(하나는 가용 창 안, 하나는 밖)이면 배열에서 먼저 오는
+      쪽 — 즉 멀쩡한 블록 — 을 가리키고 정작 위반한 블록은 그냥 지나쳤다. 규칙이
+      바로 그 모호함을 풀라고 있는데 제목이 가로챈 셈이다.
 
+      제목은 서버가 준 정보이므로 여전히 규칙보다 신뢰도가 높다 — 다만 그것은
+      **후보를 좁힌 뒤 그 안에서** 쓸 때의 이야기다.
+    */
+    let candidates = onDay
     if (issue.code === 'V4_OUT_OF_AVAILABILITY') {
       const win = availabilityForColumn(dayIndex, availability)
-      const outside = onDay.find(
+      const outside = onDay.filter(
         (b) =>
           b.blockType === 'TASK' &&
           (!win ||
             minutesOfDay(b.startAt) < win.startMinutes ||
             minutesOfDay(b.endAt) > win.endMinutes),
       )
-      if (outside) return outside
+      if (outside.length > 0) candidates = outside
     }
 
-    return onDay.find((b) => b.blockType === 'TASK') ?? onDay[0]
+    const titled = issue.params?.blockTitle
+      ? candidates.find((b) => b.title === issue.params.blockTitle)
+      : null
+    if (titled) return titled
+
+    /*
+      ⚠ 여기까지 와서 고르는 것은 **가장 약한 추측**이다. 특히 V3_CAPACITY_EXCEEDED는
+      그 요일 전체의 합이 가용 시간을 넘었다는 뜻이라 원인인 단일 블록이라는 것이
+      애초에 없다(planFixtures의 그 규칙 주석도 같은 말을 한다). 그런데도 하나를
+      가리키는 이유는, 아무것도 안 가리키면 그 항목이 눌러도 아무 일 없는 막다른
+      길이 되기 때문이다(그게 원래 보고된 문제였다). 즉 이 반환값은 "원인"이 아니라
+      "그 요일을 보라"는 뜻에 가깝다 — 항목의 문구가 실제 사유를 설명하고 있으므로
+      사용자가 이것을 원인으로 오독할 여지는 그 문구가 막는다.
+    */
+    return candidates.find((b) => b.blockType === 'TASK') ?? candidates[0]
   }
 
   const handleSelectIssue = (issue) => {

@@ -39,18 +39,62 @@ function addDaysISO(iso, days) {
   return d.toISOString().slice(0, 10)
 }
 
+/*
+  [W6 QA, 2026-09-01] TC-23용 — planTime.js의 currentWeekStartISO()/weekStartOf()를
+  **로컬 시간·월요일 시작**으로 그대로 복제한다(UTC로 재면 실제 앱이 계산하는 값과
+  자정 근처에서 하루 어긋날 수 있다). Node(이 테스트 러너)와 Chromium(Playwright)이
+  같은 Windows 머신·같은 타임존을 쓰므로 이 값은 WeeklyPage가 마운트 시 잡는 첫
+  주와 항상 일치한다 — 어느 GET이 먼저 도착하는지(prefetch 순서)에 기대지 않는다.
+*/
+function currentWeekStartISOLocal() {
+  const now = new Date()
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const offset = (d.getDay() - 1 + 7) % 7 // weekStartsOn=1(월요일), planTime.js와 동일.
+  d.setDate(d.getDate() - offset)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 /**
  * 이 화면이 마운트 시점에 필요로 하는 모든 GET을 모킹한다(auth·onboarding·availability·
  * weekly-plans·fixed-schedules·tasks·notifications). PATCH /plan-blocks/{id}는 호출된
  * 본문을 그대로 흘려 받도록 onPatch 콜백을 제공할 수 있다(TC-05용).
  *
+ * [W6 QA, 2026-09-01 상태 추가] 리드 지적 — 예전엔 `blocks`를 **요청된 주가
+ * 무엇이든 그대로** 되돌려줘서(그 주의 날짜로 스탬프만 새로 찍음), 주 이동
+ * (targetWeekStartDate)이 서버에 실제로 반영됐는지 GET으로는 아무것도 구별할
+ * 수 없었다(TC-22는 PATCH 요청 본문만 봤다). 이제 주차별 저장소(`weekBlocks`)를
+ * 두고 PATCH가 `targetWeekStartDate`를 주면 그 저장소 사이에서 블록을 옮긴다
+ * (실서버 계약과 같은 의미 — planApi.js의 patchBlock 주석·PlanBlockService의
+ * get-or-create 참고). `moveIgnoresTargetWeek: true`를 주면 그 이동을 **일부러
+ * 무시**해 옛(수정 전) 서버 동작을 흉내 낸다 — TC-23의 음성 대조 전용 스위치다.
+ *
  * @param {import('@playwright/test').Page} page
- * @param {{ blocks?: object[], availability?: object[], onPatch?: (body: any) => void }} [opts]
+ * @param {{ blocks?: object[], availability?: object[], onPatch?: (body: any) => void, moveIgnoresTargetWeek?: boolean }} [opts]
  */
 async function mockPlanBackend(
   page,
-  { blocks = [], availability = WEEKDAY_AVAILABILITY, onPatch, issues = null } = {},
+  { blocks = [], availability = WEEKDAY_AVAILABILITY, onPatch, issues = null, moveIgnoresTargetWeek = false } = {},
 ) {
+  // 초기 배치 주 = WeeklyPage가 마운트 시 currentWeekStartISO()로 잡는 바로 그 주
+  // (currentWeekStartISOLocal()이 같은 알고리즘을 복제한다). 어느 GET이 먼저
+  // 도착하든(현재 주 vs ±1주 프리페치) 무관하다 — 저장소는 요청된 주 문자열로만
+  // 찾으므로 순서에 기대지 않는다.
+  const weekBlocks = new Map([[currentWeekStartISOLocal(), blocks.map((b) => ({ ...b }))]])
+  const bucketFor = (weekStartDate) => {
+    if (!weekBlocks.has(weekStartDate)) weekBlocks.set(weekStartDate, [])
+    return weekBlocks.get(weekStartDate)
+  }
+  const removeById = (planBlockId) => {
+    for (const [week, arr] of weekBlocks) {
+      const idx = arr.findIndex((b) => b.planBlockId === planBlockId)
+      if (idx !== -1) return { item: arr.splice(idx, 1)[0], week }
+    }
+    return null
+  }
+
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace(/^\/api\/v1/, '')
@@ -75,6 +119,7 @@ async function mockPlanBackend(
     }
     if (path === '/weekly-plans' && method === 'GET') {
       const weekStartDate = url.searchParams.get('weekStartDate')
+      const arr = bucketFor(weekStartDate)
       // planApi.js getWeek/normalizeWeek: `plan`이 null이 아니어야 get-or-create(POST)
       // 분기를 안 타므로, 매 요청(현재 주 + 앞뒤 프리페치 주 3건)에 항상 채워서 응답한다.
       return route.fulfill({
@@ -89,7 +134,7 @@ async function mockPlanBackend(
               version: 1,
               totalPlannedMinutes: 0,
             },
-            blocks: blocks.map((b) => ({ ...b, startAt: b.startAt(weekStartDate), endAt: b.endAt(weekStartDate) })),
+            blocks: arr.map((b) => ({ ...b, startAt: b.startAt(weekStartDate), endAt: b.endAt(weekStartDate) })),
             unassignedCount: 0,
             validationSummary: { blockCount: 0, warningCount: 0 },
           },
@@ -99,6 +144,15 @@ async function mockPlanBackend(
     if (path.startsWith('/plan-blocks/') && method === 'PATCH') {
       const body = route.request().postDataJSON()
       onPatch?.(body)
+      const planBlockId = Number(path.slice('/plan-blocks/'.length))
+      const found = removeById(planBlockId)
+      if (found) {
+        // moveIgnoresTargetWeek(TC-23 음성 대조 전용): 옛 서버처럼 targetWeekStartDate를
+        // 무시하고 항상 원래 주에 그대로 둔다 — 그러면 어느 주로 재조회해도 여전히
+        // 보이거나(원래 주) 안 보여야 할 새 주에서는 못 찾는, 옛 결함이 재현된다.
+        const targetWeek = moveIgnoresTargetWeek ? found.week : body.targetWeekStartDate || found.week
+        bucketFor(targetWeek).push(found.item)
+      }
       return route.fulfill({ status: 200, json: { data: { planBlockId: 101 } } })
     }
     if (path.endsWith('/validations') && method === 'POST') {
@@ -1461,6 +1515,87 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     await follow.click()
     await page.waitForTimeout(400)
     await expect(page.getByText('다음 주로 옮겼습니다')).toHaveCount(0)
+    } finally {
+      await context.close()
+    }
+  })
+
+  /*
+    TC-23 [W6 QA, 2026-09-01, 리드가 지적한 커버리지 구멍] — TC-22는 PATCH 본문에
+    targetWeekStartDate가 실리는지만 본다. 오너가 실제로 겪은 증상("다음 주로
+    가도 블록이 없다")은 그 값이 서버에 **실제로 반영되는지**를 요구하는데, 예전
+    mockPlanBackend는 blocks를 요청된 주가 무엇이든 그대로 돌려줘서 그걸 구별할
+    길이 없었다(위 mockPlanBackend 헤더 주석 참고). 이제 주차별 저장소가 있으므로
+    "옮긴 뒤 원래 주로 되짚어 가면 거기엔 없고, 다음 주에는 있다"를 서버 재조회
+    (GET, react-query invalidate 이후)까지 포함해 잰다.
+
+    "이전 주" 내비게이션(WeekNav.jsx aria-label="이전 주")으로 원래 주로 돌아가는
+    것이 핵심이다 — "보러 가기"만으로 다음 주에 블록이 보이는 것만 확인하면 그건
+    useMoveBlock의 낙관적 캐시(즉시 쓰기)만 재는 셈이라, 목이 주차를 구별 못 해도
+    (블록을 아무 주에나 돌려줘도) 그대로 통과한다. 원래 주로 되짚어 가 "거기엔
+    없다"까지 봐야 목이 실제로 주차를 구별하는지 검증된다.
+
+    음성 대조 실측(2026-09-01) — mockPlanBackend에 `moveIgnoresTargetWeek: true`를
+    잠깐 넣어(옛 서버처럼 targetWeekStartDate를 무시) 이 테스트를 그대로 1회
+    실행하고 즉시 되돌렸다. 예상대로 **실패**했다 — 다만 마지막 단언(원래 주에
+    없어야 한다)이 아니라 그 앞, "다음 주 화면에 블록이 보여야 한다"에서 먼저
+    막혔다(`getByRole('button', {name: /E2E 주 이동 재조회 블록/})` 타임아웃,
+    5000ms). 이유: 목이 이동을 무시하면 블록이 원래 주 저장소에 그대로 남고
+    다음 주 저장소는 계속 비어 있으므로, "보러 가기"로 다음 주에 가는 순간
+    블록이 아예 안 보인다 — 오너가 보고한 증상("다음 주로 가도 블록이 없다")과
+    같은 모양의 실패다. 즉 이 테스트는 옛 동작에서 확실히 잡히고, 통과한
+    상태(위 실행)에서는 실제로 무언가를 검증하고 있다는 뜻이다.
+  */
+  test('TC-23: 다음 주로 이동한 블록은 재조회해도 그 주에만 있고 원래 주에는 없다', async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const page = await context.newPage()
+    try {
+      await mockPlanBackend(page, {
+        blocks: [
+          {
+            planBlockId: 101,
+            blockType: 'TASK',
+            title: 'E2E 주 이동 재조회 블록',
+            status: 'PLANNED',
+            startAt: (weekStartDate) => `${weekStartDate}T10:00:00`,
+            endAt: (weekStartDate) => `${weekStartDate}T11:00:00`,
+          },
+        ],
+      })
+      await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+      await page.evaluate(() => document.fonts.ready)
+
+      const block = page.getByRole('button', { name: /E2E 주 이동 재조회 블록/ })
+      await expect(block).toBeVisible()
+
+      await block.click({ button: 'right' })
+      await page.locator('[role="menu"]').getByRole('button', { name: '다음 주로 이동' }).click()
+
+      const follow = page.getByRole('button', { name: '보러 가기' })
+      await expect(follow).toBeVisible()
+      await follow.click()
+
+      // 다음 주 화면 — 낙관적 캐시 기준으로는 이미 보여야 한다.
+      await expect(block).toBeVisible()
+
+      // useMoveBlock의 .finally()가 두 주 모두 invalidateQueries를 거니, 그 서버
+      // 재조회가 실제로 끝날 시간을 준다 — 낙관적 캐시만 보고 지나가면 아래 "원래
+      // 주로 되짚기" 단계 전에 이미 이 케이스의 목적(서버 재조회 확인)을 잃는다.
+      await page.waitForLoadState('networkidle')
+      await page.waitForTimeout(300)
+      await expect(block, '서버 재조회 후에도 다음 주에는 블록이 있어야 한다').toBeVisible()
+
+      // 원래 주로 되짚어 간다 — 상태 없는 목이었다면 구별할 수 없던 지점이다.
+      await page.getByRole('button', { name: '이전 주', exact: true }).click()
+      await page.waitForLoadState('networkidle')
+      await page.waitForTimeout(300)
+
+      await expect(
+        block,
+        '원래 주로 돌아오면 그 블록이 더는 없어야 한다(다음 주로 실제로 옮겨졌다는 증거)',
+      ).toHaveCount(0)
     } finally {
       await context.close()
     }

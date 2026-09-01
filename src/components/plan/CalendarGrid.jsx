@@ -35,8 +35,15 @@ import {
   왜 변했었나: max-height일 때 내용이 상자보다 짧으면 컨테이너가 내용 높이로
   줄어든다. 100%(맞춤)에서는 fitHourPx가 정수로 **내림**되므로 내용이 상자보다
   최대 (시간 수 − 1)px 짧고, 한 칸 확대하면 내용이 상자를 넘겨 상자가 최대치로
-  커진다 — 그 몇 px이 "조금씩 변하는" 정체였다. 높이를 고정하면 남는 몇 px은
-  아래쪽 빈 공간이 되고 상자는 그대로다.
+  커진다 — 그 몇 px이 "조금씩 변하는" 정체였다. 높이를 고정하면 그만큼이 아래쪽
+  빈 공간이 되고 상자는 그대로다.
+
+  ⚠ 남는 공간이 늘 "몇 px"인 것은 아니다(리뷰 지적, 2026-09-01). 가용 창이 아주
+  짧으면(예: 2~3시간) 맞춤 축척이 FIT_HOUR_PX_MAX(80)에 걸려 더 못 커지므로, 내용이
+  상자보다 **수백 px** 짧아져 아래가 크게 빈다. 기능은 안 깨진다 — 드래그·클릭
+  히트테스트는 상자가 아니라 격자 본문 높이를 기준으로 하므로 빈 영역은 아무것도
+  가로채지 않는다. 순수하게 보기의 문제이고, 고정 높이가 주는 안정성(축척을 바꿔도
+  상자가 안 변한다)과 맞바꾼 값이다.
 */
 const DEFAULT_BODY_HEIGHT = '62vh'
 
@@ -322,16 +329,20 @@ export function CalendarGrid({
   const height = rangeHeightPx(range, pxPerMin)
   const ticks = hourTicks(range)
 
-  // In 24h mode, start scrolled to ~8:00 so the working day is visible. Switching
-  // back to focus mode resets to the top — focus mode already begins at the
-  // working hours, so a leftover 24h scroll offset would otherwise push it down.
-  //
-  // 축척(pxPerMin)은 일부러 의존성에 넣지 않고 ref로 읽는다 — 축척이 바뀌었을
-  // 때 할 일은 "8시로 되감기"가 아니라 "보던 자리를 지키기"이고, 그건 바로
-  // 아래 레이아웃 이펙트가 맡는다. 둘 다 반응하면 서로 덮어쓴다.
+  // 축척(pxPerMin)을 아래 스크롤 이펙트가 의존성이 아니라 ref로 읽는 이유:
+  // 축척이 바뀌었을 때 할 일은 "스크롤 되감기"가 아니라 "보던 자리를 지키기"이고,
+  // 그건 그 아래 축척 전용 레이아웃 이펙트가 맡는다. 둘 다 반응하면 서로 덮어쓴다.
   // 렌더 중에 ref를 쓰면 React 19 린트가 막는다(그리고 실제로 위험하다) —
-  // 동기화는 이펙트에서 한다. 아래 스크롤 이펙트보다 먼저 선언해야, 같은
-  // 커밋에서 mode와 축척이 함께 바뀌었을 때 최신 축척으로 계산한다.
+  // 동기화는 이펙트에서 한다.
+  //
+  // ⚠ 정정(리뷰 지적, 2026-09-01): 예전에 여기 "아래 스크롤 이펙트보다 **먼저
+  // 선언**해야 같은 커밋에서 최신 축척으로 계산한다"고 적혀 있었는데 **사실이
+  // 아니다.** 선언 순서는 같은 종류의 이펙트끼리만 순서를 정하고, 아래 스크롤
+  // 보존은 useLayoutEffect라 이 useEffect보다 **항상 먼저** 돈다 — 선언을 어디에
+  // 두든 그 시점의 ref는 이전 렌더의 축척이다. 지금은 기준 창(fitBasisRange)이
+  // mode에 의존하지 않아 "모드와 축척이 같은 커밋에서 함께 바뀌는" 입력 자체가
+  // 없으므로 도달 불가능한 잠복 문제지만, 근거가 틀린 주석을 남겨 두면 다음 사람이
+  // 그 보장을 믿고 코드를 짠다.
   const pxPerMinRef = useRef(pxPerMin)
   useEffect(() => {
     pxPerMinRef.current = pxPerMin
