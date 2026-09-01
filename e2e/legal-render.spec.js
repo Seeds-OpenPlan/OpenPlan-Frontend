@@ -6,6 +6,11 @@ test('개인정보처리방침이 비로그인 상태로 렌더된다', async ({
   await expect(page.getByRole('heading', { name: '개인정보처리방침', level: 1 })).toBeVisible()
   await expect(page.getByRole('heading', { name: /제4조/ })).toBeVisible()
   await expect(page.getByText('이전되지 않는 항목', { exact: false })).toBeVisible()
+
+  // 국외 이전 고지는 «이전받는 자» 만으로는 요건을 못 채운다 — 국가가 함께 있어야 한다.
+  // 인프라가 국내로 옮겨가면 이 단언이 먼저 깨져서 방침을 같이 고치게 만든다.
+  await expect(page.getByText('이전되는 국가: 일본', { exact: false })).toBeVisible()
+  await expect(page.getByText('이전되는 국가: 미국', { exact: false })).toBeVisible()
 })
 
 test('이용약관이 비로그인 상태로 렌더된다', async ({ page }) => {

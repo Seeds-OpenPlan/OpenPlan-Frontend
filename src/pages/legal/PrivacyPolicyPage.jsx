@@ -9,6 +9,11 @@ import { OPERATOR, EFFECTIVE_DATE } from './legalOperator'
   바뀌어야 한다 — 특히 아래 셋은 바뀌면 방침이 곧바로 거짓이 되는 자리다.
     · 수집 항목  → V1__baseline.sql 의 테이블 컬럼
     · 국외 이전  → OpenPlan-AI 의 모델 라우팅(app/router/model_router.py)
+                  + 운영 인프라 자체가 국외다(2026-09-01 확인). RDS 엔드포인트가
+                  ap-northeast-3(일본 오사카)이고 인증 메일은 smtp.gmail.com 을
+                  거친다 — 근거는 legalOperator.js 주석. 그래서 제4조 2항은
+                  "위탁" 이 아니라 국외 이전 고지 형식(이전받는 자·국가·항목·
+                  일시·방법·목적·보유기간)으로 쓴다.
     · 보유 기간  → users.scheduled_deletion_at 과 ON DELETE CASCADE
 
   용어는 `OpenPlan문서/00.OpenPlan 용어집 - 시트1.csv` 를 따른다(태스크·고정
@@ -110,8 +115,11 @@ export function PrivacyPolicyPage() {
         태스크 제목·메모는 모델 호출 경계를 넘지 않는다. 이 문단은 그 사실이 바뀌면
         가장 먼저 거짓이 되는 자리다.
       */}
-      <LegalSection heading="제4조 (개인정보의 제3자 제공 및 처리 위탁)">
-        <p>서비스는 이용자의 개인정보를 제3자에게 판매하거나 제공하지 않습니다. 다만 서비스 제공에 필요한 범위에서 다음의 처리를 위탁합니다.</p>
+      <LegalSection heading="제4조 (개인정보의 제3자 제공·처리 위탁 및 국외 이전)">
+        <p>
+          서비스는 이용자의 개인정보를 제3자에게 판매하거나 제공하지 않습니다. 다만 서비스 제공에
+          필요한 범위에서 다음의 처리를 위탁하며, 아래 2항의 위탁은 국외에서 이루어집니다.
+        </p>
         <p className="font-medium">1. 주간 계획안 생성을 위한 인공지능 모델 호출</p>
         <LegalList
           items={[
@@ -125,13 +133,37 @@ export function PrivacyPolicyPage() {
         <p className="text-label text-text-muted">
           인공지능 모델 호출이 실패하더라도 서비스는 자체 규칙 기반 배치로 계획안을 만들어 제공합니다.
         </p>
-        <p className="font-medium">2. 서비스 운영 인프라</p>
+        <p className="font-medium">2. 서비스 운영 인프라 (개인정보의 국외 이전)</p>
+        <p>
+          서비스는 자체 전산 설비를 두지 않고 아래 사업자의 설비를 이용합니다. 이에 따라 이용자의
+          개인정보는 국외에 저장·처리됩니다.
+        </p>
+        <p className="font-medium">가. 클라우드 서버 및 데이터베이스 운영</p>
         <LegalList
           items={[
-            `클라우드 서버 및 데이터베이스 운영: ${OPERATOR.cloudProvider}`,
-            `인증 메일 발송: ${OPERATOR.mailProvider}`,
+            `이전받는 자: ${OPERATOR.cloudProvider}`,
+            `이전되는 국가: ${OPERATOR.cloudRegion}`,
+            '이전되는 항목: 제1조에서 밝힌 수집 항목 전부',
+            '이전 일시 및 방법: 회원가입 및 서비스 이용 시점에 암호화된 통신으로 전송하여 보관',
+            '이전받는 자의 이용 목적: 서비스 서버와 데이터베이스의 운영·보관',
+            '이전받는 자의 보유 기간: 제3조의 보유 기간과 같습니다',
           ]}
         />
+        <p className="font-medium">나. 인증 메일 발송</p>
+        <LegalList
+          items={[
+            `이전받는 자: ${OPERATOR.mailProvider}`,
+            `이전되는 국가: ${OPERATOR.mailRegion}`,
+            '이전되는 항목: 이메일 주소',
+            '이전 일시 및 방법: 이메일 인증·비밀번호 재설정 메일을 보내는 시점에 암호화된 통신으로 전송',
+            '이전받는 자의 이용 목적: 메일 발송',
+            '이전받는 자의 보유 기간: 발송에 필요한 시간 동안',
+          ]}
+        />
+        <p className="text-label text-text-muted">
+          이용자는 개인정보의 국외 이전을 거부할 수 있습니다. 다만 위 이전은 서비스 제공에 필수적인
+          것이어서, 거부하는 경우 회원가입과 서비스 이용이 제한됩니다.
+        </p>
         <p className="font-medium">3. 외부 일정 연동</p>
         <p>
           외부 일정 연동은 이용자가 직접 동의한 범위에서 해당 캘린더 제공자로부터 일정을 <b>가져오는</b> 기능입니다.
