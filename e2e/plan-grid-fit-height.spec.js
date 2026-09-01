@@ -1394,4 +1394,75 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
       `블록 위치가 축척을 바꾸면 안 된다: 블록 없음 ${clean}px vs 가용 밖 블록 있음 ${withOutsideBlock}px`,
     ).toBe(clean)
   })
+
+  /*
+    TC-22 [오너 보고 2026-09-01: "블럭 우클릭해서 다음 주로 이동 눌렀더니
+    없어졌어"] — 주를 넘겨 옮기면 **어디로 갔는지 알려 주고 따라갈 길을 준다.**
+
+    동작 자체는 원래 맞았다 — 블록은 그 주로 갔고 이번 주에서 사라지는 게 정상이다.
+    문제는 그 사실을 알 길이 없었다는 것: 블록 하나가 소리 없이 없어지고, 어디로
+    갔는지도 되돌릴 방법도 화면에 안 떴다. 메뉴로 옮기면 드래그와 달리 "내가
+    저쪽으로 보냈다"는 감각조차 없어서 더 그렇다.
+  */
+  test('TC-22: 다음 주로 이동하면 안내가 뜨고 "보러 가기"로 따라갈 수 있다', async ({ browser }) => {
+    /*
+      뷰포트를 직접 고정한다 — 우클릭 메뉴는 데스크톱 상호작용이고, 375px 폭에서는
+      격자가 `min-w-[640px]`라 가로로 잘려 블록이 화면 밖에 있다(모바일 프로젝트에서
+      한 번 그렇게 걸렸다). 이 케이스가 재는 것은 폭과 무관한 "주 이동 안내"다.
+    */
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const page = await context.newPage()
+    try {
+    let patched = null
+    await mockPlanBackend(page, {
+      onPatch: (body) => {
+        patched = body
+      },
+      blocks: [
+        {
+          planBlockId: 101,
+          blockType: 'TASK',
+          title: 'E2E 주 이동 블록',
+          status: 'PLANNED',
+          startAt: (weekStartDate) => `${weekStartDate}T10:00:00`,
+          endAt: (weekStartDate) => `${weekStartDate}T11:00:00`,
+        },
+      ],
+    })
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+
+    const block = page.getByRole('button', { name: /E2E 주 이동 블록/ })
+    await expect(block).toBeVisible()
+
+    await block.click({ button: 'right' })
+    // 메뉴 컨테이너만 role="menu"이고 항목은 평범한 <button>이다(menuitem 아님).
+    await page.locator('[role="menu"]').getByRole('button', { name: '다음 주로 이동' }).click()
+
+    /*
+      서버에 **주차 이동을 명시해서** 보내야 한다 — 계약의 `targetWeekStartDate`
+      (PATCH /plan-blocks/{blockId} summary: "주차 이동은 targetWeekStartDate").
+      예전에는 startAt/endAt만 보내서, 블록이 새 날짜를 갖되 옛 주간 계획에 매달린
+      채로 남아 **양쪽 주 어디에서도 안 보였다**(오너 보고). 이 단언이 그 회귀를
+      막는다.
+    */
+    expect(patched, 'PATCH가 나가야 한다').not.toBeNull()
+    expect(
+      patched.targetWeekStartDate,
+      `주차 이동은 targetWeekStartDate로 알려야 한다(실제 본문: ${JSON.stringify(patched)})`,
+    ).toBeTruthy()
+
+    // 소리 없이 사라지지 않는다 — 어느 주로 갔는지 뜬다.
+    await expect(page.getByText('다음 주로 옮겼습니다')).toBeVisible()
+
+    // 그리고 따라갈 수 있다.
+    const follow = page.getByRole('button', { name: '보러 가기' })
+    await expect(follow).toBeVisible()
+    await follow.click()
+    await page.waitForTimeout(400)
+    await expect(page.getByText('다음 주로 옮겼습니다')).toHaveCount(0)
+    } finally {
+      await context.close()
+    }
+  })
 })

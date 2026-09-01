@@ -282,10 +282,25 @@ export function getAvailability() {
  * real server infers the target week from start_at).
  */
 export function patchBlock(planBlockId, patch) {
-  // __targetWeek is a client-only hint for the mock's cross-week migration; the
-  // real server infers the target week from start_at, so strip it before PATCH.
+  /*
+    주차 이동은 서버에도 **명시해서 보내야 한다** — 계약이 그렇게 정의돼 있다:
+    `PATCH /plan-blocks/{blockId}`의 `targetWeekStartDate`, summary에 "주차 이동은
+    targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)".
+
+    2026-09-01 수정: 예전에는 여기서 `__targetWeek`를 **지우기만** 하고 아무것도
+    보내지 않으면서 "실서버는 start_at으로 대상 주차를 추론한다"고 적어 뒀는데,
+    그건 사실이 아니었다. 그 결과 블록은 새 날짜를 갖되 **옛 주간 계획에 그대로
+    매달려** 있었고 — 옮긴 주의 계획에는 없으니 거기서 안 보이고, 원래 주에서는
+    날짜가 그 7일 밖이라 격자가 걸러 내(dayIndex -1) 역시 안 보였다. 즉 블록이
+    양쪽 어디에서도 안 보이는 상태가 됐다(오너 보고: "다음 주로 옮겨놓고 다음 주
+    화면으로 가도 블록이 안 보이던데").
+
+    `__targetWeek`라는 이름 자체는 목(mock)의 주 이동 신호로 계속 쓰이므로
+    지우지 말고 **서버용 이름으로 옮겨** 담는다.
+  */
   const serverPatch = { ...patch }
   delete serverPatch.__targetWeek
+  if (patch.__targetWeek) serverPatch.targetWeekStartDate = patch.__targetWeek
   return withDevFallback(
     () => apiClient.patch(`/plan-blocks/${planBlockId}`, serverPatch),
     () => mockBackend.patchBlock(planBlockId, patch),

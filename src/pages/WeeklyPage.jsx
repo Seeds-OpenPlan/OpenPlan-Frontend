@@ -685,6 +685,36 @@ function WeeklyPage() {
       return
     }
     applyMove({ planBlockId: target.planBlockId, startAt, endAt, sourceWeek: weekStartISO, targetWeek })
+
+    /*
+      주를 넘겼으면 **말해 준다** (2026-09-01 보고: "블록 우클릭해서 다음 주로
+      이동 눌렀더니 없어졌어").
+
+      동작 자체는 맞았다 — 블록은 그 주로 갔고 이번 주에서는 사라지는 게 정상이다.
+      문제는 그 사실을 알 길이 없었다는 것이다: 화면에서 블록 하나가 소리 없이
+      없어지고, 어디로 갔는지도 되돌릴 방법도 화면에 안 뜬다. 메뉴로 옮겼을 때는
+      드래그와 달리 "내가 저쪽으로 보냈다"는 몸의 감각조차 없어서 더 그렇다.
+
+      그래서 어느 주로 갔는지 적고, 따라갈 길을 함께 준다. 주를 안 넘긴 평범한
+      이동에는 띄우지 않는다 — 눈앞에서 블록이 움직이는 것이 이미 답이라, 매번
+      토스트가 뜨면 소음이 된다.
+    */
+    if (targetWeek !== weekStartISO) {
+      const forward = targetWeek > weekStartISO
+      toast({
+        tone: 'info',
+        message: `${forward ? '다음' : '이전'} 주로 옮겼습니다`,
+        action: {
+          label: '보러 가기',
+          onClick: () => {
+            setWeekStartISO(targetWeek)
+            setAutoDraft(null)
+            setSlotMenu(null)
+          },
+        },
+      })
+    }
+
     history.record({
       type: 'move',
       planBlockId: target.planBlockId,
