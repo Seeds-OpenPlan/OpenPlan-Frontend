@@ -410,10 +410,22 @@ function WeeklyPage() {
     삼아 계산한다. 100%가 여전히 "가용 시간대가 한 화면에 들어차는 크기"를
     뜻한다는 점은 두 모드에서 똑같다(24시간 모드에서 화면을 넘치는 것은 그 크기로
     하루 전체를 펼쳤기 때문이지 축척이 달라져서가 아니다).
+
+    **그리고 블록 위치에도 의존하지 않는다** (2026-09-01 보고: "블록을 위아래로
+    움직일 때마다 … 뭐가 계속 바뀐다"). `visibleRange`는 그리는 범위를 정할 때
+    가용 시간과 **이 주에 그려지는 것들의 합집합**을 쓰는데(그래야 가용 창 밖
+    블록이 잘리지 않는다), 그 창을 축척 기준으로도 쓰면 블록 하나를 가용 시간
+    밖으로 옮기는 순간 창이 넓어지며 **격자 전체가 작아진다** — 옮기던 블록만이
+    아니라 화면 전체가 출렁인다.
+
+    그래서 기준은 `availability`만으로 계산한다(`drawnSpans` 미전달). 그리는
+    범위는 종전대로 합집합이라 잘리는 것은 없고, 가용 창 밖 블록이 있으면 축척이
+    줄어드는 대신 **스크롤이 생긴다** — 크기를 바꾸는 것보다 그쪽이 정직하다.
   */
-  const focusRange = useMemo(
-    () => visibleRange('focus', availability, drawnSpans),
-    [availability, drawnSpans],
+  const fitBasisRange = useMemo(
+    // ⚠ drawnSpans를 일부러 넘기지 않는다 — 아래 주석의 두 번째 문단 참고.
+    () => visibleRange('focus', availability, []),
+    [availability],
   )
   const availableMinutes = availableMinutesOf(availability)
 
@@ -427,8 +439,8 @@ function WeeklyPage() {
     달력이 실제로 몇 픽셀을 받았는지, 둘 다 알아야 계산된다.
   */
   const fitPxPerHour = useMemo(
-    () => (gridMaxHeight == null ? null : fitHourPx(gridMaxHeight - dayHeaderPx, focusRange)),
-    [gridMaxHeight, dayHeaderPx, focusRange],
+    () => (gridMaxHeight == null ? null : fitHourPx(gridMaxHeight - dayHeaderPx, fitBasisRange)),
+    [gridMaxHeight, dayHeaderPx, fitBasisRange],
   )
   const hourScale = useHourScale({ fitHourPx: fitPxPerHour })
 

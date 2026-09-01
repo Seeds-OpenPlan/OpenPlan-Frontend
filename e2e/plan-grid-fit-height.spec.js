@@ -201,13 +201,19 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     })
   }
 
-  test('TC-01b: 가용 밖 블록이 창을 크게 넓히면 FIT_HOUR_PX_MIN(28) 바닥에서 부분 스크롤이 남는다 (설계대로)', async ({
-    page,
-  }) => {
-    // visibleRange가 가용(09-18)과 실제로 그려지는 블록의 합집합으로 창을 넓힌다
-    // (planGeometry.js:visibleRange). 22-23시 블록 하나로 창이 09-23(14h)까지 벌어지면,
-    // 700px 높이에서는 14h * 28px(바닥) + 헤더가 가용 공간을 넘는다 — fitHourPx 주석이
-    // "바닥에 닿으면 맞춤은 포기하고 스크롤로 넘긴다"고 명시한 바로 그 경로다.
+  test('TC-01b: 가용 밖 블록이 있으면 축척을 줄이는 대신 스크롤로 넘긴다', async ({ page }) => {
+    /*
+      visibleRange는 가용(09-18)과 실제로 그려지는 블록의 합집합으로 창을 넓힌다
+      (가용 밖 블록이 잘리지 않게). 22-23시 블록 하나로 창은 09-23(14h)까지 벌어진다.
+
+      2026-09-01 정정: 예전에는 그 넓어진 창이 **축척 기준**이기도 해서 격자 전체가
+      작아졌고, 이 케이스는 축척이 바닥(FIT_HOUR_PX_MIN)에 걸려 남는 "최소한의
+      스크롤"을 쟀다. 그런데 그 동작은 블록 하나를 옮길 때마다 화면이 출렁이게
+      만든다(오너 보고). 이제 축척 기준은 가용 시간만이므로 크기는 그대로이고,
+      넘치는 만큼은 스크롤이 받는다 — 그래서 여기서 기대하는 것은 "바닥 근처의
+      작은 스크롤"이 아니라 **스크롤이 생긴다는 것 자체**다. 축척이 그대로라는
+      것은 TC-21이 따로 못박는다.
+    */
     await mockPlanBackend(page, {
       blocks: [
         {
@@ -227,10 +233,11 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
       scrollHeight: el.scrollHeight,
       clientHeight: el.clientHeight,
     }))
-    // 이 케이스는 "스크롤 없음"이 아니라 "바닥에서 최소한만 남는 스크롤"이 기대값이다 —
-    // TC-01과 반대 방향의 단언. 차이가 28px/h 바닥 근처(수십 px)인지만 확인한다.
-    expect(dims.scrollHeight).toBeGreaterThan(dims.clientHeight)
-    expect(dims.scrollHeight - dims.clientHeight).toBeLessThan(60)
+    // TC-01과 반대 방향의 단언 — 여기서는 스크롤이 생기는 것이 맞는 동작이다.
+    expect(
+      dims.scrollHeight,
+      `가용 밖 블록이 있으면 넘쳐야 한다(scrollHeight ${dims.scrollHeight} vs clientHeight ${dims.clientHeight})`,
+    ).toBeGreaterThan(dims.clientHeight)
   })
 
   test('TC-02: 여유 제거 — 첫 눈금이 가용 시작 정시(09)이고 위로 안 잘림', async ({ page }) => {
@@ -1330,5 +1337,61 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
       afterBox.y + afterBox.height,
       '아래쪽도 잘리면 안 된다',
     ).toBeLessThanOrEqual(viewAfter.y + viewAfter.height + 1)
+  })
+
+  /*
+    TC-21 [오너 보고 2026-09-01: "블록을 위아래로 움직일 때마다 블록 크기가
+    바뀌는 건지 세로 칸 자체가 변하는 건지 … 뭐가 계속 바뀐다"] — **블록 위치가
+    축척을 바꾸면 안 된다.**
+
+    원인이었던 것: `visibleRange`는 가용 시간과 이 주에 그려지는 것들의
+    **합집합**으로 창을 정한다(가용 창 밖 블록이 잘리지 않게). 그 창을 100% 기준
+    으로도 쓰면, 블록 하나를 가용 시간 밖으로 옮기는 순간 창이 넓어지며 격자
+    전체가 작아진다 — 옮기던 블록만이 아니라 화면이 통째로 출렁인다.
+
+    재는 법: 가용 시간(09-18)만 있는 화면과, 거기에 가용 밖 블록(22-23시)이 있는
+    화면의 **시간당 픽셀**이 같아야 한다. 다르면 블록 위치가 축척을 흔든 것이다.
+  */
+  test('TC-21: 가용 시간 밖 블록이 있어도 시간당 픽셀(100% 기준)이 달라지지 않는다', async ({
+    browser,
+  }) => {
+    const pitchOf = async (blocks) => {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+      const page = await context.newPage()
+      try {
+        await mockPlanBackend(page, { blocks })
+        await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+        await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+        await page.evaluate(() => document.fonts.ready)
+        await page.waitForTimeout(200)
+        return await page.evaluate(() => {
+          const lines = [...document.querySelectorAll('div.pointer-events-none.absolute.inset-x-0')]
+            .map((el) => el.getBoundingClientRect().top)
+            .sort((a, b) => a - b)
+          return lines.length >= 2 ? Math.round((lines[1] - lines[0]) * 100) / 100 : null
+        })
+      } finally {
+        await context.close()
+      }
+    }
+
+    const clean = await pitchOf([])
+    expect(clean, '기준 화면에서 눈금 간격을 재지 못했다').toBeGreaterThan(0)
+
+    const withOutsideBlock = await pitchOf([
+      {
+        planBlockId: 101,
+        blockType: 'TASK',
+        title: 'E2E 가용 밖 블록',
+        status: 'PLANNED',
+        startAt: (weekStartDate) => `${weekStartDate}T22:00:00`,
+        endAt: (weekStartDate) => `${weekStartDate}T23:00:00`,
+      },
+    ])
+
+    expect(
+      withOutsideBlock,
+      `블록 위치가 축척을 바꾸면 안 된다: 블록 없음 ${clean}px vs 가용 밖 블록 있음 ${withOutsideBlock}px`,
+    ).toBe(clean)
   })
 })
