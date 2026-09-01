@@ -115,10 +115,25 @@ export function useMoveBlock() {
 
   return useCallback(
     ({ planBlockId, startAt, endAt, sourceWeek, targetWeek }) => {
+      // If `weekKey`'s cache is cold (no `prev`), there is nothing to update
+      // optimistically and the write below was silently dropped — this DOES
+      // happen: `cancelQueries` a few lines down aborts any prefetch for
+      // `targetWeek` still in flight (useWeekPlan's own ±1-week prefetch),
+      // and useTaskEditPreview.js independently observes the CURRENT week's
+      // key, which can be exactly `targetWeek` while WeeklyPage itself is
+      // viewing an adjacent week (its own weekKey). Silently doing nothing
+      // would leave that key stuck showing pre-move data until this move's
+      // own `.finally()` invalidate below fires (only after the PATCH round
+      // trip) — invalidating right away closes that gap for any observer
+      // that's already mounted instead of leaving it stale in the interim.
       const applyToCache = (weekKey, updater) => {
-        queryClient.setQueryData(weekPlanKey(weekKey), (prev) =>
-          prev ? updater(prev) : prev,
-        )
+        const key = weekPlanKey(weekKey)
+        const prev = queryClient.getQueryData(key)
+        if (!prev) {
+          queryClient.invalidateQueries({ queryKey: key })
+          return
+        }
+        queryClient.setQueryData(key, updater(prev))
       }
 
       // Snapshot both affected weeks BEFORE mutating, for rollback.
