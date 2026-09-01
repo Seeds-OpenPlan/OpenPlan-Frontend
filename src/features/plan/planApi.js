@@ -277,9 +277,11 @@ export function getAvailability() {
 }
 
 /**
- * Block write → PATCH /plan-blocks/{id}. `patch` carries startAt/endAt (and,
- * for a week-boundary move, __targetWeek so the mock can migrate stores; the
- * real server infers the target week from start_at).
+ * Block write → PATCH /plan-blocks/{id}. `patch` carries startAt/endAt and,
+ * for a week-boundary move, `__targetWeek` — a client-only name the mock reads
+ * to migrate its stores. The real server needs that same week told to it
+ * EXPLICITLY, as `targetWeekStartDate`; it does NOT infer the target week from
+ * `startAt`. See the body comment for what that wrong assumption cost.
  */
 export function patchBlock(planBlockId, patch) {
   /*
