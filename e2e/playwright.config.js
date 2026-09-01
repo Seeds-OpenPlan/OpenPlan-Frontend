@@ -27,12 +27,30 @@ export default defineConfig({
     baseURL: 'http://localhost:5173',
     trace: 'retain-on-failure',
   },
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: true,
-    timeout: 30_000,
-  },
+  /*
+    `PW_NO_WEBSERVER=1`이면 이 블록을 건너뛴다.
+
+    왜 필요한가 — 이 저장소에서 Playwright는 **Windows에서** 돌려야 한다(WSL은
+    chromium 기동에 필요한 시스템 라이브러리가 없고 install-deps가 sudo를
+    요구한다, 위 주석 참고). 그런데 그 Windows 실행 환경에서는 `npm`이 PATH에
+    없어 이 `command`가 그대로 실패한다("'npm'은(는) 내부 또는 외부 명령...").
+    지금까지 안 드러난 이유는 `reuseExistingServer: true`가 5173에 이미 떠 있던
+    다른 서버를 주워 썼기 때문이고, 그 서버가 없으면 스위트 전체가 시작조차
+    못 한다.
+
+    dev 서버를 WSL에서 따로 띄우고 스펙이 절대 URL을 쓰는 경우(예:
+    plan-grid-fit-height.spec.js는 워크트리 전용 포트를 겨냥한다)에는 이 블록이
+    할 일이 없으므로 끄고 돈다. 기본 동작은 그대로 두어 기존 스펙들에는 영향이
+    없다.
+  */
+  webServer: process.env.PW_NO_WEBSERVER
+    ? undefined
+    : {
+        command: 'npm run dev',
+        url: 'http://localhost:5173',
+        reuseExistingServer: true,
+        timeout: 30_000,
+      },
   projects: [
     {
       name: 'desktop-chromium',

@@ -390,6 +390,26 @@ function WeeklyPage() {
     () => visibleRange(mode, availability, drawnSpans),
     [mode, availability, drawnSpans],
   )
+  /*
+    100%의 기준이 되는 범위는 **모드와 무관하게 집중 모드의 창**이다
+    (2026-09-01 요구: "집중/24시 전환했을 때 100% 크기가 동일했으면 좋겠어").
+
+    그 전에는 기준을 `range`(지금 그리는 범위)로 잡았다. 그러면 24시간 모드로
+    넘어가는 순간 나누는 시간 수가 9에서 24로 뛰므로 같은 100%가 절반 이하
+    크기가 됐다 — 토글 한 번에 블록이 확 쪼그라들어, 두 모드가 서로 다른 축척을
+    쓰는 셈이었다. 기준을 집중 창으로 고정하면 **모드를 오가도 블록 크기가 그대로**
+    이고, 24시간 모드는 "같은 크기로 더 많은 시간을 스크롤해서 본다"는 제 뜻대로
+    동작한다.
+
+    그래서 이 값은 `mode`에 의존하지 않는다 — 24시간 모드에서도 집중 창을 기준
+    삼아 계산한다. 100%가 여전히 "가용 시간대가 한 화면에 들어차는 크기"를
+    뜻한다는 점은 두 모드에서 똑같다(24시간 모드에서 화면을 넘치는 것은 그 크기로
+    하루 전체를 펼쳤기 때문이지 축척이 달라져서가 아니다).
+  */
+  const focusRange = useMemo(
+    () => visibleRange('focus', availability, drawnSpans),
+    [availability, drawnSpans],
+  )
   const availableMinutes = availableMinutesOf(availability)
 
   /*
@@ -398,12 +418,12 @@ function WeeklyPage() {
     렌더·드래그 계산·드롭 히트테스트가 서로 어긋날 수 없다. (`mode`와 달리
     이건 기기별로 기억된다 — useHourScale 헤더.)
 
-    `range` 다음에 놓인 것은 우연이 아니다: "맞춤" 축척은 지금 그릴 범위가 몇
-    시간인지와 달력이 실제로 몇 픽셀을 받았는지, 둘 다 알아야 계산된다.
+    `focusRange` 다음에 놓인 것은 우연이 아니다: 기준 축척은 그 창이 몇 시간인지와
+    달력이 실제로 몇 픽셀을 받았는지, 둘 다 알아야 계산된다.
   */
   const fitPxPerHour = useMemo(
-    () => (gridMaxHeight == null ? null : fitHourPx(gridMaxHeight - dayHeaderPx, range)),
-    [gridMaxHeight, dayHeaderPx, range],
+    () => (gridMaxHeight == null ? null : fitHourPx(gridMaxHeight - dayHeaderPx, focusRange)),
+    [gridMaxHeight, dayHeaderPx, focusRange],
   )
   const hourScale = useHourScale({ fitHourPx: fitPxPerHour })
 
