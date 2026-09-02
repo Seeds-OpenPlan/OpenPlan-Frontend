@@ -48,7 +48,12 @@ import {
 } from '../features/plan/usePlanHistory'
 import { usePlacementDrag } from '../features/plan/usePlacementDrag'
 import { useHourScale } from '../features/plan/useHourScale'
-import { fitHourPx, resolveGridSlot, visibleRange } from '../features/plan/planGeometry'
+import {
+  availabilityForColumn,
+  fitHourPx,
+  resolveGridSlot,
+  visibleRange,
+} from '../features/plan/planGeometry'
 import { findFirstFreeSlot } from '../features/plan/planPlacement'
 import { getPopoverAnchorStyle } from '../utils/popoverPosition'
 import {
@@ -390,6 +395,38 @@ function WeeklyPage() {
     () => visibleRange(mode, availability, drawnSpans),
     [mode, availability, drawnSpans],
   )
+  /*
+    100%의 기준이 되는 범위는 **모드와 무관하게 집중 모드의 창**이다
+    (2026-09-01 요구: "집중/24시 전환했을 때 100% 크기가 동일했으면 좋겠어").
+
+    그 전에는 기준을 `range`(지금 그리는 범위)로 잡았다. 그러면 24시간 모드로
+    넘어가는 순간 나누는 시간 수가 9에서 24로 뛰므로 같은 100%가 절반 이하
+    크기가 됐다 — 토글 한 번에 블록이 확 쪼그라들어, 두 모드가 서로 다른 축척을
+    쓰는 셈이었다. 기준을 집중 창으로 고정하면 **모드를 오가도 블록 크기가 그대로**
+    이고, 24시간 모드는 "같은 크기로 더 많은 시간을 스크롤해서 본다"는 제 뜻대로
+    동작한다.
+
+    그래서 이 값은 `mode`에 의존하지 않는다 — 24시간 모드에서도 집중 창을 기준
+    삼아 계산한다. 100%가 여전히 "가용 시간대가 한 화면에 들어차는 크기"를
+    뜻한다는 점은 두 모드에서 똑같다(24시간 모드에서 화면을 넘치는 것은 그 크기로
+    하루 전체를 펼쳤기 때문이지 축척이 달라져서가 아니다).
+
+    **그리고 블록 위치에도 의존하지 않는다** (2026-09-01 보고: "블록을 위아래로
+    움직일 때마다 … 뭐가 계속 바뀐다"). `visibleRange`는 그리는 범위를 정할 때
+    가용 시간과 **이 주에 그려지는 것들의 합집합**을 쓰는데(그래야 가용 창 밖
+    블록이 잘리지 않는다), 그 창을 축척 기준으로도 쓰면 블록 하나를 가용 시간
+    밖으로 옮기는 순간 창이 넓어지며 **격자 전체가 작아진다** — 옮기던 블록만이
+    아니라 화면 전체가 출렁인다.
+
+    그래서 기준은 `availability`만으로 계산한다(`drawnSpans` 미전달). 그리는
+    범위는 종전대로 합집합이라 잘리는 것은 없고, 가용 창 밖 블록이 있으면 축척이
+    줄어드는 대신 **스크롤이 생긴다** — 크기를 바꾸는 것보다 그쪽이 정직하다.
+  */
+  const fitBasisRange = useMemo(
+    // ⚠ drawnSpans를 일부러 넘기지 않는다 — 아래 주석의 두 번째 문단 참고.
+    () => visibleRange('focus', availability, []),
+    [availability],
+  )
   const availableMinutes = availableMinutesOf(availability)
 
   /*
@@ -398,14 +435,23 @@ function WeeklyPage() {
     렌더·드래그 계산·드롭 히트테스트가 서로 어긋날 수 없다. (`mode`와 달리
     이건 기기별로 기억된다 — useHourScale 헤더.)
 
-    `range` 다음에 놓인 것은 우연이 아니다: "맞춤" 축척은 지금 그릴 범위가 몇
-    시간인지와 달력이 실제로 몇 픽셀을 받았는지, 둘 다 알아야 계산된다.
+    `focusRange` 다음에 놓인 것은 우연이 아니다: 기준 축척은 그 창이 몇 시간인지와
+    달력이 실제로 몇 픽셀을 받았는지, 둘 다 알아야 계산된다.
   */
   const fitPxPerHour = useMemo(
-    () => (gridMaxHeight == null ? null : fitHourPx(gridMaxHeight - dayHeaderPx, range)),
-    [gridMaxHeight, dayHeaderPx, range],
+    () => (gridMaxHeight == null ? null : fitHourPx(gridMaxHeight - dayHeaderPx, fitBasisRange)),
+    [gridMaxHeight, dayHeaderPx, fitBasisRange],
   )
   const hourScale = useHourScale({ fitHourPx: fitPxPerHour })
+
+  /*
+    지금 축척에서 격자가 상자를 넘치는가 — 축소 버튼을 열어 둘지의 기준이다.
+    `range`(지금 그리는 범위)로 재는 것이 맞다: 24시간 모드는 같은 축척에서도
+    넘치므로 거기서는 축소가 여전히 쓸모 있다.
+  */
+  const gridOverflows =
+    gridMaxHeight == null ||
+    ((range.endMinutes - range.startMinutes) / 60) * hourScale.hourPx > gridMaxHeight - dayHeaderPx
 
   // --- validation (ST-F1-05: PLAN-21~28) ------------------------------------
 
@@ -477,8 +523,102 @@ function WeeklyPage() {
     would either swallow the focus move or leave focus inside an overlay covering
     the block the user just asked to see.
   */
+  /*
+    검토 항목이 가리키는 블록을 찾는다.
+
+    바로 찾히지 않는 경우가 있다 — 계약상 `ValidationIssue.planBlockId`는
+    nullable이고, **가용 시간 밖 배치(V4)·가용 시간 초과(V3)는 요일 수준 규칙이라
+    블록을 아예 안 준다**(openapi의 weekday 필드 설명, planFixtures의 V4 주석).
+    그래서 예전에는 그 항목을 누르면 "대상 블록을 찾을 수 없습니다"만 뜨는
+    막다른 길이었다(오너 보고, 2026-09-01).
+
+    이제 요일만 아는 항목도 그 요일에서 문제 블록을 찾아 가리킨다. 순서가 중요하다 —
+    **추측을 최대한 늦게** 한다:
+      ① 서버가 직접 지목한 블록(targetBlockIds)
+      ② 서버가 서술에 실어 준 블록 제목(params.blockTitle) — 추측이 아니라
+         서버가 "무엇을 두고 한 말인지" 밝힌 것이다
+      ③ 규칙별로 좁히기 — V4는 그 요일에서 가용 창을 벗어난 TASK
+      ④ 그래도 못 고르면 그 요일의 첫 TASK
+
+    ③④는 **클라이언트가 서버 판정을 다시 추론하는 것**이라 원리상 어긋날 수 있다
+    (오너에게 그 위험을 밝히고 이 방식으로 결정). 그래서 ①②를 앞에 두고, ③은
+    규칙을 아는 경우로만 한정하며, 아무것도 못 찾으면 종전대로 조용히 알린다.
+  */
+  const resolveIssueTarget = (issue) => {
+    const direct = blocks.find((b) =>
+      (issue.targetBlockIds ?? []).some((id) => String(id) === String(b.planBlockId)),
+    )
+    if (direct) return direct
+
+    const dayIndex = WEEKDAY_KEYS.indexOf(issue.weekday)
+    if (dayIndex < 0) return null
+    const dayISO = days[dayIndex]
+    const onDay = blocks.filter((b) => dateOf(b.startAt) === dayISO)
+    if (onDay.length === 0) return null
+
+    /*
+      **규칙으로 먼저 좁히고, 좁혀진 후보 안에서 제목으로 고른다.** 순서가 중요하다
+      (리뷰 지적, 2026-09-01): 예전에는 제목 매칭이 규칙보다 먼저 반환했는데, 같은
+      날 같은 제목의 TASK가 둘(하나는 가용 창 안, 하나는 밖)이면 배열에서 먼저 오는
+      쪽 — 즉 멀쩡한 블록 — 을 가리키고 정작 위반한 블록은 그냥 지나쳤다. 규칙이
+      바로 그 모호함을 풀라고 있는데 제목이 가로챈 셈이다.
+
+      🔴 제목 단계는 **실서버에서 절대 동작하지 않는다**(리뷰 지적, 2026-09-02).
+      계약의 ValidationIssue에는 `params`도 `blockTitle`도 없다 — 필드는
+      validationIssueId·ruleId·severity·planBlockId·counterpartId·taskId·weekday·
+      reason·resolutionStatus뿐이다. normalizeIssue의 `params`는 "구조 키를 뺀
+      나머지"로 만들어지므로 실서버 응답에서는 비어 있고, 이 필드를 채우는 것은
+      dev 목(planFixtures)뿐이다. 즉 아래 제목 단계는 **dev에서만 켜지고 배포에서는
+      늘 건너뛴다** — 한때 이 자리에 "제목은 서버가 준 정보라 규칙보다 신뢰도가
+      높다"고 적어 뒀는데, 실서버 기준으로는 그 전제 자체가 성립하지 않는다.
+
+      그래서 배포에서 실제로 일어나는 일은 이렇다: V4는 아래 규칙 좁히기가 답을
+      주고, **V3처럼 규칙 좁히기 대상이 아닌 항목은 곧장 마지막 폴백으로 떨어진다.**
+      그 한계는 폴백 주석에 적어 둔 그대로다.
+
+      단계를 지우지 않고 남겨 두는 이유: dev 목에서는 실제로 더 정확한 대상을
+      골라 주고(로컬에서 이 화면을 다듬을 때 값어치가 있다), 서버가 나중에 이
+      정보를 실어 주면 그대로 살아나는 자리이기 때문이다. 다만 **지금 배포에서는
+      죽어 있는 코드**라는 사실을 모르고 읽으면 안 된다.
+    */
+    let candidates = onDay
+    if (issue.code === 'V4_OUT_OF_AVAILABILITY') {
+      const win = availabilityForColumn(dayIndex, availability)
+      const outside = onDay.filter(
+        (b) =>
+          b.blockType === 'TASK' &&
+          (!win ||
+            minutesOfDay(b.startAt) < win.startMinutes ||
+            minutesOfDay(b.endAt) > win.endMinutes),
+      )
+      if (outside.length > 0) candidates = outside
+    }
+
+    // dev 목 전용 경로(위 주석) — 실서버 응답에는 params.blockTitle이 없어 늘 스킵된다.
+    const titled = issue.params?.blockTitle
+      ? candidates.find((b) => b.title === issue.params.blockTitle)
+      : null
+    if (titled) return titled
+
+    /*
+      ⚠ 여기까지 와서 고르는 것은 **가장 약한 추측**이다. 특히 V3_CAPACITY_EXCEEDED는
+      그 요일 전체의 합이 가용 시간을 넘었다는 뜻이라 원인인 단일 블록이라는 것이
+      애초에 없다(planFixtures의 그 규칙 주석도 같은 말을 한다). 그런데도 하나를
+      가리키는 이유는, 아무것도 안 가리키면 그 항목이 눌러도 아무 일 없는 막다른
+      길이 되기 때문이다(그게 원래 보고된 문제였다). 즉 이 반환값은 "원인"이 아니라
+      "그 요일을 보라"는 뜻에 가깝다 — 항목의 문구가 실제 사유를 설명하고 있으므로
+      사용자가 이것을 원인으로 오독할 여지는 그 문구가 막는다.
+
+      실서버에서는 위 제목 단계가 늘 스킵되므로, V3는 **언제나** 여기로 온다. 그리고
+      여기서 고르는 "첫 TASK"는 서버가 준 블록 배열 순서에 달렸을 뿐 시간순도
+      원인순도 아니다 — 서버의 reason이 실제로 가리키는 블록과 다를 수 있다.
+      이보다 나아지려면 계약이 그 규칙의 대상 블록(들)을 실어 줘야 한다.
+    */
+    return candidates.find((b) => b.blockType === 'TASK') ?? candidates[0]
+  }
+
   const handleSelectIssue = (issue) => {
-    const target = blocks.find((b) => issue.targetBlockIds.includes(b.planBlockId))
+    const target = resolveIssueTarget(issue)
     setReviewOpen(false)
     if (!target) {
       toast({ tone: 'info', message: '이 항목의 대상 블록을 찾을 수 없습니다' })
@@ -494,13 +634,42 @@ function WeeklyPage() {
 
     // A counter, not the id: re-selecting the SAME block must retrigger the
     // scroll/focus/pulse, which only a changed value can do.
-    setFocusRequest((prev) => ({ planBlockId: target.planBlockId, token: (prev?.token ?? 0) + 1 }))
+    setFocusRequest((prev) => ({
+      planBlockId: target.planBlockId,
+      token: (prev?.token ?? 0) + 1,
+      // 'announce' — 패널이 "이 블록을 봐라"고 지목한 경우다. 화면 한가운데로
+      // 끌어오고 흔들어서 시선을 끈다.
+      intent: 'announce',
+    }))
 
     // The highlight is an ANNOUNCEMENT, not a selection state, so it has to be
     // taken back down: the ring is rendered as long as focusRequest names this
     // block, and a CSS animation reverts to its base style when it ends rather
     // than staying at its final keyframe. Clearing here covers both the animated
     // and the reduced-motion (static ring) paths with one rule.
+    clearTimeout(focusClearTimerRef.current)
+    focusClearTimerRef.current = setTimeout(() => setFocusRequest(null), FOCUS_HIGHLIGHT_MS)
+  }
+
+  /*
+    블록을 누르면 그 블록에 포커스를 준다 (2026-09-01 요구: "블럭 클릭했을 때 그
+    블럭으로 포커싱되는 기능도 넣어줘. 검토에서 막힌 거 누르면 포커싱되는 것처럼,
+    흔들리지만 않고 비슷하게").
+
+    검토 패널 경로(handleSelectIssue)와 **같은 메커니즘**을 쓰되 의도만 다르다 —
+    'reveal'은 흔들지 않고, 화면 한가운데로 끌어오지도 않는다(이미 보이는 블록을
+    누른 것뿐인데 화면이 크게 움직이면 오히려 방해다). 잘려 있으면 드러날 만큼만
+    스크롤하고 하이라이트 링만 한 번 준다.
+
+    상태·타이머를 새로 만들지 않고 focusRequest 하나를 나눠 쓰는 이유: 두 경로가
+    동시에 살아 있으면 링을 내리는 타이머가 서로 엇갈려 하이라이트가 남는다.
+  */
+  const handleFocusBlock = (block) => {
+    setFocusRequest((prev) => ({
+      planBlockId: block.planBlockId,
+      token: (prev?.token ?? 0) + 1,
+      intent: 'reveal',
+    }))
     clearTimeout(focusClearTimerRef.current)
     focusClearTimerRef.current = setTimeout(() => setFocusRequest(null), FOCUS_HIGHLIGHT_MS)
   }
@@ -557,6 +726,36 @@ function WeeklyPage() {
       return
     }
     applyMove({ planBlockId: target.planBlockId, startAt, endAt, sourceWeek: weekStartISO, targetWeek })
+
+    /*
+      주를 넘겼으면 **말해 준다** (2026-09-01 보고: "블록 우클릭해서 다음 주로
+      이동 눌렀더니 없어졌어").
+
+      동작 자체는 맞았다 — 블록은 그 주로 갔고 이번 주에서는 사라지는 게 정상이다.
+      문제는 그 사실을 알 길이 없었다는 것이다: 화면에서 블록 하나가 소리 없이
+      없어지고, 어디로 갔는지도 되돌릴 방법도 화면에 안 뜬다. 메뉴로 옮겼을 때는
+      드래그와 달리 "내가 저쪽으로 보냈다"는 몸의 감각조차 없어서 더 그렇다.
+
+      그래서 어느 주로 갔는지 적고, 따라갈 길을 함께 준다. 주를 안 넘긴 평범한
+      이동에는 띄우지 않는다 — 눈앞에서 블록이 움직이는 것이 이미 답이라, 매번
+      토스트가 뜨면 소음이 된다.
+    */
+    if (targetWeek !== weekStartISO) {
+      const forward = targetWeek > weekStartISO
+      toast({
+        tone: 'info',
+        message: `${forward ? '다음' : '이전'} 주로 옮겼습니다`,
+        action: {
+          label: '보러 가기',
+          onClick: () => {
+            setWeekStartISO(targetWeek)
+            setAutoDraft(null)
+            setSlotMenu(null)
+          },
+        },
+      })
+    }
+
     history.record({
       type: 'move',
       planBlockId: target.planBlockId,
@@ -1344,7 +1543,17 @@ function WeeklyPage() {
           onZoomIn={hourScale.zoomIn}
           onZoomOut={hourScale.zoomOut}
           canZoomIn={hourScale.canZoomIn}
-          canZoomOut={hourScale.canZoomOut}
+          /*
+            스크롤이 없으면 더 줄일 수 없다 (2026-09-01 요구: "달력 스크롤 없을
+            때는(예: 집중모드 100%일 때) 100%보다 작아질 필요는 없을 것 같기도
+            해"). 상자 높이가 고정이므로, 이미 다 보이는 상태에서 더 줄이면
+            블록만 작아지고 아래 빈 공간이 늘 뿐 얻는 게 없다. 넘칠 때만 —
+            즉 줄여서 실제로 더 보이게 되는 상황에서만 — 열어 둔다.
+
+            아직 측정 전(gridMaxHeight null)이면 잠그지 않는다: 모르는 채로
+            버튼을 막는 것보다 열어 두는 편이 안전하다.
+          */
+          canZoomOut={hourScale.canZoomOut && gridOverflows}
         />
 
         <div ref={gridWrapperRef} className="relative">
@@ -1383,13 +1592,14 @@ function WeeklyPage() {
             onBlockDropOutside={handleBlockDropOutside}
             violationsByBlockId={violationsByBlockId}
             focusRequest={focusRequest}
+            onFocusBlock={handleFocusBlock}
             fixedSchedules={fixedSchedulesQuery.data ?? []}
             onOpenFixedMenu={openFixedMenu}
-            /* 달력 상자 높이는 이제 실측치다 — 예전의 `62vh` 상수는 격자가
-               그리는 내용의 높이와 아무 관계가 없어서 늘 조금씩 잘렸다(측정
-               코드의 주석 참고). 아직 측정 전이면 undefined 를 넘겨
+            /* 달력 상자 높이는 이제 실측치이고, max-height가 아니라 **고정
+               높이**다(CalendarGrid의 DEFAULT_BODY_HEIGHT 주석 — 축척을 바꿔도
+               상자가 안 변해야 한다). 아직 측정 전이면 undefined 를 넘겨
                CalendarGrid 자신의 기본값으로 첫 프레임을 그린다. */
-            bodyMaxHeight={gridMaxHeight == null ? undefined : `${gridMaxHeight}px`}
+            bodyHeight={gridMaxHeight == null ? undefined : `${gridMaxHeight}px`}
             onHeaderHeight={setDayHeaderPx}
           />
         </div>

@@ -115,10 +115,29 @@ export function useMoveBlock() {
 
   return useCallback(
     ({ planBlockId, startAt, endAt, sourceWeek, targetWeek }) => {
+      /*
+        A cold cache (no `prev`) has nothing to update optimistically, so this
+        write is skipped. That IS the right thing to do here, and the reason is
+        not obvious — an earlier attempt to "fix" it by invalidating immediately
+        made things worse (review finding, 2026-09-01):
+
+        `invalidateQueries` fired here starts a GET *before* the PATCH below is
+        even sent. If that GET is still in flight when the PATCH resolves, the
+        `.finally()` invalidate cannot restart it: query-core cancels an
+        in-flight fetch only when `state.data !== undefined` (query.ts's
+        `fetch()` — a cold cache is `undefined` by definition), and otherwise
+        returns the promise already running. The second invalidate therefore
+        piggybacks on the FIRST, pre-move response, leaving the cache holding
+        pre-move data until `staleTime` expires.
+
+        Skipping is safe because `cancelQueries` above has already aborted any
+        in-flight fetch for this key, so the `.finally()` invalidate below runs
+        against an idle query and really does refetch. The cost is that an
+        observer on a cold key shows pre-move data for one PATCH round trip —
+        unavoidable anyway, since we have no week object to write into.
+      */
       const applyToCache = (weekKey, updater) => {
-        queryClient.setQueryData(weekPlanKey(weekKey), (prev) =>
-          prev ? updater(prev) : prev,
-        )
+        queryClient.setQueryData(weekPlanKey(weekKey), (prev) => (prev ? updater(prev) : prev))
       }
 
       // Snapshot both affected weeks BEFORE mutating, for rollback.

@@ -27,7 +27,25 @@ import {
   WEEKEND_COLUMN_INDICES,
 } from '../../features/plan/planTime'
 
-const DEFAULT_BODY_MAX_HEIGHT = '62vh'
+/*
+  달력 상자의 세로 크기. **max-height가 아니라 height다** — 축척을 바꿔도 상자
+  크기가 변하지 않아야 하기 때문이다(2026-09-01 요구: "100%랑 114%일 때랑 크기가
+  조금씩 변하는디").
+
+  왜 변했었나: max-height일 때 내용이 상자보다 짧으면 컨테이너가 내용 높이로
+  줄어든다. 100%(맞춤)에서는 fitHourPx가 정수로 **내림**되므로 내용이 상자보다
+  최대 (시간 수 − 1)px 짧고, 한 칸 확대하면 내용이 상자를 넘겨 상자가 최대치로
+  커진다 — 그 몇 px이 "조금씩 변하는" 정체였다. 높이를 고정하면 그만큼이 아래쪽
+  빈 공간이 되고 상자는 그대로다.
+
+  ⚠ 남는 공간이 늘 "몇 px"인 것은 아니다(리뷰 지적, 2026-09-01). 가용 창이 아주
+  짧으면(예: 2~3시간) 맞춤 축척이 FIT_HOUR_PX_MAX(80)에 걸려 더 못 커지므로, 내용이
+  상자보다 **수백 px** 짧아져 아래가 크게 빈다. 기능은 안 깨진다 — 드래그·클릭
+  히트테스트는 상자가 아니라 격자 본문 높이를 기준으로 하므로 빈 영역은 아무것도
+  가로채지 않는다. 순수하게 보기의 문제이고, 고정 높이가 주는 안정성(축척을 바꿔도
+  상자가 안 변한다)과 맞바꾼 값이다.
+*/
+const DEFAULT_BODY_HEIGHT = '62vh'
 
 /* Column header: 요일 label + date, with today circled (design). */
 function DayHeader({ dayISO, columnIndex, todayISO }) {
@@ -153,13 +171,15 @@ export function CalendarGrid({
   // the review panel most recently asked to focus (PLAN-23).
   violationsByBlockId = null,
   focusRequest = null,
+  // 블록을 눌렀을 때 그 블록에 포커스를 요청한다(페이지가 focusRequest를 갱신).
+  onFocusBlock,
   // ST-F1-06: this week's recurring fixed schedules (weekday + minutes, plus
   // activeThisWeek) and the handler that opens their block-action menu.
   fixedSchedules = null,
   onOpenFixedMenu,
-  bodyMaxHeight = DEFAULT_BODY_MAX_HEIGHT,
+  bodyHeight = DEFAULT_BODY_HEIGHT,
   // 요일 헤더 줄의 실측 높이를 페이지로 올려 준다 (2026-08-31 맞춤 축척).
-  // 페이지는 달력 상자 전체 높이(bodyMaxHeight)만 알 뿐, 그중 격자 본문이
+  // 페이지는 달력 상자 전체 높이(bodyHeight)만 알 뿐, 그중 격자 본문이
   // 실제로 쓸 수 있는 높이는 헤더를 뺀 나머지다. 상수로 짐작하면 폰트·줄간격이
   // 바뀔 때마다 몇 px씩 어긋나 "다 보이는데 스크롤바만 생기는" 상태가 되므로
   // 재지 않고 넘겨받는다. 헤더 높이는 축척과 무관하므로 되먹임 고리가 없다.
@@ -177,13 +197,21 @@ export function CalendarGrid({
   // useLayoutEffect인 이유: 이 값이 도착해야 맞춤 축척이 확정되므로, 페인트
   // 전에 올려 보내지 않으면 첫 프레임이 기본 축척으로 한 번 그려졌다가
   // 맞춤 축척으로 다시 그려져 눈에 띄게 튄다.
+  // 헤더 높이는 페이지(맞춤 축척)뿐 아니라 여기서도 쓴다 — 이 헤더가 sticky라
+  // 스크롤 컨테이너 맨 위를 덮으므로, "블록이 정말 다 보이는가"를 판정하려면
+  // 그만큼을 가려진 영역으로 빼야 한다(PlanBlock의 viewportInsetTop).
+  const [headerPx, setHeaderPx] = useState(0)
   useLayoutEffect(() => {
     const el = headerRef.current
-    if (!el || !onHeaderHeight) return undefined
-    onHeaderHeight(el.getBoundingClientRect().height)
+    if (!el) return undefined
+    const report = (h) => {
+      setHeaderPx(h)
+      onHeaderHeight?.(h)
+    }
+    report(el.getBoundingClientRect().height)
     if (typeof ResizeObserver === 'undefined') return undefined
     const ro = new ResizeObserver((entries) => {
-      onHeaderHeight(entries[0].target.getBoundingClientRect().height)
+      report(entries[0].target.getBoundingClientRect().height)
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -301,25 +329,53 @@ export function CalendarGrid({
   const height = rangeHeightPx(range, pxPerMin)
   const ticks = hourTicks(range)
 
-  // In 24h mode, start scrolled to ~8:00 so the working day is visible. Switching
-  // back to focus mode resets to the top — focus mode already begins at the
-  // working hours, so a leftover 24h scroll offset would otherwise push it down.
-  //
-  // 축척(pxPerMin)은 일부러 의존성에 넣지 않고 ref로 읽는다 — 축척이 바뀌었을
-  // 때 할 일은 "8시로 되감기"가 아니라 "보던 자리를 지키기"이고, 그건 바로
-  // 아래 레이아웃 이펙트가 맡는다. 둘 다 반응하면 서로 덮어쓴다.
+  // 축척(pxPerMin)을 아래 스크롤 이펙트가 의존성이 아니라 ref로 읽는 이유:
+  // 축척이 바뀌었을 때 할 일은 "스크롤 되감기"가 아니라 "보던 자리를 지키기"이고,
+  // 그건 그 아래 축척 전용 레이아웃 이펙트가 맡는다. 둘 다 반응하면 서로 덮어쓴다.
   // 렌더 중에 ref를 쓰면 React 19 린트가 막는다(그리고 실제로 위험하다) —
-  // 동기화는 이펙트에서 한다. 아래 스크롤 이펙트보다 먼저 선언해야, 같은
-  // 커밋에서 mode와 축척이 함께 바뀌었을 때 최신 축척으로 계산한다.
+  // 동기화는 이펙트에서 한다.
+  //
+  // ⚠ 정정(리뷰 지적, 2026-09-01): 예전에 여기 "아래 스크롤 이펙트보다 **먼저
+  // 선언**해야 같은 커밋에서 최신 축척으로 계산한다"고 적혀 있었는데 **사실이
+  // 아니다.** 선언 순서는 같은 종류의 이펙트끼리만 순서를 정하고, 아래 스크롤
+  // 보존은 useLayoutEffect라 이 useEffect보다 **항상 먼저** 돈다 — 선언을 어디에
+  // 두든 그 시점의 ref는 이전 렌더의 축척이다. 지금은 기준 창(fitBasisRange)이
+  // mode에 의존하지 않아 "모드와 축척이 같은 커밋에서 함께 바뀌는" 입력 자체가
+  // 없으므로 도달 불가능한 잠복 문제지만, 근거가 틀린 주석을 남겨 두면 다음 사람이
+  // 그 보장을 믿고 코드를 짠다.
   const pxPerMinRef = useRef(pxPerMin)
   useEffect(() => {
     pxPerMinRef.current = pxPerMin
   }, [pxPerMin])
-  useEffect(() => {
-    if (!scrollRef.current) return
-    scrollRef.current.scrollTop =
-      mode === '24h' ? Math.max(0, (8 * 60 - range.startMinutes) * pxPerMinRef.current) : 0
-  }, [mode, range.startMinutes])
+  /*
+    보이는 범위가 바뀌어도(집중 ↔ 24시간) **지금 화면 맨 위에 있던 시각을 그대로
+    붙잡아 둔다** (2026-09-01 요구: "집중→24시로 변환할 때 지금 보고 있는 화면에
+    맞춰졌으면 좋겠어").
+
+    예전에는 24시간으로 가면 무조건 8시로 감고 집중으로 돌아오면 맨 위로 되감았다.
+    그러면 오후 3시께를 보다가 토글 한 번에 아침으로 튕겨, 방금 보던 자리를 다시
+    찾아 내려가야 했다.
+
+    계산은 간단하다 — 스크롤 위치는 "범위 시작에서 몇 분 내려왔는가"이므로,
+    바뀌기 전 범위 기준으로 맨 윗 시각을 구한 뒤 새 범위 기준으로 되돌려 놓으면
+    된다. 넘치는 값은 브라우저가 알아서 클램프한다(집중으로 돌아올 때 그 시각이
+    창보다 이르면 0으로).
+
+    useLayoutEffect인 이유: 새 높이가 페인트되기 전에 스크롤을 옮겨야 한 프레임
+    깜빡임이 안 생긴다. 축척은 ref로 읽는다 — 축척 변화는 아래 이펙트가 따로
+    맡으므로 둘이 같은 커밋에서 서로 덮어쓰지 않게 한다.
+  */
+  const prevRangeStartRef = useRef(range.startMinutes)
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const prevStart = prevRangeStartRef.current
+    prevRangeStartRef.current = range.startMinutes
+    if (!el || prevStart === range.startMinutes) return
+    const ppm = pxPerMinRef.current
+    if (!(ppm > 0)) return
+    const topMinutes = prevStart + el.scrollTop / ppm
+    el.scrollTop = Math.max(0, (topMinutes - range.startMinutes) * ppm)
+  }, [range.startMinutes])
 
   /*
     확대/축소했을 때 "보고 있던 시각"을 그대로 붙잡아 둔다. 축척만 바뀌면 같은
@@ -455,7 +511,12 @@ export function CalendarGrid({
           {/* A SINGLE vertical scroll container holds the header and the body, so a
               vertical scrollbar narrows both by the same amount and the columns
               stay aligned (a scrollbar on the body alone would offset the header). */}
-          <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: bodyMaxHeight }}>
+          <div
+            ref={scrollRef}
+            data-plan-scroller=""
+            className="overflow-y-auto"
+            style={{ height: bodyHeight }}
+          >
             {/* Sticky day-header row. */}
             {/* z-40: above the dragged block / drop preview (z-30) so a block
                 scrolled to the top slides UNDER the day header, never over it. */}
@@ -688,6 +749,9 @@ export function CalendarGrid({
                 focusToken={
                   focusRequest?.planBlockId === block.planBlockId ? focusRequest.token : null
                 }
+                focusIntent={focusRequest?.intent ?? 'reveal'}
+                viewportInsetTop={headerPx}
+                onFocusRequest={onFocusBlock ? () => onFocusBlock(block) : undefined}
                 style={style}
                 onPointerDown={(e) => onBlockPointerDown(e, block, dayIndex, startMin)}
                 onOpenMenu={(pos) => onOpenMenu(block, pos)}

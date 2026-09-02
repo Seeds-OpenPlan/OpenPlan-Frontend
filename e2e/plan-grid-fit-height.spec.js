@@ -39,15 +39,62 @@ function addDaysISO(iso, days) {
   return d.toISOString().slice(0, 10)
 }
 
+/*
+  [W6 QA, 2026-09-01] TC-23용 — planTime.js의 currentWeekStartISO()/weekStartOf()를
+  **로컬 시간·월요일 시작**으로 그대로 복제한다(UTC로 재면 실제 앱이 계산하는 값과
+  자정 근처에서 하루 어긋날 수 있다). Node(이 테스트 러너)와 Chromium(Playwright)이
+  같은 Windows 머신·같은 타임존을 쓰므로 이 값은 WeeklyPage가 마운트 시 잡는 첫
+  주와 항상 일치한다 — 어느 GET이 먼저 도착하는지(prefetch 순서)에 기대지 않는다.
+*/
+function currentWeekStartISOLocal() {
+  const now = new Date()
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const offset = (d.getDay() - 1 + 7) % 7 // weekStartsOn=1(월요일), planTime.js와 동일.
+  d.setDate(d.getDate() - offset)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 /**
  * 이 화면이 마운트 시점에 필요로 하는 모든 GET을 모킹한다(auth·onboarding·availability·
  * weekly-plans·fixed-schedules·tasks·notifications). PATCH /plan-blocks/{id}는 호출된
  * 본문을 그대로 흘려 받도록 onPatch 콜백을 제공할 수 있다(TC-05용).
  *
+ * [W6 QA, 2026-09-01 상태 추가] 리드 지적 — 예전엔 `blocks`를 **요청된 주가
+ * 무엇이든 그대로** 되돌려줘서(그 주의 날짜로 스탬프만 새로 찍음), 주 이동
+ * (targetWeekStartDate)이 서버에 실제로 반영됐는지 GET으로는 아무것도 구별할
+ * 수 없었다(TC-22는 PATCH 요청 본문만 봤다). 이제 주차별 저장소(`weekBlocks`)를
+ * 두고 PATCH가 `targetWeekStartDate`를 주면 그 저장소 사이에서 블록을 옮긴다
+ * (실서버 계약과 같은 의미 — planApi.js의 patchBlock 주석·PlanBlockService의
+ * get-or-create 참고). `moveIgnoresTargetWeek: true`를 주면 그 이동을 **일부러
+ * 무시**해 옛(수정 전) 서버 동작을 흉내 낸다 — TC-23의 음성 대조 전용 스위치다.
+ *
  * @param {import('@playwright/test').Page} page
- * @param {{ blocks?: object[], availability?: object[], onPatch?: (body: any) => void }} [opts]
+ * @param {{ blocks?: object[], availability?: object[], onPatch?: (body: any) => void, moveIgnoresTargetWeek?: boolean }} [opts]
  */
-async function mockPlanBackend(page, { blocks = [], availability = WEEKDAY_AVAILABILITY, onPatch } = {}) {
+async function mockPlanBackend(
+  page,
+  { blocks = [], availability = WEEKDAY_AVAILABILITY, onPatch, issues = null, moveIgnoresTargetWeek = false } = {},
+) {
+  // 초기 배치 주 = WeeklyPage가 마운트 시 currentWeekStartISO()로 잡는 바로 그 주
+  // (currentWeekStartISOLocal()이 같은 알고리즘을 복제한다). 어느 GET이 먼저
+  // 도착하든(현재 주 vs ±1주 프리페치) 무관하다 — 저장소는 요청된 주 문자열로만
+  // 찾으므로 순서에 기대지 않는다.
+  const weekBlocks = new Map([[currentWeekStartISOLocal(), blocks.map((b) => ({ ...b }))]])
+  const bucketFor = (weekStartDate) => {
+    if (!weekBlocks.has(weekStartDate)) weekBlocks.set(weekStartDate, [])
+    return weekBlocks.get(weekStartDate)
+  }
+  const removeById = (planBlockId) => {
+    for (const [week, arr] of weekBlocks) {
+      const idx = arr.findIndex((b) => b.planBlockId === planBlockId)
+      if (idx !== -1) return { item: arr.splice(idx, 1)[0], week }
+    }
+    return null
+  }
+
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace(/^\/api\/v1/, '')
@@ -72,6 +119,7 @@ async function mockPlanBackend(page, { blocks = [], availability = WEEKDAY_AVAIL
     }
     if (path === '/weekly-plans' && method === 'GET') {
       const weekStartDate = url.searchParams.get('weekStartDate')
+      const arr = bucketFor(weekStartDate)
       // planApi.js getWeek/normalizeWeek: `plan`이 null이 아니어야 get-or-create(POST)
       // 분기를 안 타므로, 매 요청(현재 주 + 앞뒤 프리페치 주 3건)에 항상 채워서 응답한다.
       return route.fulfill({
@@ -86,7 +134,7 @@ async function mockPlanBackend(page, { blocks = [], availability = WEEKDAY_AVAIL
               version: 1,
               totalPlannedMinutes: 0,
             },
-            blocks: blocks.map((b) => ({ ...b, startAt: b.startAt(weekStartDate), endAt: b.endAt(weekStartDate) })),
+            blocks: arr.map((b) => ({ ...b, startAt: b.startAt(weekStartDate), endAt: b.endAt(weekStartDate) })),
             unassignedCount: 0,
             validationSummary: { blockCount: 0, warningCount: 0 },
           },
@@ -96,7 +144,30 @@ async function mockPlanBackend(page, { blocks = [], availability = WEEKDAY_AVAIL
     if (path.startsWith('/plan-blocks/') && method === 'PATCH') {
       const body = route.request().postDataJSON()
       onPatch?.(body)
+      const planBlockId = Number(path.slice('/plan-blocks/'.length))
+      const found = removeById(planBlockId)
+      if (found) {
+        // moveIgnoresTargetWeek(TC-23 음성 대조 전용): 옛 서버처럼 targetWeekStartDate를
+        // 무시하고 항상 원래 주에 그대로 둔다 — 그러면 어느 주로 재조회해도 여전히
+        // 보이거나(원래 주) 안 보여야 할 새 주에서는 못 찾는, 옛 결함이 재현된다.
+        const targetWeek = moveIgnoresTargetWeek ? found.week : body.targetWeekStartDate || found.week
+        bucketFor(targetWeek).push(found.item)
+      }
       return route.fulfill({ status: 200, json: { data: { planBlockId: 101 } } })
+    }
+    if (path.endsWith('/validations') && method === 'POST') {
+      // ValidationReport (openapi). issues를 안 주면 "문제 없음"으로 응답한다.
+      return route.fulfill({
+        status: 200,
+        json: {
+          data: {
+            dryRun: true,
+            savable: !(issues ?? []).some((i) => i.severity === 'BLOCK'),
+            issues: issues ?? [],
+            evaluatedAt: new Date().toISOString(),
+          },
+        },
+      })
     }
     if (path === '/fixed-schedules') return route.fulfill({ status: 200, json: { data: [] } })
     if (path === '/tasks') return route.fulfill({ status: 200, json: { data: [] } })
@@ -184,13 +255,19 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     })
   }
 
-  test('TC-01b: 가용 밖 블록이 창을 크게 넓히면 FIT_HOUR_PX_MIN(28) 바닥에서 부분 스크롤이 남는다 (설계대로)', async ({
-    page,
-  }) => {
-    // visibleRange가 가용(09-18)과 실제로 그려지는 블록의 합집합으로 창을 넓힌다
-    // (planGeometry.js:visibleRange). 22-23시 블록 하나로 창이 09-23(14h)까지 벌어지면,
-    // 700px 높이에서는 14h * 28px(바닥) + 헤더가 가용 공간을 넘는다 — fitHourPx 주석이
-    // "바닥에 닿으면 맞춤은 포기하고 스크롤로 넘긴다"고 명시한 바로 그 경로다.
+  test('TC-01b: 가용 밖 블록이 있으면 축척을 줄이는 대신 스크롤로 넘긴다', async ({ page }) => {
+    /*
+      visibleRange는 가용(09-18)과 실제로 그려지는 블록의 합집합으로 창을 넓힌다
+      (가용 밖 블록이 잘리지 않게). 22-23시 블록 하나로 창은 09-23(14h)까지 벌어진다.
+
+      2026-09-01 정정: 예전에는 그 넓어진 창이 **축척 기준**이기도 해서 격자 전체가
+      작아졌고, 이 케이스는 축척이 바닥(FIT_HOUR_PX_MIN)에 걸려 남는 "최소한의
+      스크롤"을 쟀다. 그런데 그 동작은 블록 하나를 옮길 때마다 화면이 출렁이게
+      만든다(오너 보고). 이제 축척 기준은 가용 시간만이므로 크기는 그대로이고,
+      넘치는 만큼은 스크롤이 받는다 — 그래서 여기서 기대하는 것은 "바닥 근처의
+      작은 스크롤"이 아니라 **스크롤이 생긴다는 것 자체**다. 축척이 그대로라는
+      것은 TC-21이 따로 못박는다.
+    */
     await mockPlanBackend(page, {
       blocks: [
         {
@@ -210,10 +287,11 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
       scrollHeight: el.scrollHeight,
       clientHeight: el.clientHeight,
     }))
-    // 이 케이스는 "스크롤 없음"이 아니라 "바닥에서 최소한만 남는 스크롤"이 기대값이다 —
-    // TC-01과 반대 방향의 단언. 차이가 28px/h 바닥 근처(수십 px)인지만 확인한다.
-    expect(dims.scrollHeight).toBeGreaterThan(dims.clientHeight)
-    expect(dims.scrollHeight - dims.clientHeight).toBeLessThan(60)
+    // TC-01과 반대 방향의 단언 — 여기서는 스크롤이 생기는 것이 맞는 동작이다.
+    expect(
+      dims.scrollHeight,
+      `가용 밖 블록이 있으면 넘쳐야 한다(scrollHeight ${dims.scrollHeight} vs clientHeight ${dims.clientHeight})`,
+    ).toBeGreaterThan(dims.clientHeight)
   })
 
   test('TC-02: 여유 제거 — 첫 눈금이 가용 시작 정시(09)이고 위로 안 잘림', async ({ page }) => {
@@ -315,12 +393,17 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     // 화면에 없어야 한다(오너 요구). isFit=true는 aria-label에 "눌러서"가
     // 없는 것으로 드러난다(HourScaleControl.jsx의 두 분기 문구 참고).
     await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
-    await expect(scaleBtn).toHaveAttribute('title', '한 화면에 들어차는 크기')
+    await expect(scaleBtn).toHaveAttribute('title', /한 화면에 들어차는 크기$/)
     await expect(scaleBtn).toHaveText('100%')
     await expect(scaleBtn).not.toContainText('맞춤')
 
-    // −를 누르면 수동 단계로 빠지고 100%를 벗어난다.
-    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
+    /*
+      100%(집중, 스크롤 없음)에서는 **−가 잠긴다** — 더 줄여도 블록만 작아지고
+      아래 빈 공간이 늘 뿐이라(상자 높이가 고정) 얻는 게 없다. 그래서 100%를
+      벗어나려면 +를 쓴다.
+    */
+    await expect(page.getByRole('button', { name: /시간 간격 좁게/ })).toBeDisabled()
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
     await expect(scaleBtn).toHaveAttribute('aria-label', /눌러서 100%/)
     await expect(scaleBtn).toHaveAttribute('title', '100%로 되돌리기')
     await expect(scaleBtn).not.toHaveText('100%')
@@ -332,14 +415,16 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
 
     /*
       +/− 로도 100%에 다시 설 수 있어야 한다(2026-08-31 요구). 맞춤 축척이
-      단계 사다리의 한 칸으로 끼어 있으므로, −로 한 칸 내려갔다가 +로 한 칸
-      올라오면 정확히 100%다. 예전에는 사다리가 고정 5칸뿐이라 이 왕복이
-      100%를 지나치고 다른 값에 서서, 100%로 돌아갈 길이 가운데 버튼밖에
-      없었다.
+      단계 사다리의 한 칸으로 끼어 있으므로, 한 칸 움직였다가 되돌아오면 정확히
+      100%다. 예전에는 사다리가 고정 5칸뿐이라 이 왕복이 100%를 지나치고 다른
+      값에 서서, 100%로 돌아갈 길이 가운데 버튼밖에 없었다.
+
+      +로 먼저 올라가는 이유: 100%(집중)에서는 스크롤이 없어 −가 잠겨 있다
+      (TC-19). 확대해서 넘치게 만든 뒤라야 −가 살아난다.
     */
-    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
-    await expect(scaleBtn).not.toHaveText('100%')
     await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await expect(scaleBtn).not.toHaveText('100%')
+    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
     await expect(scaleBtn).toHaveText('100%')
     await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
   })
@@ -596,7 +681,8 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
     await expect(liveRegion).toContainText('100%') // 기본은 화면에 들어차는 축척 = 100%.
 
     const beforeText = await liveRegion.textContent()
-    await page.getByRole('button', { name: /시간 간격 좁게/ }).click()
+    // 100%에서는 −가 잠겨 있으므로(스크롤 없음) +로 축척을 바꾼다.
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
     await page.waitForTimeout(150)
     const afterText = await liveRegion.textContent()
 
@@ -754,6 +840,16 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
 
     await expect(scaleBtn).toHaveText('100%')
     await expect(scaleBtn).toHaveAttribute('aria-label', /한 화면에 들어차는 크기$/)
+
+    /*
+      사다리 왕복은 **24시간 모드에서** 잰다. 집중 100%에서는 스크롤이 없어 −가
+      잠기므로(그게 의도다 — TC-19) 아래쪽 끝이라는 것이 존재하지 않는다.
+      24시간 모드는 같은 축척에서도 하루가 다 안 들어가 계속 넘치므로, 양쪽 끝이
+      모두 살아 있어 사다리 자체를 검증할 수 있다.
+    */
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(250)
+    await expect(scaleBtn).toHaveText('100%')
 
     // 바닥까지 걷는다 — 매 걸음 % 가 단조 감소해야 하고, 20걸음 안에 반드시
     // 비활성화(무한 루프 방지 상한)에 닿아야 한다.
@@ -938,4 +1034,570 @@ test.describe('주간 계획 격자 — 맞춤 세로 축척 (W6)', () => {
       }
     },
   )
+
+  /*
+    TC-14 [2026-09-01 요구: "집중/24시 전환했을 때 100% 크기가 동일했으면 좋겠어"] —
+    모드를 오가도 **블록 크기(시간당 픽셀)가 그대로**여야 한다.
+
+    그 전에는 기준 축척을 "지금 그리는 범위"로 잡아서, 24시간 모드로 넘어가면
+    나누는 시간 수가 9에서 24로 뛰며 같은 100%가 절반 이하로 쪼그라들었다. 이제
+    기준 창을 집중 모드의 창으로 고정했으므로, 달라지는 것은 "몇 시간을 펼쳐
+    보이느냐"뿐이다.
+
+    재는 법: 한 시간 눈금선 사이의 실제 거리. 눈금선은 `h*60*pxPerMin`으로 놓이니
+    이웃한 두 줄의 간격이 곧 시간당 픽셀이다. 블록을 심지 않아도 되고 축척을
+    직접 읽지 않아도 되는, 화면에서 곧바로 확인 가능한 값이다.
+  */
+  test('TC-14: 집중 ↔ 24시간 모드를 오가도 100%의 시간당 픽셀이 같다', async ({ page }) => {
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    // 이웃한 두 시간 눈금선의 세로 간격 = 시간당 픽셀.
+    const hourPitch = async () =>
+      page.evaluate(() => {
+        const lines = [...document.querySelectorAll('div.pointer-events-none.absolute.inset-x-0')]
+          .map((el) => el.getBoundingClientRect().top)
+          .sort((a, b) => a - b)
+        return lines.length >= 2 ? Math.round((lines[1] - lines[0]) * 100) / 100 : null
+      })
+
+    const focusPitch = await hourPitch()
+    expect(focusPitch, '집중 모드에서 시간 눈금 간격을 재지 못했다').toBeGreaterThan(0)
+
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(250)
+    const dayPitch = await hourPitch()
+
+    expect(
+      dayPitch,
+      `모드를 바꿔도 시간당 픽셀이 같아야 한다: 집중 ${focusPitch}px vs 24시간 ${dayPitch}px`,
+    ).toBe(focusPitch)
+
+    // 축척 표시도 100% 그대로여야 한다 — 기준이 모드와 무관하기 때문이다.
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+
+    /*
+      100%에서만이 아니라 **확대한 상태에서도** 모드 간 크기가 같아야 한다
+      (2026-09-01 요구를 그렇게 읽었다: "집중 100%일 때랑 100 이상일 때 크기가
+      같았으면"). 축척 상태가 모드와 무관한 값 하나이므로 원리상 성립하지만,
+      원리는 테스트가 아니다 — 실제로 잰다.
+    */
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await page.waitForTimeout(250)
+    const zoomedDayPitch = await hourPitch()
+    const zoomedPercent = await page.getByRole('button', { name: /세로 축척/ }).textContent()
+    expect(zoomedDayPitch, '확대 후 24시간 모드에서 눈금 간격을 재지 못했다').toBeGreaterThan(0)
+
+    await page.getByRole('button', { name: '집중', exact: true }).click()
+    await page.waitForTimeout(250)
+    const zoomedFocusPitch = await hourPitch()
+
+    expect(
+      zoomedFocusPitch,
+      `확대(${zoomedPercent}) 상태에서도 모드 간 시간당 픽셀이 같아야 한다: ` +
+        `24시간 ${zoomedDayPitch}px vs 집중 ${zoomedFocusPitch}px`,
+    ).toBe(zoomedDayPitch)
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText(zoomedPercent)
+  })
+
+  /*
+    TC-15 [2026-09-01 요구: "100%랑 114%일 때랑 크기가 조금씩 변하는디"] —
+    축척을 바꿔도 **달력 상자 자체의 높이**는 그대로여야 한다.
+
+    원인은 상자가 max-height였다는 것이다. 내용이 상자보다 짧으면 컨테이너가
+    내용 높이로 줄어드는데, 100%(맞춤)에서는 fitHourPx가 정수로 내림되므로 내용이
+    상자보다 최대 (시간 수 − 1)px 짧다. 한 칸 확대하면 내용이 상자를 넘겨 상자가
+    최대치가 되고, 그 몇 px 차이가 눈에 띄었다.
+  */
+  test('TC-15: 축척(100% ↔ 확대/축소)을 바꿔도 달력 상자 높이가 변하지 않는다', async ({ page }) => {
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    const boxHeight = async () => (await scroller(page).boundingBox()).height
+    const atFit = await boxHeight()
+    expect(atFit, '달력 상자 높이를 재지 못했다').toBeGreaterThan(0)
+
+    for (const label of [/시간 간격 넓게/, /시간 간격 넓게/, /시간 간격 좁게/, /시간 간격 좁게/, /시간 간격 좁게/]) {
+      const btn = page.getByRole('button', { name: label })
+      if (await btn.isDisabled()) continue
+      await btn.click()
+      await page.waitForTimeout(200)
+      const percent = await page.getByRole('button', { name: /세로 축척/ }).textContent()
+      expect(await boxHeight(), `축척 ${percent}에서 상자 높이가 달라졌다`).toBe(atFit)
+    }
+  })
+
+  /*
+    TC-16 [2026-09-01 요구: "집중→24시로 변환할 때 지금 보고 있는 화면에
+    맞춰졌으면 좋겠어"] — 모드를 바꿔도 화면 맨 위에 있던 **시각**이 유지돼야 한다.
+
+    예전에는 24시간으로 가면 무조건 8시로 감았다. 그래서 오후를 보다 토글하면
+    아침으로 튕겼다. 여기서는 24시간 모드에서 한참 아래(오후)로 스크롤한 뒤
+    집중 → 24시간을 오가며 맨 윗 시각이 보존되는지 잰다.
+  */
+  test('TC-16: 모드를 바꿔도 화면 맨 위의 시각이 유지된다', async ({ page }) => {
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    // 집중 모드에서 아래로 스크롤할 여지를 만들기 위해 한 칸 확대한다.
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await page.waitForTimeout(200)
+
+    const el = scroller(page)
+    await el.evaluate((node) => {
+      node.scrollTop = Math.round((node.scrollHeight - node.clientHeight) / 2)
+    })
+    await page.waitForTimeout(150)
+    const before = await el.evaluate((node) => node.scrollTop)
+    expect(before, '스크롤할 여지가 없어 이 케이스가 의미를 잃었다').toBeGreaterThan(0)
+
+    // 집중 → 24시간: 범위 시작이 앞당겨지므로 같은 시각을 유지하려면 스크롤이
+    // 그만큼 더 내려가 있어야 한다.
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(300)
+    const after = await el.evaluate((node) => node.scrollTop)
+
+    expect(
+      after,
+      `24시간으로 바꿨을 때 맨 윗 시각이 유지돼야 한다(집중 scrollTop ${before} → 24시간 ${after}). ` +
+        `예전처럼 8시로 되감으면 이 값이 훨씬 작아진다.`,
+    ).toBeGreaterThan(before)
+  })
+
+  /*
+    TC-17 [2026-09-01 요구: "블럭 클릭했을 때 그 블럭으로 포커싱되는 기능"] —
+    블록을 누르면 **하이라이트 링이 실제로 뜬다**.
+
+    TC-06은 스크롤만 확인한다. 링이 뜨는지는 별개이고(오너 질문: "블록 포커싱
+    되는 거 맞아?"), 링은 focusRequest가 그 블록을 가리키는 동안만 렌더되므로
+    존재 여부로 곧장 잴 수 있다. 링을 내리는 것까지 확인한다 — 하이라이트는
+    선택 상태가 아니라 한 번의 대답이라, 남아 있으면 그것대로 결함이다.
+  */
+  test('TC-17: 블록을 누르면 하이라이트 링이 떴다가 사라진다', async ({ page }) => {
+    await mockPlanBackend(page, {
+      blocks: [
+        {
+          planBlockId: 101,
+          blockType: 'TASK',
+          title: 'E2E 포커스 링 테스트',
+          status: 'PLANNED',
+          startAt: (weekStartDate) => `${weekStartDate}T10:00:00`,
+          endAt: (weekStartDate) => `${weekStartDate}T11:00:00`,
+        },
+      ],
+    })
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    const block = page.getByRole('button', { name: /E2E 포커스 링 테스트/ })
+    const ring = block.locator('span.ring-2.ring-focus-ring')
+
+    await expect(ring, '누르기 전에는 링이 없어야 한다').toHaveCount(0)
+
+    await block.click()
+    await expect(ring, '누르면 그 블록에 링이 떠야 한다').toHaveCount(1)
+    // 눌린 블록이 키보드 포커스도 받는다 — 검토 패널 경로와 같은 처리다.
+    await expect(block).toBeFocused()
+
+    // FOCUS_HIGHLIGHT_MS(900ms) 뒤에는 스스로 내려간다.
+    await expect(ring, '하이라이트는 잠시 뒤 스스로 사라져야 한다').toHaveCount(0, {
+      timeout: 3000,
+    })
+  })
+
+  /*
+    TC-18 [오너 보고 2026-09-01: "검토에서 대상항목 눌러도 포커싱이 안 되네 —
+    이 항목의 대상 블록을 찾을 수 없다고 떠"] — **요일 수준 규칙**도 그 요일의
+    문제 블록으로 포커싱돼야 한다.
+
+    계약(openapi ValidationIssue)상 `planBlockId`는 nullable이고, 가용 시간 밖
+    배치(V4)·초과(V3)는 weekday만 낸다. 그래서 예전에는 그 항목이 언제나 막다른
+    길이었다. 여기서는 **계약 그대로**(planBlockId 없음, params 없음, weekday만)
+    응답을 만들어, 클라이언트가 그 요일에서 가용 창을 벗어난 TASK를 찾아
+    가리키는지 확인한다.
+  */
+  test('TC-18: 요일 수준 검토 항목(V4)을 누르면 그 요일의 문제 블록이 포커싱된다', async ({
+    page,
+  }) => {
+    await mockPlanBackend(page, {
+      // 월요일 20:00-21:00 — 가용(09-18) 밖 TASK.
+      blocks: [
+        {
+          planBlockId: 101,
+          blockType: 'TASK',
+          title: 'E2E 가용시간 밖 블록',
+          status: 'PLANNED',
+          startAt: (weekStartDate) => `${weekStartDate}T20:00:00`,
+          endAt: (weekStartDate) => `${weekStartDate}T21:00:00`,
+        },
+      ],
+      issues: [
+        {
+          validationIssueId: null,
+          ruleId: 'V4_OUT_OF_AVAILABILITY',
+          severity: 'WARNING',
+          planBlockId: null, // ← 계약대로 블록을 안 준다
+          counterpartId: null,
+          taskId: null,
+          weekday: 'MONDAY',
+          reason: '규칙 V4_OUT_OF_AVAILABILITY에 의해 판정되었습니다',
+          resolutionStatus: 'OPEN',
+        },
+      ],
+    })
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+    // 검증은 디바운스 뒤 실행된다 — 배지가 뜰 때까지 기다린다.
+    const reviewBtn = page.getByRole('button', { name: /검토 열기/ })
+    await expect(reviewBtn).toBeVisible({ timeout: 10000 })
+    await reviewBtn.click()
+
+    /*
+      검토 항목만 잡는다. 그냥 /가용 시간/ 으로 찾으면 축척 버튼의 접근성 이름
+      ("세로 축척 100% — 가용 시간대가 …")까지 걸려 엉뚱한 것을 누른다 — 실제로
+      한 번 그렇게 걸렸다. 패널의 리스트 항목(<li> 안의 버튼)으로 한정한다.
+    */
+    const row = page.locator('li > button').filter({ hasText: /가용 시간/ }).first()
+    await expect(row, '검토 패널에 V4 항목이 있어야 한다').toBeVisible({ timeout: 10000 })
+    await row.click()
+
+    // 대상 블록이 포커스 링을 받아야 한다 — "찾을 수 없습니다" 토스트가 아니라.
+    const block = page.getByRole('button', { name: /E2E 가용시간 밖 블록/ })
+    await expect(block.locator('span.ring-2.ring-focus-ring'), '그 요일의 문제 블록이 포커싱돼야 한다').toHaveCount(1)
+    await expect(page.getByText('이 항목의 대상 블록을 찾을 수 없습니다')).toHaveCount(0)
+  })
+
+  /*
+    TC-19 [2026-09-01 요구: "달력 스크롤 없을 때는(예: 집중모드 100%일 때)
+    100%보다 작아질 필요는 없을 것 같기도 해"] — 넘치지 않으면 − 가 잠긴다.
+
+    상자 높이가 고정이므로(TC-15) 이미 다 보이는 상태에서 더 줄이면 블록만
+    작아지고 아래 빈 공간이 늘 뿐이다. 반대로 넘치는 상태에서는 줄이는 것이
+    실제로 더 보이게 하므로 열려 있어야 한다 — 24시간 모드가 그 경우다.
+  */
+  test('TC-19: 스크롤이 없으면 − 가 잠기고, 넘치면 다시 열린다', async ({ page }) => {
+    await mockPlanBackend(page)
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForTimeout(200)
+
+    const scaleBtn = page.getByRole('button', { name: /세로 축척/ })
+    const minus = page.getByRole('button', { name: /시간 간격 좁게/ })
+
+    // 집중 100% — 스크롤 없음(TC-01) → 잠김.
+    await expect(scaleBtn).toHaveText('100%')
+    await expect(minus, '집중 100%에서는 더 줄일 이유가 없다').toBeDisabled()
+
+    // 한 칸 확대하면 넘치므로 다시 열린다(되돌아올 길이 막히면 안 된다).
+    await page.getByRole('button', { name: /시간 간격 넓게/ }).click()
+    await page.waitForTimeout(200)
+    await expect(minus, '확대해 넘치면 줄이는 것이 의미를 갖는다').not.toBeDisabled()
+
+    // 24시간 모드는 같은 100%에서도 넘치므로 열려 있어야 한다.
+    await scaleBtn.click() // 100%로 복귀
+    await page.waitForTimeout(200)
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(250)
+    await expect(scaleBtn).toHaveText('100%')
+    await expect(minus, '24시간 모드는 100%에서도 넘치므로 줄일 수 있어야 한다').not.toBeDisabled()
+  })
+
+  /*
+    TC-20 [오너 보고 2026-09-01: "24h에서 블록 누르면 블록의 반밖에 안 보이게
+    움직여 … 거의 차이가 안 나"] — 누른 뒤에는 블록이 **sticky 요일 헤더에
+    가리지 않고 온전히** 보여야 한다.
+
+    예전 `block:'nearest'`가 부족했던 이유: 헤더가 `sticky top-0`라 스크롤
+    컨테이너 맨 위를 덮는데 브라우저는 그 가림을 모른다. 그래서 블록을 컨테이너
+    꼭대기에 붙여 놓고 "보이게 했다"고 끝내면, 실제로는 헤더 뒤에 반쯤 들어간다.
+
+    여기서는 그 상황을 그대로 만든다 — 24시간 모드에서 블록이 헤더에 반쯤 걸리도록
+    스크롤한 뒤 눌러, 헤더 아래로 완전히 내려오는지 잰다.
+  */
+  test('TC-20: 24시간 모드에서 헤더에 반쯤 가린 블록을 누르면 온전히 드러난다', async ({ page }) => {
+    await mockPlanBackend(page, {
+      blocks: [
+        {
+          planBlockId: 101,
+          blockType: 'TASK',
+          title: 'E2E 헤더 가림 블록',
+          status: 'PLANNED',
+          startAt: (weekStartDate) => `${weekStartDate}T14:00:00`,
+          endAt: (weekStartDate) => `${weekStartDate}T15:00:00`,
+        },
+      ],
+    })
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.getByRole('button', { name: '24h', exact: true }).click()
+    await page.waitForTimeout(300)
+    await page.evaluate(() => document.fonts.ready)
+
+    const sc = page.locator('[data-plan-scroller]')
+    const header = sc.locator('> div.sticky').first()
+    const block = page.getByRole('button', { name: /E2E 헤더 가림 블록/ })
+
+    const headerBox = await header.boundingBox()
+
+    // 먼저 블록을 화면 안으로 들인 다음(한 번에 계산하면 컨테이너 밖으로 밀려
+    // boundingBox가 null이 된다), 위쪽 절반이 헤더 뒤로 들어가도록 조금만 민다.
+    await block.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(200)
+    const b0 = await block.boundingBox()
+    const v0 = await sc.boundingBox()
+    expect(b0, '전제 확인: 블록이 화면 안에 들어와야 한다').not.toBeNull()
+    await sc.evaluate(
+      (node, dy) => {
+        node.scrollTop += dy
+      },
+      b0.y - (v0.y + headerBox.height - b0.height / 2),
+    )
+    await page.waitForTimeout(200)
+
+    const beforeBox = await block.boundingBox()
+    const viewBefore = await sc.boundingBox()
+    expect(beforeBox, '전제 확인: 블록이 여전히 화면 안에 있어야 한다').not.toBeNull()
+    expect(
+      beforeBox.y,
+      '전제 확인: 누르기 전엔 블록 윗부분이 헤더에 가려 있어야 한다',
+    ).toBeLessThan(viewBefore.y + headerBox.height)
+
+    /*
+      `.click()`을 쓰면 안 된다 — Playwright는 클릭 전에 **스스로 요소를 화면
+      안으로 스크롤**한다. 그러면 우리 코드가 아무 일도 안 해도 블록이 드러나
+      이 케이스가 항상 통과한다(음성 대조로 확인: 옛 'nearest' 구현에서도 통과했다).
+      제품 코드의 스크롤만 재려면 스크롤 없이 이벤트만 쏘아야 한다.
+    */
+    await block.dispatchEvent('click')
+    await page.waitForTimeout(600) // smooth 스크롤이 멎을 시간
+
+    const afterBox = await block.boundingBox()
+    const viewAfter = await sc.boundingBox()
+    expect(
+      afterBox.y,
+      `누른 뒤에는 헤더(높이 ${Math.round(headerBox.height)}px) 아래로 내려와야 한다 ` +
+        `(블록 top ${Math.round(afterBox.y)}, 가려지는 경계 ${Math.round(viewAfter.y + headerBox.height)})`,
+    ).toBeGreaterThanOrEqual(viewAfter.y + headerBox.height)
+    expect(
+      afterBox.y + afterBox.height,
+      '아래쪽도 잘리면 안 된다',
+    ).toBeLessThanOrEqual(viewAfter.y + viewAfter.height + 1)
+  })
+
+  /*
+    TC-21 [오너 보고 2026-09-01: "블록을 위아래로 움직일 때마다 블록 크기가
+    바뀌는 건지 세로 칸 자체가 변하는 건지 … 뭐가 계속 바뀐다"] — **블록 위치가
+    축척을 바꾸면 안 된다.**
+
+    원인이었던 것: `visibleRange`는 가용 시간과 이 주에 그려지는 것들의
+    **합집합**으로 창을 정한다(가용 창 밖 블록이 잘리지 않게). 그 창을 100% 기준
+    으로도 쓰면, 블록 하나를 가용 시간 밖으로 옮기는 순간 창이 넓어지며 격자
+    전체가 작아진다 — 옮기던 블록만이 아니라 화면이 통째로 출렁인다.
+
+    재는 법: 가용 시간(09-18)만 있는 화면과, 거기에 가용 밖 블록(22-23시)이 있는
+    화면의 **시간당 픽셀**이 같아야 한다. 다르면 블록 위치가 축척을 흔든 것이다.
+  */
+  test('TC-21: 가용 시간 밖 블록이 있어도 시간당 픽셀(100% 기준)이 달라지지 않는다', async ({
+    browser,
+  }) => {
+    const pitchOf = async (blocks) => {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+      const page = await context.newPage()
+      try {
+        await mockPlanBackend(page, { blocks })
+        await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+        await expect(page.getByRole('button', { name: /세로 축척/ })).toHaveText('100%')
+        await page.evaluate(() => document.fonts.ready)
+        await page.waitForTimeout(200)
+        return await page.evaluate(() => {
+          const lines = [...document.querySelectorAll('div.pointer-events-none.absolute.inset-x-0')]
+            .map((el) => el.getBoundingClientRect().top)
+            .sort((a, b) => a - b)
+          return lines.length >= 2 ? Math.round((lines[1] - lines[0]) * 100) / 100 : null
+        })
+      } finally {
+        await context.close()
+      }
+    }
+
+    const clean = await pitchOf([])
+    expect(clean, '기준 화면에서 눈금 간격을 재지 못했다').toBeGreaterThan(0)
+
+    const withOutsideBlock = await pitchOf([
+      {
+        planBlockId: 101,
+        blockType: 'TASK',
+        title: 'E2E 가용 밖 블록',
+        status: 'PLANNED',
+        startAt: (weekStartDate) => `${weekStartDate}T22:00:00`,
+        endAt: (weekStartDate) => `${weekStartDate}T23:00:00`,
+      },
+    ])
+
+    expect(
+      withOutsideBlock,
+      `블록 위치가 축척을 바꾸면 안 된다: 블록 없음 ${clean}px vs 가용 밖 블록 있음 ${withOutsideBlock}px`,
+    ).toBe(clean)
+  })
+
+  /*
+    TC-22 [오너 보고 2026-09-01: "블럭 우클릭해서 다음 주로 이동 눌렀더니
+    없어졌어"] — 주를 넘겨 옮기면 **어디로 갔는지 알려 주고 따라갈 길을 준다.**
+
+    동작 자체는 원래 맞았다 — 블록은 그 주로 갔고 이번 주에서 사라지는 게 정상이다.
+    문제는 그 사실을 알 길이 없었다는 것: 블록 하나가 소리 없이 없어지고, 어디로
+    갔는지도 되돌릴 방법도 화면에 안 떴다. 메뉴로 옮기면 드래그와 달리 "내가
+    저쪽으로 보냈다"는 감각조차 없어서 더 그렇다.
+  */
+  test('TC-22: 다음 주로 이동하면 안내가 뜨고 "보러 가기"로 따라갈 수 있다', async ({ browser }) => {
+    /*
+      뷰포트를 직접 고정한다 — 우클릭 메뉴는 데스크톱 상호작용이고, 375px 폭에서는
+      격자가 `min-w-[640px]`라 가로로 잘려 블록이 화면 밖에 있다(모바일 프로젝트에서
+      한 번 그렇게 걸렸다). 이 케이스가 재는 것은 폭과 무관한 "주 이동 안내"다.
+    */
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const page = await context.newPage()
+    try {
+    let patched = null
+    await mockPlanBackend(page, {
+      onPatch: (body) => {
+        patched = body
+      },
+      blocks: [
+        {
+          planBlockId: 101,
+          blockType: 'TASK',
+          title: 'E2E 주 이동 블록',
+          status: 'PLANNED',
+          startAt: (weekStartDate) => `${weekStartDate}T10:00:00`,
+          endAt: (weekStartDate) => `${weekStartDate}T11:00:00`,
+        },
+      ],
+    })
+    await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+    await page.evaluate(() => document.fonts.ready)
+
+    const block = page.getByRole('button', { name: /E2E 주 이동 블록/ })
+    await expect(block).toBeVisible()
+
+    await block.click({ button: 'right' })
+    // 메뉴 컨테이너만 role="menu"이고 항목은 평범한 <button>이다(menuitem 아님).
+    await page.locator('[role="menu"]').getByRole('button', { name: '다음 주로 이동' }).click()
+
+    /*
+      서버에 **주차 이동을 명시해서** 보내야 한다 — 계약의 `targetWeekStartDate`
+      (PATCH /plan-blocks/{blockId} summary: "주차 이동은 targetWeekStartDate").
+      예전에는 startAt/endAt만 보내서, 블록이 새 날짜를 갖되 옛 주간 계획에 매달린
+      채로 남아 **양쪽 주 어디에서도 안 보였다**(오너 보고). 이 단언이 그 회귀를
+      막는다.
+    */
+    expect(patched, 'PATCH가 나가야 한다').not.toBeNull()
+    expect(
+      patched.targetWeekStartDate,
+      `주차 이동은 targetWeekStartDate로 알려야 한다(실제 본문: ${JSON.stringify(patched)})`,
+    ).toBeTruthy()
+
+    // 소리 없이 사라지지 않는다 — 어느 주로 갔는지 뜬다.
+    await expect(page.getByText('다음 주로 옮겼습니다')).toBeVisible()
+
+    // 그리고 따라갈 수 있다.
+    const follow = page.getByRole('button', { name: '보러 가기' })
+    await expect(follow).toBeVisible()
+    await follow.click()
+    await page.waitForTimeout(400)
+    await expect(page.getByText('다음 주로 옮겼습니다')).toHaveCount(0)
+    } finally {
+      await context.close()
+    }
+  })
+
+  /*
+    TC-23 [W6 QA, 2026-09-01, 리드가 지적한 커버리지 구멍] — TC-22는 PATCH 본문에
+    targetWeekStartDate가 실리는지만 본다. 오너가 실제로 겪은 증상("다음 주로
+    가도 블록이 없다")은 그 값이 서버에 **실제로 반영되는지**를 요구하는데, 예전
+    mockPlanBackend는 blocks를 요청된 주가 무엇이든 그대로 돌려줘서 그걸 구별할
+    길이 없었다(위 mockPlanBackend 헤더 주석 참고). 이제 주차별 저장소가 있으므로
+    "옮긴 뒤 원래 주로 되짚어 가면 거기엔 없고, 다음 주에는 있다"를 서버 재조회
+    (GET, react-query invalidate 이후)까지 포함해 잰다.
+
+    "이전 주" 내비게이션(WeekNav.jsx aria-label="이전 주")으로 원래 주로 돌아가는
+    것이 핵심이다 — "보러 가기"만으로 다음 주에 블록이 보이는 것만 확인하면 그건
+    useMoveBlock의 낙관적 캐시(즉시 쓰기)만 재는 셈이라, 목이 주차를 구별 못 해도
+    (블록을 아무 주에나 돌려줘도) 그대로 통과한다. 원래 주로 되짚어 가 "거기엔
+    없다"까지 봐야 목이 실제로 주차를 구별하는지 검증된다.
+
+    음성 대조 실측(2026-09-01) — mockPlanBackend에 `moveIgnoresTargetWeek: true`를
+    잠깐 넣어(옛 서버처럼 targetWeekStartDate를 무시) 이 테스트를 그대로 1회
+    실행하고 즉시 되돌렸다. 예상대로 **실패**했다 — 다만 마지막 단언(원래 주에
+    없어야 한다)이 아니라 그 앞, "다음 주 화면에 블록이 보여야 한다"에서 먼저
+    막혔다(`getByRole('button', {name: /E2E 주 이동 재조회 블록/})` 타임아웃,
+    5000ms). 이유: 목이 이동을 무시하면 블록이 원래 주 저장소에 그대로 남고
+    다음 주 저장소는 계속 비어 있으므로, "보러 가기"로 다음 주에 가는 순간
+    블록이 아예 안 보인다 — 오너가 보고한 증상("다음 주로 가도 블록이 없다")과
+    같은 모양의 실패다. 즉 이 테스트는 옛 동작에서 확실히 잡히고, 통과한
+    상태(위 실행)에서는 실제로 무언가를 검증하고 있다는 뜻이다.
+  */
+  test('TC-23: 다음 주로 이동한 블록은 재조회해도 그 주에만 있고 원래 주에는 없다', async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const page = await context.newPage()
+    try {
+      await mockPlanBackend(page, {
+        blocks: [
+          {
+            planBlockId: 101,
+            blockType: 'TASK',
+            title: 'E2E 주 이동 재조회 블록',
+            status: 'PLANNED',
+            startAt: (weekStartDate) => `${weekStartDate}T10:00:00`,
+            endAt: (weekStartDate) => `${weekStartDate}T11:00:00`,
+          },
+        ],
+      })
+      await page.goto(`${BASE}/weekly`, { waitUntil: 'networkidle' })
+      await page.evaluate(() => document.fonts.ready)
+
+      const block = page.getByRole('button', { name: /E2E 주 이동 재조회 블록/ })
+      await expect(block).toBeVisible()
+
+      await block.click({ button: 'right' })
+      await page.locator('[role="menu"]').getByRole('button', { name: '다음 주로 이동' }).click()
+
+      const follow = page.getByRole('button', { name: '보러 가기' })
+      await expect(follow).toBeVisible()
+      await follow.click()
+
+      // 다음 주 화면 — 낙관적 캐시 기준으로는 이미 보여야 한다.
+      await expect(block).toBeVisible()
+
+      // useMoveBlock의 .finally()가 두 주 모두 invalidateQueries를 거니, 그 서버
+      // 재조회가 실제로 끝날 시간을 준다 — 낙관적 캐시만 보고 지나가면 아래 "원래
+      // 주로 되짚기" 단계 전에 이미 이 케이스의 목적(서버 재조회 확인)을 잃는다.
+      await page.waitForLoadState('networkidle')
+      await page.waitForTimeout(300)
+      await expect(block, '서버 재조회 후에도 다음 주에는 블록이 있어야 한다').toBeVisible()
+
+      // 원래 주로 되짚어 간다 — 상태 없는 목이었다면 구별할 수 없던 지점이다.
+      await page.getByRole('button', { name: '이전 주', exact: true }).click()
+      await page.waitForLoadState('networkidle')
+      await page.waitForTimeout(300)
+
+      await expect(
+        block,
+        '원래 주로 돌아오면 그 블록이 더는 없어야 한다(다음 주로 실제로 옮겨졌다는 증거)',
+      ).toHaveCount(0)
+    } finally {
+      await context.close()
+    }
+  })
 })
