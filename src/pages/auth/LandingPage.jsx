@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { AuthShell } from '../../components/auth/AuthShell'
+import { Link } from 'react-router-dom'
 import { Button } from '../../components/common/Button'
 
 /*
@@ -21,8 +22,30 @@ const VALUE_PROPS = [
 export function LandingPage() {
   const navigate = useNavigate()
 
+  /*
+    푸터의 법적 고지 링크 — 구글 OAuth 심사가 "앱의 홈페이지에서 개인정보처리방침
+    링크가 보이는가"를 확인하고, 비인증 진입점인 이 화면이 그 홈페이지다.
+    AuthShell이 이미 `footer` 슬롯을 갖고 있어 새 레이아웃을 만들지 않는다.
+  */
+  const legalFooter = (
+    <span className="flex justify-center gap-3">
+      <Link
+        to="/legal/terms"
+        className="underline underline-offset-2 hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+      >
+        이용약관
+      </Link>
+      <Link
+        to="/legal/privacy"
+        className="underline underline-offset-2 hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+      >
+        개인정보처리방침
+      </Link>
+    </span>
+  )
+
   return (
-    <AuthShell>
+    <AuthShell footer={legalFooter}>
       <ul className="flex flex-col gap-3">
         {VALUE_PROPS.map((v) => (
           <li key={v.title} className="rounded-control border border-border bg-surface-sunken p-3">
