@@ -593,12 +593,16 @@ function WeeklyPage() {
     let candidates = onDay
     if (issue.code === 'V4_OUT_OF_AVAILABILITY') {
       const win = availabilityForColumn(dayIndex, availability)
+      // Same midnight fold the V4 rule itself uses (planFixtures): a TASK running
+      // past the window to midnight reads as 0 under plain minutesOfDay, so it
+      // would never match "outside" here and the issue would fall through to the
+      // weakest fallback guess below instead of pointing at the actual block.
       const outside = onDay.filter(
         (b) =>
           b.blockType === 'TASK' &&
           (!win ||
             minutesOfDay(b.startAt) < win.startMinutes ||
-            minutesOfDay(b.endAt) > win.endMinutes),
+            minutesOfDayEnd(b.endAt, dateOf(b.startAt)) > win.endMinutes),
       )
       if (outside.length > 0) candidates = outside
     }
