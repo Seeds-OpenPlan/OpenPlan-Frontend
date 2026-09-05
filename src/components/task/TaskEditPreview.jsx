@@ -9,7 +9,14 @@ import {
   rangeHeightPx,
   visibleRange,
 } from '../../features/plan/planGeometry'
-import { dateOf, formatMinutesLabel, minutesOfDay, weekLabelKO, WEEKDAY_LABELS_KO } from '../../features/plan/planTime'
+import {
+  dateOf,
+  formatMinutesLabel,
+  minutesOfDay,
+  minutesOfDayEnd,
+  weekLabelKO,
+  WEEKDAY_LABELS_KO,
+} from '../../features/plan/planTime'
 import { compareBySeverity, severityLabels, violationCopy } from '../../features/plan/violationMessages'
 import {
   VIOLATION_BORDER_CLASSES,
@@ -58,7 +65,11 @@ function violationFor(issues, planBlockId) {
 
 function MiniBlock({ block, range, isVirtual, violation }) {
   const startMin = minutesOfDay(block.startAt)
-  const endMin = minutesOfDay(block.endAt)
+  // Same fold PlanBlock/CalendarGrid apply to a real block's end: a midnight
+  // end is stored on the FOLLOWING date at 00:00, so plain minutesOfDay would
+  // collapse this preview block to a zero-height rect and label it "0:00"
+  // instead of the "24:00" the real grid shows for the identical block.
+  const endMin = minutesOfDayEnd(block.endAt, dateOf(block.startAt))
   const rect = blockRect(startMin, endMin, range)
   const timeLabel = `${formatMinutesLabel(startMin)}-${formatMinutesLabel(endMin)}`
   // Violation look is shared with the real weekly plan (PlanBlock) via

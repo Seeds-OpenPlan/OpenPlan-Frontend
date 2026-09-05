@@ -190,6 +190,19 @@ export function FixedScheduleForm({
           종료 시간이 시작 시간보다 늦어야 합니다
         </p>
       )}
+      {/*
+        M5 (owner-reported, 2026-09-05): typing 00:00 as 종료 silently becomes
+        23:55 via snapEndMinutes above — a fixed schedule has no next-day
+        concept at all (see that function's own header), unlike the plan
+        SCHEDULE form's 종료, which can genuinely hold midnight. Purely
+        DERIVED from the current value (same style as `invalid` above) rather
+        than a one-shot flag fired only from the 00:00 keystroke, so it reads
+        correctly no matter how 23:55 was reached (typed 00:00, or picked
+        23:55 directly) and never goes stale if another field changes after.
+      */}
+      {!invalid && endMin === MINUTES_PER_DAY - SNAP_MINUTES && (
+        <p className="-mt-2 text-caption text-text-muted">자정은 23:55로 저장됩니다</p>
+      )}
 
       {/* FIX-08 — informational only, never blocks 저장. */}
       {!invalid && previewChecking && (

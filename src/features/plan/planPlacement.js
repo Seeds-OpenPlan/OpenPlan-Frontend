@@ -9,6 +9,7 @@ import { availabilityForColumn } from './planGeometry'
 import {
   dateOf,
   minutesOfDay,
+  minutesOfDayEnd,
   snapMinutes,
 } from './planTime'
 
@@ -112,9 +113,14 @@ export function findFirstFreeSlot({
 
     const dayISO = days[dayIndex]
     // Spans occupying this day, clamped to the window and sorted by start.
+    // `end` MUST fold a midnight-ending block back to 1440 (minutesOfDayEnd,
+    // not plain minutesOfDay) — otherwise it reads as 0, the very next
+    // `.filter` line drops the whole span as "ending before the window even
+    // starts", and the scan below treats a slot that is actually occupied
+    // until end-of-day as free, double-booking it.
     const occupied = (blocks ?? [])
       .filter((b) => dateOf(b.startAt) === dayISO)
-      .map((b) => ({ start: minutesOfDay(b.startAt), end: minutesOfDay(b.endAt) }))
+      .map((b) => ({ start: minutesOfDay(b.startAt), end: minutesOfDayEnd(b.endAt, dayISO) }))
       .filter((s) => s.end > win.startMinutes && s.start < win.endMinutes)
       .sort((a, b) => a.start - b.start)
 

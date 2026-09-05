@@ -21,6 +21,7 @@ import {
   dateOf,
   formatMinutesLabel,
   minutesOfDay,
+  minutesOfDayEnd,
   snapDuration,
   WEEKDAY_KEYS,
   WEEKDAY_LABELS_KO,
@@ -303,7 +304,11 @@ function scanFixedConflicts(weekday, startMinutes, endMinutes) {
     const conflicts = week.blocks.filter((b) => {
       if (dateOf(b.startAt) !== dayISO) return false
       const bStart = minutesOfDay(b.startAt)
-      const bEnd = minutesOfDay(b.endAt)
+      // A block ending at midnight must fold to 1440 (minutesOfDayEnd), not
+      // read back as 0 — otherwise `startMinutes < bEnd` is never true and a
+      // candidate fixed schedule that truly overlaps the end of the day is
+      // reported as conflict-free.
+      const bEnd = minutesOfDayEnd(b.endAt, dayISO)
       return bStart < endMinutes && startMinutes < bEnd
     })
     if (conflicts.length > 0) {
@@ -639,8 +644,13 @@ const overlaps = (a, b) =>
 
 const durationOf = (b) => (new Date(b.endAt).getTime() - new Date(b.startAt).getTime()) / 60000
 
+// User-facing "HH:MM - HH:MM" for a violation message. Folds a midnight end to
+// "24:00" (minutesOfDayEnd) rather than "00:00" — matching how PlanBlock/
+// CalendarGrid/MiniBlock already label the same block on the real grid, so a
+// reviewer comparing the violation panel's text against the block it points
+// at sees the same end time, not a start-of-day-looking "00:00".
 const timeRangeOf = (b) =>
-  `${formatMinutesLabel(minutesOfDay(b.startAt))} - ${formatMinutesLabel(minutesOfDay(b.endAt))}`
+  `${formatMinutesLabel(minutesOfDay(b.startAt))} - ${formatMinutesLabel(minutesOfDayEnd(b.endAt, dateOf(b.startAt)))}`
 
 function activeWindowFor(weekdayKey) {
   return availability.find((a) => a.weekday === weekdayKey && a.isActive) ?? null
@@ -730,7 +740,10 @@ function computeValidationIssues(weekStartISO, blocks) {
   for (const block of inWeek) {
     const weekdayKey = WEEKDAY_KEYS[block.dayIndex]
     const startMin = minutesOfDay(block.startAt)
-    const endMin = minutesOfDay(block.endAt)
+    // A midnight-ending block must fold to 1440, or `endMin <= fixed.startMinutes`
+    // is trivially true for any fixed schedule (endMin reads as 0) and a real
+    // end-of-day overlap with the fixed schedule goes unreported.
+    const endMin = minutesOfDayEnd(block.endAt, dateOf(block.startAt))
     for (const fixed of fixedSchedules) {
       if (fixed.weekday !== weekdayKey) continue
       if (!isFixedActiveForWeek(fixed, weekStartISO)) continue
@@ -778,7 +791,11 @@ function computeValidationIssues(weekStartISO, blocks) {
     if (block.blockType !== 'TASK') continue
     const win = activeWindowFor(WEEKDAY_KEYS[block.dayIndex])
     const startMin = minutesOfDay(block.startAt)
-    const endMin = minutesOfDay(block.endAt)
+    // Same fold as V2 above: without it, `endMin <= win.endMinutes` is
+    // trivially true (0 <= anything) and a TASK that actually runs past the
+    // window's end at midnight is wrongly read as fully inside it — the
+    // warning this rule exists to raise never fires.
+    const endMin = minutesOfDayEnd(block.endAt, dateOf(block.startAt))
     if (win && startMin >= win.startMinutes && endMin <= win.endMinutes) continue
     pushIssue('V4_OUT_OF_AVAILABILITY', {
       weekday: WEEKDAY_KEY_TO_FULL[WEEKDAY_KEYS[block.dayIndex]],
@@ -832,10 +849,16 @@ function computeValidationIssues(weekStartISO, blocks) {
     if (dayBlocks.length === 0) continue
     const win = activeWindowFor(WEEKDAY_KEYS[dayIndex])
     const windowLength = win ? win.endMinutes - win.startMinutes : 0
+    // minutesOfDayEnd, not minutesOfDay, for the same reason as V2/V4 above: a
+    // midnight-ending SCHEDULE would otherwise contribute 0 in-window minutes
+    // (minutesInsideWindow floors at 0 once endMin reads as 0), understating
+    // how much of the window the schedule actually claims and inflating the
+    // capacity left for tasks.
     const scheduleMinutesInWindow = dayBlocks
       .filter((b) => b.blockType === 'SCHEDULE')
       .reduce(
-        (sum, b) => sum + minutesInsideWindow(minutesOfDay(b.startAt), minutesOfDay(b.endAt), win),
+        (sum, b) =>
+          sum + minutesInsideWindow(minutesOfDay(b.startAt), minutesOfDayEnd(b.endAt, dateOf(b.startAt)), win),
         0,
       )
     const capacity = Math.max(0, windowLength - scheduleMinutesInWindow)
@@ -903,6 +926,14 @@ function computeValidationIssues(weekStartISO, blocks) {
     for (let i = 1; i < dayBlocks.length; i += 1) {
       const prev = dayBlocks[i - 1]
       const next = dayBlocks[i]
+      // Safe to read `prev.endAt` with plain minutesOfDay here (unlike the
+      // rules above): `dayBlocks` groups by the block's OWN start date, so a
+      // `prev` that truly ends at midnight already occupies its day through
+      // 24:00 — any `next` sharing that dayIndex would have to start BEFORE
+      // that end to belong to the same calendar day, which is an overlap
+      // (already reported as V1_OVERLAP above), not a gap. A midnight-ending
+      // `prev` therefore never reaches this line paired with a genuinely
+      // later, non-overlapping `next`.
       const gap = minutesOfDay(next.startAt) - minutesOfDay(prev.endAt)
       if (gap < 0 || gap >= BUFFER_MIN_MINUTES) continue
       pushIssue('V7_BUFFER_SHORTAGE', {

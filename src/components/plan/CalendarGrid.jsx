@@ -470,8 +470,18 @@ export function CalendarGrid({
   // real blocks but rendered dashed + "초안" and non-interactive until applied.
   const positionedDrafts = (draftBlocks ?? [])
     .map((d) => {
-      const dayIndex = weekDays.indexOf(dateOf(d.startAt))
-      return { d, dayIndex, startMin: minutesOfDay(d.startAt), endMin: minutesOfDay(d.endAt) }
+      const dayISO = dateOf(d.startAt)
+      const dayIndex = weekDays.indexOf(dayISO)
+      // Same fold as the real blocks above (line ~292): an auto-place proposal
+      // can land a draft right up to end-of-day, and plain minutesOfDay would
+      // collapse that draft to a zero-height rect instead of one reaching the
+      // day's bottom.
+      return {
+        d,
+        dayIndex,
+        startMin: minutesOfDay(d.startAt),
+        endMin: minutesOfDayEnd(d.endAt, dayISO),
+      }
     })
     .filter((p) => p.dayIndex >= 0)
 
