@@ -4,7 +4,7 @@ import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { MinuteStepper } from './MinuteStepper'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
-import { composeTimestamp, snapMinutes, MINUTES_PER_DAY } from '../../features/plan/planTime'
+import { composeTimestamp, snapMinutes, MINUTES_PER_DAY, SNAP_MINUTES } from '../../features/plan/planTime'
 import { priorityLabelKO } from '../../features/plan/planPlacement'
 
 /*
@@ -36,6 +36,28 @@ function timeToMinutes(value) {
   const [h, m] = value.split(':').map(Number)
   if (Number.isNaN(h) || Number.isNaN(m)) return null
   return h * 60 + m
+}
+
+/**
+ * A START time can never legitimately BE the day-boundary sentinel
+ * (1440/"end of day", the value the END field's own onChange below
+ * deliberately produces for a literal 00:00) — there is no "start at the
+ * next day" concept in this single-day form. `snapMinutes` clamps its own
+ * output at 1440 (planTime.js), so a raw 23:58 or 23:59 (1438/1439 minutes
+ * — the only two values past 23:55 an `<input type="time">` can send)
+ * rounds UP to that exact sentinel. Left uncorrected, `minutesToTime`'s
+ * `% MINUTES_PER_DAY` fold (added above for END's legitimate 1440 case)
+ * would silently REDISPLAY it as "00:00" while the underlying startMin
+ * stayed 1440 — a visual "00:00" that doesn't match `invalid`'s comparison
+ * (still computed against the real 1440) and that `composeTimestamp` would
+ * roll onto the FOLLOWING day if it ever reached submit
+ * (`Date.setMinutes(1440)` overflows the month/day fields). Folding down to
+ * the day's actual last 5-minute step (23:55) keeps the displayed value and
+ * the stored one in agreement, the same way every other 5-minute snap in
+ * this form already does.
+ */
+function snapStartMinutes(minutes) {
+  return minutes === MINUTES_PER_DAY ? MINUTES_PER_DAY - SNAP_MINUTES : minutes
 }
 
 export function ScheduleForm({ mode, initial, onClose, onSubmit, submitting = false }) {
@@ -91,7 +113,7 @@ export function ScheduleForm({ mode, initial, onClose, onSubmit, submitting = fa
             value={minutesToTime(startMin)}
             onChange={(e) => {
               const m = timeToMinutes(e.target.value)
-              if (m != null) setStartMin(snapMinutes(m))
+              if (m != null) setStartMin(snapStartMinutes(snapMinutes(m)))
             }}
             className={FIELD}
           />

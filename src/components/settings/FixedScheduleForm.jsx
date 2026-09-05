@@ -34,20 +34,50 @@ function timeToMinutes(value) {
 /**
  * A fixed schedule has no next-day concept (single weekday, ck_fixed_range
  * requires startTime < endTime — see FixedScheduleValidator/
- * ExternalEventToFixedSchedule on the backend), so a literal midnight
- * (00:00, parsed as 0) can never be a valid END time — it isn't "after" any
- * start. The backend's own convention for this exact case (an event that
- * runs to the end of the day) is to substitute the day's last 5-minute step
- * (23:55) instead of the literal boundary; this mirrors that so a class like
- * "23:00~00:00" round-trips the same way on both sides instead of being
- * rejected by the client before it ever reaches that logic.
+ * ExternalEventToFixedSchedule on the backend), so EVERY minute value this
+ * form produces — START as well as END — must satisfy
+ * `0 <= minutes < MINUTES_PER_DAY`. 1440 ("24:00") can never be legal here:
+ * as an END it isn't "after" any start (the literal-midnight case just
+ * below), and as a START it has no meaning at all (there is no "start at
+ * the next day's boundary"). `clampToDayModel` is the one place that
+ * invariant is enforced, because 1440 can reach a field through two
+ * INDEPENDENT paths that both need to land on the same fallback value:
+ *   1. a literal 00:00 typed as END — handled by the fold below (the
+ *      backend's own convention for "runs to the end of the day" is to
+ *      substitute the day's last 5-minute step, 23:55, instead of the
+ *      literal boundary; this mirrors that so "23:00~00:00" round-trips the
+ *      same way on both sides instead of being rejected before it ever
+ *      reaches that logic), or
+ *   2. ROUNDING, on EITHER field: `snapMinutes` rounds any raw minute ≥ 1438
+ *      (23:58/23:59 — the only two values `<input type="time">` can send
+ *      after 23:55) up to the NEXT 5-minute step, which is 1440 — one step
+ *      past the day's actual last step. Left unclamped, that 1440 has no
+ *      valid `<input type="time">` string (native inputs only accept
+ *      00:00-23:59) and `minutesToTime` above has no day-boundary fold
+ *      (unlike the plan SCHEDULE form's, see that file), so the field goes
+ *      silently blank; on END specifically it also serializes to the
+ *      literal string `"24:00:00"` for the save request, which the real
+ *      backend's `time` format rejects.
+ * Also applied when SEEDING state from `initial` below: a record saved
+ * before this fix existed (dev-mock data created through the same bug, or
+ * anything else — an external-calendar import, hand-edited fixtures — that
+ * slipped 1440 past validation) would otherwise open this form already
+ * broken, with no indication why.
  */
+function clampToDayModel(minutes) {
+  return minutes >= MINUTES_PER_DAY ? MINUTES_PER_DAY - SNAP_MINUTES : minutes
+}
+
+function snapStartMinutes(rawMinutes) {
+  return clampToDayModel(snapMinutes(rawMinutes))
+}
+
 function snapEndMinutes(rawMinutes, startMinutes) {
   const snapped = snapMinutes(rawMinutes)
   if (snapped === 0 && startMinutes !== 0) {
     return MINUTES_PER_DAY - SNAP_MINUTES
   }
-  return snapped
+  return clampToDayModel(snapped)
 }
 
 /*
@@ -80,8 +110,8 @@ export function FixedScheduleForm({
 
   const [title, setTitle] = useState(initial.title ?? '')
   const [weekday, setWeekday] = useState(initial.weekday ?? 'MON')
-  const [startMin, setStartMin] = useState(initial.startMinutes ?? 9 * 60)
-  const [endMin, setEndMin] = useState(initial.endMinutes ?? 10 * 60)
+  const [startMin, setStartMin] = useState(clampToDayModel(initial.startMinutes ?? 9 * 60))
+  const [endMin, setEndMin] = useState(clampToDayModel(initial.endMinutes ?? 10 * 60))
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
 
   const invalid = endMin <= startMin
@@ -166,7 +196,7 @@ export function FixedScheduleForm({
             value={minutesToTime(startMin)}
             onChange={(e) => {
               const m = timeToMinutes(e.target.value)
-              if (m != null) setStartMin(snapMinutes(m))
+              if (m != null) setStartMin(snapStartMinutes(m))
             }}
             className={FIELD}
           />
@@ -191,17 +221,21 @@ export function FixedScheduleForm({
         </p>
       )}
       {/*
-        M5 (owner-reported, 2026-09-05): typing 00:00 as 종료 silently becomes
-        23:55 via snapEndMinutes above — a fixed schedule has no next-day
-        concept at all (see that function's own header), unlike the plan
-        SCHEDULE form's 종료, which can genuinely hold midnight. Purely
-        DERIVED from the current value (same style as `invalid` above) rather
-        than a one-shot flag fired only from the 00:00 keystroke, so it reads
-        correctly no matter how 23:55 was reached (typed 00:00, or picked
-        23:55 directly) and never goes stale if another field changes after.
+        M5 (owner-reported, 2026-09-05): a 종료 of 23:55 can now be reached
+        two ways — typing literal 00:00 (the midnight fold), or typing
+        23:58/23:59 (the rounding clamp) — see clampToDayModel/snapEndMinutes
+        above for both. A fixed schedule has no next-day concept at all,
+        unlike the plan SCHEDULE form's 종료, which can genuinely hold
+        midnight. Purely DERIVED from the current value (same style as
+        `invalid` above) rather than a one-shot flag fired only from one
+        specific keystroke, so it reads correctly no matter which of the two
+        paths reached 23:55 and never goes stale if another field changes
+        after.
       */}
       {!invalid && endMin === MINUTES_PER_DAY - SNAP_MINUTES && (
-        <p className="-mt-2 text-caption text-text-muted">자정은 23:55로 저장됩니다</p>
+        <p className="-mt-2 text-caption text-text-muted">
+          자정에 가까운 종료 시간은 23:55로 저장됩니다
+        </p>
       )}
 
       {/* FIX-08 — informational only, never blocks 저장. */}
