@@ -65,6 +65,7 @@ import {
   isPastWeek,
   MINUTES_PER_DAY,
   minutesOfDay,
+  minutesOfDayEnd,
   snapDuration,
   WEEKDAY_KEYS,
   weekDays as weekDaysOf,
@@ -1059,14 +1060,15 @@ function WeeklyPage() {
 
   // Open the edit form for a schedule block, prefilled from its (denormalized) data.
   const openScheduleEdit = (block) => {
+    const dayISO = dateOf(block.startAt)
     const startMin = minutesOfDay(block.startAt)
-    const endMin = minutesOfDay(block.endAt)
+    const endMin = minutesOfDayEnd(block.endAt, dayISO)
     setScheduleForm({
       mode: 'edit',
       block,
       initial: {
         title: block.title,
-        dayISO: dateOf(block.startAt),
+        dayISO,
         startMin,
         endMin,
         estimatedMinutes: block.estimatedMinutes ?? endMin - startMin,

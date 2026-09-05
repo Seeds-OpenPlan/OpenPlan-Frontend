@@ -5,7 +5,14 @@ import { Button } from '../common/Button'
 import { Banner } from '../common/Banner'
 import { ConflictOverlay } from '../common/ConflictOverlay'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
-import { WEEKDAY_KEYS, WEEKDAY_LABELS_KO, snapMinutes, weekLabelKO } from '../../features/plan/planTime'
+import {
+  WEEKDAY_KEYS,
+  WEEKDAY_LABELS_KO,
+  MINUTES_PER_DAY,
+  SNAP_MINUTES,
+  snapMinutes,
+  weekLabelKO,
+} from '../../features/plan/planTime'
 import { usePreviewFixedScheduleConflicts } from '../../features/settings/useSettings'
 
 const FIELD =
@@ -22,6 +29,25 @@ function timeToMinutes(value) {
   const [h, m] = value.split(':').map(Number)
   if (Number.isNaN(h) || Number.isNaN(m)) return null
   return h * 60 + m
+}
+
+/**
+ * A fixed schedule has no next-day concept (single weekday, ck_fixed_range
+ * requires startTime < endTime — see FixedScheduleValidator/
+ * ExternalEventToFixedSchedule on the backend), so a literal midnight
+ * (00:00, parsed as 0) can never be a valid END time — it isn't "after" any
+ * start. The backend's own convention for this exact case (an event that
+ * runs to the end of the day) is to substitute the day's last 5-minute step
+ * (23:55) instead of the literal boundary; this mirrors that so a class like
+ * "23:00~00:00" round-trips the same way on both sides instead of being
+ * rejected by the client before it ever reaches that logic.
+ */
+function snapEndMinutes(rawMinutes, startMinutes) {
+  const snapped = snapMinutes(rawMinutes)
+  if (snapped === 0 && startMinutes !== 0) {
+    return MINUTES_PER_DAY - SNAP_MINUTES
+  }
+  return snapped
 }
 
 /*
@@ -153,7 +179,7 @@ export function FixedScheduleForm({
             value={minutesToTime(endMin)}
             onChange={(e) => {
               const m = timeToMinutes(e.target.value)
-              if (m != null) setEndMin(snapMinutes(m))
+              if (m != null) setEndMin(snapEndMinutes(m, startMin))
             }}
             className={FIELD}
           />

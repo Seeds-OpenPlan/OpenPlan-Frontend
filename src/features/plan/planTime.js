@@ -200,6 +200,22 @@ export function dateOf(iso) {
 }
 
 /**
+ * Minutes-of-day for a block's END time, relative to the day it STARTS on
+ * (`dayISO`). A schedule ending exactly at midnight is stored as an instant
+ * on the FOLLOWING calendar date at 00:00 (see composeTimestamp/ScheduleForm
+ * — that's the only way a single-day model expresses "runs to the end of
+ * the day"), so plain `minutesOfDay(endAt)` would read that back as 0 and
+ * make a perfectly valid end look earlier than the start it's paired with.
+ * Folds that one case back to MINUTES_PER_DAY (1440); any other date is
+ * outside this single-day form's model and is left to `minutesOfDay` as-is.
+ */
+export function minutesOfDayEnd(endIso, dayISO) {
+  const minutes = minutesOfDay(endIso)
+  if (minutes === 0 && dateOf(endIso) !== dayISO) return MINUTES_PER_DAY
+  return minutes
+}
+
+/**
  * Build an ISO timestamp from a day ISO date + minutes-of-day. Used when a drag
  * commits a new block position back to an absolute start_at/end_at.
  */

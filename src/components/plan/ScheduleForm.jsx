@@ -4,7 +4,7 @@ import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { MinuteStepper } from './MinuteStepper'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
-import { composeTimestamp, snapMinutes } from '../../features/plan/planTime'
+import { composeTimestamp, snapMinutes, MINUTES_PER_DAY } from '../../features/plan/planTime'
 import { priorityLabelKO } from '../../features/plan/planPlacement'
 
 /*
@@ -23,8 +23,13 @@ const FIELD =
 const TITLE_ID = 'schedule-form-title'
 
 function minutesToTime(min) {
-  const h = Math.floor(min / 60)
-  const m = min % 60
+  // `min` can be MINUTES_PER_DAY (1440, "midnight as an end time" — see the
+  // end-field onChange below) but native <input type="time"> only accepts
+  // 00:00-23:59, so fold the day-boundary sentinel back to the displayable
+  // "00:00" it originated from.
+  const clamped = min % MINUTES_PER_DAY
+  const h = Math.floor(clamped / 60)
+  const m = clamped % 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 function timeToMinutes(value) {
@@ -99,7 +104,13 @@ export function ScheduleForm({ mode, initial, onClose, onSubmit, submitting = fa
             value={minutesToTime(endMin)}
             onChange={(e) => {
               const m = timeToMinutes(e.target.value)
-              if (m != null) setEndMin(snapMinutes(m))
+              if (m == null) return
+              // A literal 00:00 end means midnight (the end of the day this
+              // schedule started on), not "before the day begins" — the only
+              // way a time input can express that is the same string as
+              // 0, so treat it as the day boundary unless the start is ALSO
+              // midnight (a genuine 0-length range, still invalid).
+              setEndMin(m === 0 && startMin !== 0 ? MINUTES_PER_DAY : snapMinutes(m))
             }}
             className={FIELD}
           />

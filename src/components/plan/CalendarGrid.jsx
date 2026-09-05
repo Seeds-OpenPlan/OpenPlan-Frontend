@@ -20,6 +20,7 @@ import {
   formatISODate,
   formatMinutesLabel,
   minutesOfDay,
+  minutesOfDayEnd,
   parseISODate,
   snapMinutes,
   WEEKDAY_KEYS,
@@ -398,9 +399,14 @@ export function CalendarGrid({
   // Position each block; the one being dragged uses the live drag target.
   const positioned = blocks
     .map((block) => {
-      let dayIndex = weekDays.indexOf(dateOf(block.startAt))
+      const dayISO = dateOf(block.startAt)
+      let dayIndex = weekDays.indexOf(dayISO)
       let startMin = minutesOfDay(block.startAt)
-      let endMin = minutesOfDay(block.endAt)
+      // A schedule ending exactly at midnight is stored as an instant on the
+      // NEXT calendar date (composeTimestamp/ScheduleForm) — plain
+      // minutesOfDay would read that back as 0 and collapse the block to a
+      // zero/negative-height rect instead of one reaching the day's bottom.
+      let endMin = minutesOfDayEnd(block.endAt, dayISO)
       const isDragged = dragState?.planBlockId === block.planBlockId
       if (isDragged) {
         dayIndex = dragState.dayIndex
