@@ -323,8 +323,71 @@ const placedTaskData = new Map()
 // SCHEDULE records (ST-F1-04 PLAN-08/17). A schedule owns the fields the plan_block
 // doesn't (memo·estimatedMinutes·priority); the block mirrors its title/time.
 const schedulesById = new Map()
-// Execution records (PLAN-15 실제 시간 기록) — write-only for this cycle.
-const executionRecords = []
+// Execution records (PLAN-15 실제 시간 기록).
+//
+// PERSISTED — narrowly, to THIS array only (owner review 2026-09-05, "새로고침
+// 하면 초기화되는거 같아요"). The real contract has no GET for this resource
+// at all (`/tasks/{taskId}/execution-logs` is POST-only, confirmed against
+// origin/main's openapi.yaml) — the real server instead folds a task's logged
+// state into `GET /dashboard`'s own `todayBoard[].completed`, so a real
+// backend never has this bug (its DB write already survives a refresh). This
+// mock has no DB: it was a plain in-memory array, which a page reload (a full
+// JS re-evaluation, not just a re-render) always emptied back to `[]` —
+// hasLoggedExecution then honestly reported "never logged" for a task the
+// user watched themselves record a minute ago. `localStorage` closes exactly
+// that gap, same STORAGE_KEY-prefixed load/persist pair
+// onboardingFixtures.js's own header already established for this same class
+// of problem (mock-only state that must outlive a reload) — copied here
+// rather than shared, since neither fixtures module owns the other (same
+// "separate feature folders" boundary projectApi.js's own header draws for
+// its two mock backends).
+//
+// SCOPE, ON PURPOSE: only this one array. This is NOT a general "persist
+// every mock store" change — every other module-level mock Map/array in this
+// file (weeks, placedTaskData, schedulesById, …) stays exactly as
+// session-only as it always was; broadening this would be a much larger,
+// unreviewed behavior change for stores nobody reported a problem with.
+const EXECUTION_RECORDS_STORAGE_KEY = 'openplan-dev.execution-records'
+
+// Defensive — localStorage can throw (privacy mode, quota) or simply not
+// exist (SSR/test runners); either falls back to an empty log, same as the
+// pre-persistence behavior.
+function loadPersistedExecutionRecords() {
+  try {
+    const raw = window.localStorage.getItem(EXECUTION_RECORDS_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function persistExecutionRecords() {
+  try {
+    window.localStorage.setItem(EXECUTION_RECORDS_STORAGE_KEY, JSON.stringify(executionRecords))
+  } catch {
+    // dev-only convenience — a write failure here must never break the mock
+    // (matches onboardingFixtures.js's own persist()).
+  }
+}
+
+// `const` still holds — every writer below mutates this SAME array in place
+// (`.push`) rather than reassigning it, so the persisted seed can be read
+// once at module load without needing `let`.
+const executionRecords = loadPersistedExecutionRecords()
+
+/**
+ * Whether `taskId` has ANY logged execution record — dashboardFixtures.js's
+ * mock reads this so its todayBoard rows flip to `completed: true` after a
+ * real (mocked) POST, instead of a hardcoded snapshot that always came back
+ * unchanged. Without this, the dashboard's "기록됨" state only ever lived in
+ * HomePage.jsx's client-only `justLoggedIds` overlay — real-looking right
+ * after the click, but gone on the next refetch/reload, since the mock GET
+ * itself never reflected the write (W6 오너 리포트: "새로고침하면 초기화된다").
+ */
+export function hasLoggedExecution(taskId) {
+  return executionRecords.some((r) => r.taskId === taskId)
+}
 
 // Remember a task's full record when it leaves the backlog (placed as a block).
 // Once placed, a task lives in placedTaskData permanently — its UNPLACED presence
@@ -1716,6 +1779,7 @@ export const mockBackend = {
     await delay(150)
     const executionRecordId = nextId('exec')
     executionRecords.push({ executionRecordId, taskId, ...body })
+    persistExecutionRecords() // see executionRecords' own header — this write must survive a reload
     return { executionRecordId }
   },
 
