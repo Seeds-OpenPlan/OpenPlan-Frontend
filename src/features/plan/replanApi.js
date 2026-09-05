@@ -14,16 +14,16 @@
 
   ENDPOINT NOTE — list: `openapi.yaml` DOES document a GET list endpoint after
   all (operationId `listReplanOptions`, `GET /weekly-plans/{planId}/replan-
-  options` — reusing generateReplanOption's own path, distinguished by verb).
+  options` — reusing generateReplanOptions' own path, distinguished by verb).
   This corrects this header's own prior claim that no such endpoint existed
   (true of the retired 07 CSV, not of openapi.yaml). Still no caller here for
   it, on purpose (out of THIS change's scope) — POST generate's own response
-  already carries the option(s) for the strategy just requested, so nothing in
-  this app has needed to re-fetch a list yet; see usePlanData.js's
-  useReplanOptions for how the three per-strategy responses are assembled into
-  the 4-way comparison. A future "새로고침" affordance on the compare modal
-  (openapi's own summary: "대안 재조회 (비교 화면 새로고침)") is the first
-  caller `listReplanOptions` would actually need.
+  already carries all three alternatives, so nothing in this app has needed to
+  re-fetch a list yet; see usePlanData.js's useReplanOptions for how that one
+  response is split across the three cards of the 4-way comparison. A future
+  "새로고침" affordance on the compare modal (openapi's own summary: "대안
+  재조회 (비교 화면 새로고침)") is the first caller `listReplanOptions` would
+  actually need.
 */
 
 import { apiClient } from '../../api/client'
@@ -47,31 +47,35 @@ function normalizeReplanOption(raw) {
 }
 
 /**
- * OP-REPLAN-GEN → POST /weekly-plans/{id}/replan-options, body {strategyType}.
+ * OP-REPLAN-GEN → POST /weekly-plans/{planId}/replan-options, 바디 없음.
  *
- * ASSUMPTION (flagged to the team lead — the spec doesn't say either way): the
- * request body carries exactly ONE strategyType, so this call is made ONCE PER
- * STRATEGY rather than once for all three — see usePlanData.js's
- * useReplanOptions, which calls this three times in parallel. The response is
- * still an ARRAY (`replanOptions: []`) even for one strategyType — the ERD's
- * `score` field implies the server MAY rank several candidates under one
- * strategy — so this keeps only the top-scored entry (or the first, if no
- * option carries a score) as "the" alternative representing that strategy.
+ * 정본(openapi.yaml `generateReplanOptions`)은 requestBody를 두지 않고, 한 번의
+ * 호출로 기준선 + 대안 3종을 `data.options[]`에 함께 돌려준다.
  *
- * Resolves to `null` when the server has nothing to propose for this strategy
- * (e.g. nothing currently conflicts, for MINIMAL_CHANGE) — a legitimate result,
- * not an error; the caller renders that as "제안할 변경 사항이 없습니다", not a
- * failed card.
+ * 이 함수는 그 계약이 확정되기 전의 추측을 따르고 있었다 — `{strategyType}` 바디를
+ * 실어 전략별로 3회 호출하고, 응답을 `replanOptions`로 읽는 형태. 서버가 그 이름의
+ * 필드를 준 적이 없어 결과가 항상 빈 배열 → null이 되었고, 그래서 실서버에서는 세
+ * 카드가 전부 "제안할 변경 사항이 없습니다"로 굳고 [적용]이 영영 비활성이었다
+ * (기준선만 프론트 상수라 유일하게 선택 가능했다).
+ *
+ * 🔴 전략별로 나눠 부르면 안 된다. 서버는 이 오퍼레이션마다 그 계획의 기존 대안을
+ * **전면 교체**하므로(ReplanOptionController "재생성 시 기존 대안 전면 교체"),
+ * 3회 호출하면 앞선 두 번의 replanOptionId가 DB에서 사라진 채 화면에만 남아 적용
+ * 단계에서 404가 난다. 필드 이름만 고치고 호출 구조를 그대로 두면 증상이 "카드가
+ * 안 뜬다"에서 "고르면 실패한다"로 옮겨갈 뿐이다.
+ *
+ * 응답의 `baseline`(KEEP_CURRENT)은 읽지 않는다 — 서버가 행을 만들지 않아 적용
+ * 대상이 아니고, 모달은 replanStrategies.js의 BASELINE_OPTION 상수를 네 번째
+ * 카드로 렌더한다.
+ *
+ * @returns {Promise<Array>} 전략별 대안 배열(정규화 완료). 서버가 제안할 것이
+ *   하나도 없으면 빈 배열 — 오류가 아니다.
  */
-export function generateReplanOption(weeklyPlanId, strategyType) {
+export function generateReplanOptions(weeklyPlanId) {
   return withDevFallback(
-    () => apiClient.post(`/weekly-plans/${weeklyPlanId}/replan-options`, { strategyType }),
-    () => mockBackend.generateReplanOption(weeklyPlanId, strategyType),
-  ).then((r) => {
-    const options = (r?.replanOptions ?? []).map(normalizeReplanOption)
-    if (options.length === 0) return null
-    return options.reduce((best, o) => ((o.score ?? 0) > (best.score ?? 0) ? o : best))
-  })
+    () => apiClient.post(`/weekly-plans/${weeklyPlanId}/replan-options`),
+    () => mockBackend.generateReplanOptions(weeklyPlanId),
+  ).then((r) => (r?.options ?? []).map(normalizeReplanOption))
 }
 
 /**

@@ -37,7 +37,7 @@ import {
 } from './taskApi'
 import { patchSchedule, postScheduleBlock } from './scheduleApi'
 import { addFixedException, getFixedSchedules, removeFixedException } from './fixedScheduleApi'
-import { generateReplanOption, selectReplanOption } from './replanApi'
+import { generateReplanOptions, selectReplanOption } from './replanApi'
 import { GENERATED_STRATEGY_TYPES } from './replanStrategies'
 import { addWeeksISO } from './planTime'
 import { dashboardKey } from '../dashboard/useDashboard'
@@ -983,8 +983,17 @@ const SLOW_GENERATE_MS = 5000
 
 const IDLE_STRATEGY_STATE = { status: 'idle', option: null, error: null }
 
+/**
+ * 세 전략 키를 모두 채운 상태 맵을 만든다. `build(type)`는 전략마다 한 번 호출되며
+ * 그 전략의 카드 상태를 돌려준다 — 세 카드가 항상 함께 전이하는 지금 구조에서
+ * (useReplanOptions의 generate 참고) 키를 빠뜨리는 실수를 구조적으로 막는다.
+ */
+function strategyStateFor(build) {
+  return Object.fromEntries(GENERATED_STRATEGY_TYPES.map((t) => [t, build(t)]))
+}
+
 function initialStrategyState() {
-  return Object.fromEntries(GENERATED_STRATEGY_TYPES.map((t) => [t, IDLE_STRATEGY_STATE]))
+  return strategyStateFor(() => IDLE_STRATEGY_STATE)
 }
 
 /**
@@ -1016,38 +1025,47 @@ export function useReplanOptions(weeklyPlanId) {
   // right after a slow initial batch) from overwriting a newer one's state.
   const seqRef = useRef(0)
 
-  const runOne = useCallback(
-    (strategyType, seq) => {
-      setByType((prev) => ({ ...prev, [strategyType]: { status: 'loading', option: null, error: null } }))
-      generateReplanOption(weeklyPlanId, strategyType)
-        .then((option) => {
-          if (seq !== seqRef.current) return
-          setByType((prev) => ({ ...prev, [strategyType]: { status: 'success', option, error: null } }))
-        })
-        .catch((error) => {
-          if (seq !== seqRef.current) return
-          setByType((prev) => ({ ...prev, [strategyType]: { status: 'error', option: null, error } }))
-        })
-    },
-    [weeklyPlanId],
-  )
+  // 세 전략을 한 요청으로 받아 카드별 상태에 나눠 담는다. 이전에는 전략마다 한 번씩
+  // 세 번을 병렬로 불렀는데, 그 호출 분할 자체가 계약 위반이었다 — 정본은 requestBody
+  // 없는 단일 오퍼레이션이고 서버는 호출마다 그 계획의 대안을 전면 교체한다. 자세한
+  // 경위는 replanApi.generateReplanOptions의 헤더에 있다.
+  //
+  // 그래서 상태 전이도 세 카드가 늘 함께 움직인다(전부 loading → 전부 success/error).
+  // 부분 성공을 표현하던 이전 구조는 요청이 셋일 때만 의미가 있었다.
+  const generate = useCallback(() => {
+    if (!weeklyPlanId) return
+    seqRef.current += 1
+    const seq = seqRef.current
+    clearTimeout(slowTimerRef.current)
+    setSlowNotice(false)
+    slowTimerRef.current = setTimeout(() => setSlowNotice(true), SLOW_GENERATE_MS)
 
-  const generate = useCallback(
-    (types = GENERATED_STRATEGY_TYPES) => {
-      if (!weeklyPlanId) return
-      seqRef.current += 1
-      const seq = seqRef.current
-      clearTimeout(slowTimerRef.current)
-      setSlowNotice(false)
-      slowTimerRef.current = setTimeout(() => setSlowNotice(true), SLOW_GENERATE_MS)
-      for (const type of types) runOne(type, seq)
-    },
-    [weeklyPlanId, runOne],
-  )
+    setByType(strategyStateFor(() => ({ status: 'loading', option: null, error: null })))
 
-  // Regenerate just the ONE strategy a user asked to retry, leaving the other
-  // two (already succeeded or still loading) alone.
-  const retry = useCallback((type) => generate([type]), [generate])
+    generateReplanOptions(weeklyPlanId)
+      .then((options) => {
+        if (seq !== seqRef.current) return
+        const byStrategy = new Map(options.map((o) => [o.strategyType, o]))
+        // 서버가 특정 전략을 비워 보내면(고칠 충돌이 없는 MINIMAL_CHANGE 등) option은
+        // null로 남는다 — 오류가 아니라 "제안할 변경 사항이 없습니다"로 읽히는 상태다.
+        setByType(
+          strategyStateFor((type) => ({
+            status: 'success',
+            option: byStrategy.get(type) ?? null,
+            error: null,
+          })),
+        )
+      })
+      .catch((error) => {
+        if (seq !== seqRef.current) return
+        setByType(strategyStateFor(() => ({ status: 'error', option: null, error })))
+      })
+  }, [weeklyPlanId])
+
+  // 한 장만 다시 만들 수는 없다 — 이 오퍼레이션은 호출될 때마다 세 대안을 전면
+  // 교체하므로, 한 장만 갱신하면 나머지 두 장이 이미 삭제된 replanOptionId를 든 채
+  // 화면에 남아 적용 시 404가 난다. 카드의 [다시 시도]도 세 장을 함께 다시 만든다.
+  const retry = useCallback(() => generate(), [generate])
 
   const reset = useCallback(() => {
     seqRef.current += 1 // invalidate any response still in flight

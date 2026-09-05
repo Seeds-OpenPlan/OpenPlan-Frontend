@@ -1719,22 +1719,34 @@ export const mockBackend = {
     return { executionRecordId }
   },
 
-  // POST /weekly-plans/{id}/replan-options — ST-F1-07 PLAN-29. Runs ONE strategy
-  // against the CURRENT (unsaved) block set — a longer delay than most writes
-  // here on purpose (220ms, matching autoPlace's own "visible beat" choice): the
-  // modal's 5-second slow notice (NFR-029) needs something to eventually notice
-  // in a slow/real environment, and disappearing instantly would never exercise it.
-  async generateReplanOption(weeklyPlanId, strategyType) {
+  // POST /weekly-plans/{id}/replan-options — ST-F1-07 PLAN-29. 정본대로 바디 없이
+  // 한 번 불리고 세 전략을 함께 돌려준다(`{ baseline, options[] }`) — 전략별 호출을
+  // 흉내내던 이전 모양은 실서버 계약과 달랐다(replanApi.generateReplanOptions 헤더).
+  // 지연이 다른 쓰기보다 긴 것은 의도적이다(220ms, autoPlace의 "보이는 한 박자"와 같은
+  // 선택): 모달의 5초 지연 안내(NFR-029)가 즉시 사라지는 응답으로는 시험되지 않는다.
+  async generateReplanOptions(weeklyPlanId) {
     await delay(220)
     const week = findWeekByPlanId(weeklyPlanId)
     if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
-    const option = buildReplanOption(week, computeDerived(week).blocks, strategyType)
-    if (!option) return { replanOptions: [] }
-    const replanOptionId = nextId('replan')
-    // Remembered so a later selectReplanOption(id) can find its proposedBlocks
-    // (see replanOptionsById's header comment above).
-    replanOptionsById.set(replanOptionId, { ...option, weeklyPlanId })
-    return { replanOptions: [{ ...option, replanOptionId }] }
+    const blocks = computeDerived(week).blocks
+    // 서버가 호출마다 기존 대안을 전면 교체하는 것과 같은 의미로, 이 계획에 대해
+    // 기억해 둔 이전 옵션은 새 배치를 만들기 전에 버린다 — 그러지 않으면 이미
+    // 교체된 id로도 selectReplanOption이 성공해 실서버와 다르게 동작한다.
+    for (const [id, option] of replanOptionsById) {
+      if (option.weeklyPlanId === weeklyPlanId) replanOptionsById.delete(id)
+    }
+    const options = []
+    for (const strategyType of ['MINIMAL_CHANGE', 'DEADLINE_FIRST', 'WORKLOAD_BALANCE']) {
+      const option = buildReplanOption(week, blocks, strategyType)
+      if (!option) continue // 그 전략이 제안할 것이 없음 — 카드가 "변경 사항 없음"으로 읽는다
+      const replanOptionId = nextId('replan')
+      // Remembered so a later selectReplanOption(id) can find its proposedBlocks
+      // (see replanOptionsById's header comment above).
+      replanOptionsById.set(replanOptionId, { ...option, weeklyPlanId })
+      options.push({ ...option, replanOptionId })
+    }
+    // baseline(KEEP_CURRENT)은 서버도 행을 만들지 않고 프론트가 상수로 렌더한다.
+    return { baseline: null, options }
   },
 
   // POST /replan-options/{id}/application — ST-F1-07 AC-3 "초안 교체 반영", W4
