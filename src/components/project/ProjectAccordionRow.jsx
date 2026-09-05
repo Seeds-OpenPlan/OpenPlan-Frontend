@@ -83,9 +83,16 @@ export function ProjectAccordionRow({
   // (beyond useProjectListAggregates's own MAX_AGGREGATE_QUERIES cap, or a
   // caller that doesn't pass the prop) — that case falls straight through to
   // `project`'s own (always-0) fields below, same as before this hook
-  // existed, NOT a loading state (nothing is in flight for it).
-  const countsLoading =
-    !aggregateSource && Boolean(listAggregate) && (expanded ? tasksQuery.isLoading : listAggregate.isLoading)
+  // existed, NOT a loading state (nothing is in flight for it)... UNLESS this
+  // row is the one EXPANDED: then `tasksQuery` above is its own independent
+  // fetch, running regardless of whether `listAggregate` exists at all (a
+  // project past the aggregate cap can still be opened and fetched). Gating
+  // the expanded branch on `Boolean(listAggregate)` too meant expanding one of
+  // those capped-out projects skipped the skeleton and showed the stale
+  // "태스크 0 · 완료 0" default for the whole fetch — exactly what this loading
+  // state exists to prevent (Thomas review). So only the COLLAPSED branch
+  // still needs `listAggregate` to exist before trusting its `isLoading`.
+  const countsLoading = !aggregateSource && (expanded ? tasksQuery.isLoading : Boolean(listAggregate) && listAggregate.isLoading)
   const { taskCount, completedCount, unplacedCount, placedCount, dueSoonCount } = aggregateSource ?? project
 
   const meta = [`태스크 ${taskCount}`, `완료 ${completedCount}`, unplacedCount > 0 ? `미배치 ${unplacedCount}` : null]
