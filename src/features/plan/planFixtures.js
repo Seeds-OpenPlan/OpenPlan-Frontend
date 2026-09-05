@@ -338,7 +338,7 @@ const schedulesById = new Map()
 // backend never has this bug (its DB write already survives a refresh). This
 // mock has no DB: it was a plain in-memory array, which a page reload (a full
 // JS re-evaluation, not just a re-render) always emptied back to `[]` —
-// hasLoggedExecution then honestly reported "never logged" for a task the
+// hasCompletedExecution then honestly reported "never logged" for a task the
 // user watched themselves record a minute ago. `localStorage` closes exactly
 // that gap, same STORAGE_KEY-prefixed load/persist pair
 // onboardingFixtures.js's own header already established for this same class
@@ -382,16 +382,25 @@ function persistExecutionRecords() {
 const executionRecords = loadPersistedExecutionRecords()
 
 /**
- * Whether `taskId` has ANY logged execution record — dashboardFixtures.js's
+ * Whether `taskId` was logged as actually FINISHED — dashboardFixtures.js's
  * mock reads this so its todayBoard rows flip to `completed: true` after a
  * real (mocked) POST, instead of a hardcoded snapshot that always came back
  * unchanged. Without this, the dashboard's "기록됨" state only ever lived in
  * HomePage.jsx's client-only `justLoggedIds` overlay — real-looking right
  * after the click, but gone on the next refetch/reload, since the mock GET
  * itself never reflected the write (W6 오너 리포트: "새로고침하면 초기화된다").
+ *
+ * `result === 'COMPLETED'` specifically, NOT "a record exists": ExecutionLogForm
+ * also writes 'DELAYED'(지연) and 'ABORTED'(중단), and counting those as done
+ * put a 완료 check on a task the user had just recorded as abandoned — a
+ * dev-only misreport this mock introduced, made worse by outliving a reload
+ * now that the array is persisted. This stays an APPROXIMATION either way:
+ * the real server never derives `completed` from execution logs at all (only
+ * PATCH /tasks/{taskId}/status moves it), so 'COMPLETED' is merely the one
+ * reading that can't be flatly wrong.
  */
-export function hasLoggedExecution(taskId) {
-  return executionRecords.some((r) => r.taskId === taskId)
+export function hasCompletedExecution(taskId) {
+  return executionRecords.some((r) => r.taskId === taskId && r.result === 'COMPLETED')
 }
 
 // Remember a task's full record when it leaves the backlog (placed as a block).
