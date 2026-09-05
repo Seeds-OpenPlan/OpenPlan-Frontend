@@ -13,6 +13,7 @@ import {
   useCreateProject,
   useDeleteProject,
   useDuplicateProject,
+  useProjectListAggregates,
   useProjects,
   useUpdateProject,
   useUpdateProjectStatus,
@@ -163,6 +164,11 @@ function ProjectsPage() {
     [projectsQuery.data],
   )
   const visible = tab === 'IN_PROGRESS' ? inProgress : tab === 'PAUSED' ? paused : closed
+
+  // Only the CURRENT tab's rows (`visible`, not every project across all
+  // three tabs) — a tab the user never opens never fires its own N+1 (see
+  // useProjectListAggregates's own header for why this N+1 exists at all).
+  const listAggregates = useProjectListAggregates(visible)
 
   const offlineReason = systemMessages.offline.disabledReason
 
@@ -396,6 +402,7 @@ function ProjectsPage() {
               onEdit={openManage}
               onDelete={setDeleteTarget}
               onDuplicate={openDuplicate}
+              listAggregate={listAggregates.get(project.projectId)}
             />
           ))}
         </ul>

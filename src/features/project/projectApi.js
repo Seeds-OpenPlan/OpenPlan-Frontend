@@ -64,6 +64,20 @@ async function withDevFallback(realCall, mockCall) {
   demonstrable; a real server that omits them will simply show zero counts
   everywhere until BE adds the rollup — flagged for the lead/BE-1 to confirm.
 
+  CONFIRMED (origin/main openapi, W6 오너 리포트 — "태스크가 있는데도 0으로
+  뜬다"): the real contract's `Project.taskStats` is marked
+  `x-implementation-status: not-implemented`, so these five fields are ALWAYS
+  absent against a real server today, not just sometimes — the fallback-to-0
+  above was never a rare edge case in practice. `deriveProjectAggregates`
+  below is the client-side workaround: ProjectAccordionRow calls it once a
+  row is EXPANDED (the same `GET /projects/{id}/tasks` ProjectExpandedPanel's
+  own body already fetches — no extra request) to recompute these five
+  fields from the real task list instead of trusting the rollup, so a
+  project's numbers stop reading zero the moment its row is opened. A
+  COLLAPSED row still has no task list to read (fetching one for every row
+  just for a badge is the N+1 this file already decided against) and keeps
+  showing this optimistic 0 until BE ships the real rollup.
+
   Also tolerates `title` (the CSV detail SAMPLE uses this key) alongside
   `name` (the ERD column, and what create/edit send) — likely a spec typo,
   not two real fields; same "accept both, mock is authoritative-ish" stance
@@ -86,6 +100,18 @@ function normalizeProject(p) {
     placedCount: p.placedCount ?? p.placed_count ?? 0,
     unplacedCount: p.unplacedCount ?? p.unplaced_count ?? 0,
     dueSoonCount: p.dueSoonCount ?? p.due_soon_count ?? 0,
+  }
+}
+
+/** See normalizeProject's own CONFIRMED note above. `tasks` is the already-
+ * normalized shape `getProjectTasks` returns (status/dueSoon included). */
+export function deriveProjectAggregates(tasks) {
+  return {
+    taskCount: tasks.length,
+    completedCount: tasks.filter((t) => t.status === 'COMPLETED').length,
+    placedCount: tasks.filter((t) => t.status === 'IN_PROGRESS').length,
+    unplacedCount: tasks.filter((t) => t.status === 'UNASSIGNED').length,
+    dueSoonCount: tasks.filter((t) => t.dueSoon).length,
   }
 }
 
