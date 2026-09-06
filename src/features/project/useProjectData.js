@@ -5,7 +5,8 @@
   documents for the weekly plan).
 */
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   applyStructuringDraft,
   createProject,
@@ -13,6 +14,7 @@ import {
   createTask,
   deleteProject,
   deleteTask,
+  deriveProjectAggregates,
   duplicateProject,
   getProject,
   getProjects,
@@ -222,6 +224,72 @@ export function useProjectTasks(projectId) {
     enabled: Boolean(projectId),
     staleTime: 15 * 1000,
   })
+}
+
+// A collapsed row's badges/progress bar this many projects deep just aren't
+// on screen yet — a defensive ceiling against an abnormal project count, not
+// a size any real account is expected to hit (§PROJ.1's own list has no
+// pagination either, same assumption). Projects past this cut simply keep
+// showing `project`'s own (currently always-0, see deriveProjectAggregates's
+// own CONFIRMED note) fields, exactly like every row did before this hook —
+// no request storm, no crash, just the pre-existing fallback for the excess.
+const MAX_AGGREGATE_QUERIES = 60
+
+/**
+ * Real per-project task counts for EVERY visible row on SCR-PROJ-LIST, not
+ * just the one row the user happens to have expanded (W6 owner report — "태스크가
+ * 있는데도 0으로 뜬다" reproduces on the COLLAPSED card, which
+ * ProjectAccordionRow's own expand-time recompute never reaches). §PROJ's own
+ * `Project.taskStats` is confirmed `x-implementation-status: not-implemented`
+ * (projectApi.deriveProjectAggregates's own CONFIRMED note) — there is no
+ * rollup left to trust, so the only way to show a CORRECT number on a
+ * collapsed card is to fetch that project's own task list, same as an
+ * expanded row already does for its own panel.
+ *
+ * N+1 is accepted deliberately: a real account's project count is a handful
+ * to a few dozen (§PROJ.1 has no list pagination at all, same assumption
+ * elsewhere in this file), and every query below shares its queryKey
+ * (`projectTasksKey`) with `useProjectTasks` — TanStack Query dedupes by key
+ * globally, so a row the user then EXPANDS reads this same cache entry
+ * instead of firing a second request. REMOVE THIS HOOK (and go back to
+ * reading `project.taskCount` etc. directly) once BE ships the real
+ * `Project.taskStats` rollup — deriveProjectAggregates's own CONFIRMED note
+ * is the single place that flips first.
+ *
+ * Returns a `Map<projectId, { data, isLoading }>` — `data` is `undefined`
+ * until that project's own fetch resolves (caller shows a loading
+ * placeholder instead of a determinate-but-possibly-wrong 0, see
+ * ProjectAccordionRow's own `countsLoading`); a projectId beyond
+ * `MAX_AGGREGATE_QUERIES` is simply absent from the map (caller falls back to
+ * `project`'s own fields, not a loading state — nothing was ever queried for
+ * it).
+ */
+export function useProjectListAggregates(projects) {
+  // Stable across re-renders as long as the CALLER's own list is (ProjectsPage's
+  // `visible` is itself a `useMemo` over `projectsQuery.data`) — avoids
+  // recreating the whole `queries` array (and re-subscribing every row) on
+  // every render just because `projects.slice` returns a fresh array literal.
+  const targets = useMemo(() => projects.slice(0, MAX_AGGREGATE_QUERIES), [projects])
+
+  const results = useQueries({
+    queries: targets.map((project) => ({
+      queryKey: projectTasksKey(project.projectId),
+      queryFn: () => getProjectTasks(project.projectId),
+      staleTime: 15 * 1000, // matches useProjectTasks's own staleTime — same data, same freshness rule
+    })),
+  })
+
+  return useMemo(() => {
+    const map = new Map()
+    targets.forEach((project, i) => {
+      const result = results[i]
+      map.set(project.projectId, {
+        data: result?.data ? deriveProjectAggregates(result.data) : undefined,
+        isLoading: Boolean(result?.isLoading),
+      })
+    })
+    return map
+  }, [targets, results])
 }
 
 /** POST /projects/{id}/tasks (PROJ-17 태스크 추가). Invalidates the task list,

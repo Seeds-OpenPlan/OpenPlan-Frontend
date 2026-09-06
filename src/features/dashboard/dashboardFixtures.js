@@ -19,6 +19,8 @@
   why.
 */
 
+import { hasCompletedExecution } from '../plan/planFixtures'
+
 const MOCK_LATENCY_MS = 120
 const delay = (ms = MOCK_LATENCY_MS) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -72,7 +74,12 @@ export async function mockDashboard() {
           startAt: task1Start,
           endAt: addMinutesISO(task1Start, 60),
           estimatedMinutes: 60,
-          completed: false,
+          // Reflects an actual mock POST /tasks/task-201/execution-logs
+          // (planFixtures.hasCompletedExecution — only a 'COMPLETED' result counts,
+          // not a 지연/중단 log) rather than a value frozen at
+          // module load — otherwise this row snapped back to "미기록" on
+          // every refetch/reload no matter what the user just logged.
+          completed: hasCompletedExecution('task-201'),
           selectionRank: 1, // RB-DASH-02 선정 결과 = "오늘 먼저"
         },
         {

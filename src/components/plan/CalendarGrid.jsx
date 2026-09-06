@@ -20,6 +20,7 @@ import {
   formatISODate,
   formatMinutesLabel,
   minutesOfDay,
+  minutesOfDayEnd,
   parseISODate,
   snapMinutes,
   WEEKDAY_KEYS,
@@ -398,9 +399,14 @@ export function CalendarGrid({
   // Position each block; the one being dragged uses the live drag target.
   const positioned = blocks
     .map((block) => {
-      let dayIndex = weekDays.indexOf(dateOf(block.startAt))
+      const dayISO = dateOf(block.startAt)
+      let dayIndex = weekDays.indexOf(dayISO)
       let startMin = minutesOfDay(block.startAt)
-      let endMin = minutesOfDay(block.endAt)
+      // A schedule ending exactly at midnight is stored as an instant on the
+      // NEXT calendar date (composeTimestamp/ScheduleForm) — plain
+      // minutesOfDay would read that back as 0 and collapse the block to a
+      // zero/negative-height rect instead of one reaching the day's bottom.
+      let endMin = minutesOfDayEnd(block.endAt, dayISO)
       const isDragged = dragState?.planBlockId === block.planBlockId
       if (isDragged) {
         dayIndex = dragState.dayIndex
@@ -464,8 +470,18 @@ export function CalendarGrid({
   // real blocks but rendered dashed + "초안" and non-interactive until applied.
   const positionedDrafts = (draftBlocks ?? [])
     .map((d) => {
-      const dayIndex = weekDays.indexOf(dateOf(d.startAt))
-      return { d, dayIndex, startMin: minutesOfDay(d.startAt), endMin: minutesOfDay(d.endAt) }
+      const dayISO = dateOf(d.startAt)
+      const dayIndex = weekDays.indexOf(dayISO)
+      // Same fold as the real blocks above (line ~292): an auto-place proposal
+      // can land a draft right up to end-of-day, and plain minutesOfDay would
+      // collapse that draft to a zero-height rect instead of one reaching the
+      // day's bottom.
+      return {
+        d,
+        dayIndex,
+        startMin: minutesOfDay(d.startAt),
+        endMin: minutesOfDayEnd(d.endAt, dayISO),
+      }
     })
     .filter((p) => p.dayIndex >= 0)
 

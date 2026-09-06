@@ -65,6 +65,7 @@ import {
   isPastWeek,
   MINUTES_PER_DAY,
   minutesOfDay,
+  minutesOfDayEnd,
   snapDuration,
   WEEKDAY_KEYS,
   weekDays as weekDaysOf,
@@ -380,14 +381,22 @@ function WeeklyPage() {
   */
   const drawnSpans = useMemo(() => {
     const spans = []
+    // A block/draft ending exactly at midnight reads back as minute 0 under
+    // plain minutesOfDay (see minutesOfDayEnd's header) — fold it to 1440
+    // here too, or visibleRange's own defensive filter (spans.js: end must be
+    // > start) would drop the span entirely and the focus window would clip
+    // the last stretch of a legitimate late-night block instead of growing to
+    // include it.
     for (const b of blocks) {
-      spans.push({ startMinutes: minutesOfDay(b.startAt), endMinutes: minutesOfDay(b.endAt) })
+      const dayISO = dateOf(b.startAt)
+      spans.push({ startMinutes: minutesOfDay(b.startAt), endMinutes: minutesOfDayEnd(b.endAt, dayISO) })
     }
     for (const f of fixedSchedulesQuery.data ?? []) {
       spans.push({ startMinutes: f.startMinutes, endMinutes: f.endMinutes })
     }
     for (const d of autoDraft?.placements ?? []) {
-      spans.push({ startMinutes: minutesOfDay(d.startAt), endMinutes: minutesOfDay(d.endAt) })
+      const dayISO = dateOf(d.startAt)
+      spans.push({ startMinutes: minutesOfDay(d.startAt), endMinutes: minutesOfDayEnd(d.endAt, dayISO) })
     }
     return spans
   }, [blocks, fixedSchedulesQuery.data, autoDraft])
@@ -584,12 +593,16 @@ function WeeklyPage() {
     let candidates = onDay
     if (issue.code === 'V4_OUT_OF_AVAILABILITY') {
       const win = availabilityForColumn(dayIndex, availability)
+      // Same midnight fold the V4 rule itself uses (planFixtures): a TASK running
+      // past the window to midnight reads as 0 under plain minutesOfDay, so it
+      // would never match "outside" here and the issue would fall through to the
+      // weakest fallback guess below instead of pointing at the actual block.
       const outside = onDay.filter(
         (b) =>
           b.blockType === 'TASK' &&
           (!win ||
             minutesOfDay(b.startAt) < win.startMinutes ||
-            minutesOfDay(b.endAt) > win.endMinutes),
+            minutesOfDayEnd(b.endAt, dateOf(b.startAt)) > win.endMinutes),
       )
       if (outside.length > 0) candidates = outside
     }
@@ -629,7 +642,12 @@ function WeeklyPage() {
     // renders — scrolling to a block that isn't in the DOM looks like the panel
     // did nothing. Widen to 24h first so there is something to scroll to.
     const startMin = minutesOfDay(target.startAt)
-    const endMin = minutesOfDay(target.endAt)
+    // Fold a midnight-ending target the same way drawnSpans/openScheduleEdit
+    // do — otherwise this reads as 0, `endMin > range.endMinutes` never fires
+    // for the one block that most needs the 24h widen (it runs to the very
+    // bottom of the day), and the scroll-to lands on a block that isn't
+    // actually in the DOM yet.
+    const endMin = minutesOfDayEnd(target.endAt, dateOf(target.startAt))
     if (startMin < range.startMinutes || endMin > range.endMinutes) setMode('24h')
 
     // A counter, not the id: re-selecting the SAME block must retrigger the
@@ -774,12 +792,17 @@ function WeeklyPage() {
   const moveBlockToAdjacentWeek = (block, boundary) => {
     const dayIndex = days.indexOf(dateOf(block.startAt))
     if (dayIndex < 0) return
+    // A midnight-ending block (endAt on the FOLLOWING date at 00:00 — see
+    // minutesOfDayEnd's header) must fold back to 1440 here too, the same as
+    // openScheduleEdit above: plain minutesOfDay would read it as 0 and
+    // resolveTarget would then compose an end BEFORE the start on the target
+    // week, sending a negative-length block out in the optimistic PATCH.
     handleUserMove({
       planBlockId: block.planBlockId,
       boundary,
       dayIndex,
       startMin: minutesOfDay(block.startAt),
-      endMin: minutesOfDay(block.endAt),
+      endMin: minutesOfDayEnd(block.endAt, dateOf(block.startAt)),
     })
   }
 
@@ -1059,14 +1082,15 @@ function WeeklyPage() {
 
   // Open the edit form for a schedule block, prefilled from its (denormalized) data.
   const openScheduleEdit = (block) => {
+    const dayISO = dateOf(block.startAt)
     const startMin = minutesOfDay(block.startAt)
-    const endMin = minutesOfDay(block.endAt)
+    const endMin = minutesOfDayEnd(block.endAt, dayISO)
     setScheduleForm({
       mode: 'edit',
       block,
       initial: {
         title: block.title,
-        dayISO: dateOf(block.startAt),
+        dayISO,
         startMin,
         endMin,
         estimatedMinutes: block.estimatedMinutes ?? endMin - startMin,

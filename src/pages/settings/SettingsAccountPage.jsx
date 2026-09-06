@@ -122,7 +122,9 @@ function NameEditDialog({ currentName, onClose, onSubmit, submitting }) {
   DISABLED — ST-F1-14가 만든 건 AUTH-06(이메일로 받은 링크로 재설정)이라 다른
   스토리다. 로그인이 안 될 때의 "비밀번호를 잊으셨나요?"는 이제
   `/reset-password`로 실제로 존재하니, 이 화면의 비활성 버튼은 그 대체 경로가
-  아니라 ACCT-02 자체가 아직 없다는 뜻으로 이유 문구를 정정했다.
+  아니라 ACCT-02 자체가 아직 없다는 뜻이다. disabledReason 문구는 오너 리뷰
+  2026-09-05로 제거했다("별도 스토리에서 지원 예정"이 오해 소지가 있다는
+  지적) — 버튼은 여전히 disabled, 이유 캡션만 없앤 것.
 
   "캘린더 연동"은 더 이상 여기 없다 — 오너 리뷰 3차(item 4)로 독립 하위 화면
   (SettingsCalendarPage)으로 다시 분리됐다(라운드 2에서 여기 섹션으로 합쳤던
@@ -215,12 +217,7 @@ function SettingsAccountPage() {
       </section>
 
       <div>
-        <Button
-          variant="secondary"
-          size="md"
-          disabled
-          disabledReason="별도 스토리(ACCT-02)에서 제공됩니다"
-        >
+        <Button variant="secondary" size="md" disabled>
           비밀번호 변경
         </Button>
       </div>

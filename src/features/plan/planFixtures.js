@@ -21,6 +21,7 @@ import {
   dateOf,
   formatMinutesLabel,
   minutesOfDay,
+  minutesOfDayEnd,
   snapDuration,
   WEEKDAY_KEYS,
   WEEKDAY_LABELS_KO,
@@ -303,7 +304,11 @@ function scanFixedConflicts(weekday, startMinutes, endMinutes) {
     const conflicts = week.blocks.filter((b) => {
       if (dateOf(b.startAt) !== dayISO) return false
       const bStart = minutesOfDay(b.startAt)
-      const bEnd = minutesOfDay(b.endAt)
+      // A block ending at midnight must fold to 1440 (minutesOfDayEnd), not
+      // read back as 0 — otherwise `startMinutes < bEnd` is never true and a
+      // candidate fixed schedule that truly overlaps the end of the day is
+      // reported as conflict-free.
+      const bEnd = minutesOfDayEnd(b.endAt, dayISO)
       return bStart < endMinutes && startMinutes < bEnd
     })
     if (conflicts.length > 0) {
@@ -323,8 +328,80 @@ const placedTaskData = new Map()
 // SCHEDULE records (ST-F1-04 PLAN-08/17). A schedule owns the fields the plan_block
 // doesn't (memo·estimatedMinutes·priority); the block mirrors its title/time.
 const schedulesById = new Map()
-// Execution records (PLAN-15 실제 시간 기록) — write-only for this cycle.
-const executionRecords = []
+// Execution records (PLAN-15 실제 시간 기록).
+//
+// PERSISTED — narrowly, to THIS array only (owner review 2026-09-05, "새로고침
+// 하면 초기화되는거 같아요"). The real contract has no GET for this resource
+// at all (`/tasks/{taskId}/execution-logs` is POST-only, confirmed against
+// origin/main's openapi.yaml) — the real server instead folds a task's logged
+// state into `GET /dashboard`'s own `todayBoard[].completed`, so a real
+// backend never has this bug (its DB write already survives a refresh). This
+// mock has no DB: it was a plain in-memory array, which a page reload (a full
+// JS re-evaluation, not just a re-render) always emptied back to `[]` —
+// hasCompletedExecution then honestly reported "never logged" for a task the
+// user watched themselves record a minute ago. `localStorage` closes exactly
+// that gap, same STORAGE_KEY-prefixed load/persist pair
+// onboardingFixtures.js's own header already established for this same class
+// of problem (mock-only state that must outlive a reload) — copied here
+// rather than shared, since neither fixtures module owns the other (same
+// "separate feature folders" boundary projectApi.js's own header draws for
+// its two mock backends).
+//
+// SCOPE, ON PURPOSE: only this one array. This is NOT a general "persist
+// every mock store" change — every other module-level mock Map/array in this
+// file (weeks, placedTaskData, schedulesById, …) stays exactly as
+// session-only as it always was; broadening this would be a much larger,
+// unreviewed behavior change for stores nobody reported a problem with.
+const EXECUTION_RECORDS_STORAGE_KEY = 'openplan-dev.execution-records'
+
+// Defensive — localStorage can throw (privacy mode, quota) or simply not
+// exist (SSR/test runners); either falls back to an empty log, same as the
+// pre-persistence behavior.
+function loadPersistedExecutionRecords() {
+  try {
+    const raw = window.localStorage.getItem(EXECUTION_RECORDS_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function persistExecutionRecords() {
+  try {
+    window.localStorage.setItem(EXECUTION_RECORDS_STORAGE_KEY, JSON.stringify(executionRecords))
+  } catch {
+    // dev-only convenience — a write failure here must never break the mock
+    // (matches onboardingFixtures.js's own persist()).
+  }
+}
+
+// `const` still holds — every writer below mutates this SAME array in place
+// (`.push`) rather than reassigning it, so the persisted seed can be read
+// once at module load without needing `let`.
+const executionRecords = loadPersistedExecutionRecords()
+
+/**
+ * Whether `taskId` was logged as actually FINISHED — dashboardFixtures.js's
+ * mock reads this so its todayBoard rows flip to `completed: true` after a
+ * real (mocked) POST, instead of a hardcoded snapshot that always came back
+ * unchanged. Without this, the dashboard's "기록됨" state only ever lived in
+ * HomePage.jsx's client-only `justLoggedIds` overlay — real-looking right
+ * after the click, but gone on the next refetch/reload, since the mock GET
+ * itself never reflected the write (W6 오너 리포트: "새로고침하면 초기화된다").
+ *
+ * `result === 'COMPLETED'` specifically, NOT "a record exists": ExecutionLogForm
+ * also writes 'DELAYED'(지연) and 'ABORTED'(중단), and counting those as done
+ * put a 완료 check on a task the user had just recorded as abandoned — a
+ * dev-only misreport this mock introduced, made worse by outliving a reload
+ * now that the array is persisted. This stays an APPROXIMATION either way:
+ * the real server never derives `completed` from execution logs at all (only
+ * PATCH /tasks/{taskId}/status moves it), so 'COMPLETED' is merely the one
+ * reading that can't be flatly wrong.
+ */
+export function hasCompletedExecution(taskId) {
+  return executionRecords.some((r) => r.taskId === taskId && r.result === 'COMPLETED')
+}
 
 // Remember a task's full record when it leaves the backlog (placed as a block).
 // Once placed, a task lives in placedTaskData permanently — its UNPLACED presence
@@ -576,8 +653,13 @@ const overlaps = (a, b) =>
 
 const durationOf = (b) => (new Date(b.endAt).getTime() - new Date(b.startAt).getTime()) / 60000
 
+// User-facing "HH:MM - HH:MM" for a violation message. Folds a midnight end to
+// "24:00" (minutesOfDayEnd) rather than "00:00" — matching how PlanBlock/
+// CalendarGrid/MiniBlock already label the same block on the real grid, so a
+// reviewer comparing the violation panel's text against the block it points
+// at sees the same end time, not a start-of-day-looking "00:00".
 const timeRangeOf = (b) =>
-  `${formatMinutesLabel(minutesOfDay(b.startAt))} - ${formatMinutesLabel(minutesOfDay(b.endAt))}`
+  `${formatMinutesLabel(minutesOfDay(b.startAt))} - ${formatMinutesLabel(minutesOfDayEnd(b.endAt, dateOf(b.startAt)))}`
 
 function activeWindowFor(weekdayKey) {
   return availability.find((a) => a.weekday === weekdayKey && a.isActive) ?? null
@@ -667,7 +749,10 @@ function computeValidationIssues(weekStartISO, blocks) {
   for (const block of inWeek) {
     const weekdayKey = WEEKDAY_KEYS[block.dayIndex]
     const startMin = minutesOfDay(block.startAt)
-    const endMin = minutesOfDay(block.endAt)
+    // A midnight-ending block must fold to 1440, or `endMin <= fixed.startMinutes`
+    // is trivially true for any fixed schedule (endMin reads as 0) and a real
+    // end-of-day overlap with the fixed schedule goes unreported.
+    const endMin = minutesOfDayEnd(block.endAt, dateOf(block.startAt))
     for (const fixed of fixedSchedules) {
       if (fixed.weekday !== weekdayKey) continue
       if (!isFixedActiveForWeek(fixed, weekStartISO)) continue
@@ -715,7 +800,11 @@ function computeValidationIssues(weekStartISO, blocks) {
     if (block.blockType !== 'TASK') continue
     const win = activeWindowFor(WEEKDAY_KEYS[block.dayIndex])
     const startMin = minutesOfDay(block.startAt)
-    const endMin = minutesOfDay(block.endAt)
+    // Same fold as V2 above: without it, `endMin <= win.endMinutes` is
+    // trivially true (0 <= anything) and a TASK that actually runs past the
+    // window's end at midnight is wrongly read as fully inside it — the
+    // warning this rule exists to raise never fires.
+    const endMin = minutesOfDayEnd(block.endAt, dateOf(block.startAt))
     if (win && startMin >= win.startMinutes && endMin <= win.endMinutes) continue
     pushIssue('V4_OUT_OF_AVAILABILITY', {
       weekday: WEEKDAY_KEY_TO_FULL[WEEKDAY_KEYS[block.dayIndex]],
@@ -769,10 +858,16 @@ function computeValidationIssues(weekStartISO, blocks) {
     if (dayBlocks.length === 0) continue
     const win = activeWindowFor(WEEKDAY_KEYS[dayIndex])
     const windowLength = win ? win.endMinutes - win.startMinutes : 0
+    // minutesOfDayEnd, not minutesOfDay, for the same reason as V2/V4 above: a
+    // midnight-ending SCHEDULE would otherwise contribute 0 in-window minutes
+    // (minutesInsideWindow floors at 0 once endMin reads as 0), understating
+    // how much of the window the schedule actually claims and inflating the
+    // capacity left for tasks.
     const scheduleMinutesInWindow = dayBlocks
       .filter((b) => b.blockType === 'SCHEDULE')
       .reduce(
-        (sum, b) => sum + minutesInsideWindow(minutesOfDay(b.startAt), minutesOfDay(b.endAt), win),
+        (sum, b) =>
+          sum + minutesInsideWindow(minutesOfDay(b.startAt), minutesOfDayEnd(b.endAt, dateOf(b.startAt)), win),
         0,
       )
     const capacity = Math.max(0, windowLength - scheduleMinutesInWindow)
@@ -840,6 +935,14 @@ function computeValidationIssues(weekStartISO, blocks) {
     for (let i = 1; i < dayBlocks.length; i += 1) {
       const prev = dayBlocks[i - 1]
       const next = dayBlocks[i]
+      // Safe to read `prev.endAt` with plain minutesOfDay here (unlike the
+      // rules above): `dayBlocks` groups by the block's OWN start date, so a
+      // `prev` that truly ends at midnight already occupies its day through
+      // 24:00 — any `next` sharing that dayIndex would have to start BEFORE
+      // that end to belong to the same calendar day, which is an overlap
+      // (already reported as V1_OVERLAP above), not a gap. A midnight-ending
+      // `prev` therefore never reaches this line paired with a genuinely
+      // later, non-overlapping `next`.
       const gap = minutesOfDay(next.startAt) - minutesOfDay(prev.endAt)
       if (gap < 0 || gap >= BUFFER_MIN_MINUTES) continue
       pushIssue('V7_BUFFER_SHORTAGE', {
@@ -1716,6 +1819,7 @@ export const mockBackend = {
     await delay(150)
     const executionRecordId = nextId('exec')
     executionRecords.push({ executionRecordId, taskId, ...body })
+    persistExecutionRecords() // see executionRecords' own header — this write must survive a reload
     return { executionRecordId }
   },
 

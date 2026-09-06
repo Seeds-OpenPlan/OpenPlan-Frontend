@@ -38,19 +38,15 @@ import { formatDurationKO } from '../../features/plan/planTime'
 */
 
 /*
-  취소 버튼 — 계약 부재로 정직하게 비활성화 (W6, 2026-08-28, 리드 확인).
+  취소 버튼 — 계약 부재로 비활성화 (W6, 2026-08-28, 리드 확인; 오너 리뷰
+  2026-09-05로 안내 문구 제거).
   이전엔 아무 일도 안 하면서 "취소되었습니다" 토스트만 띄우는 스텁이었다 —
   사용자는 취소된 줄 알고 넘어가지만 서버 상태는 그대로였다(침묵보다 나쁜
-  거짓 성공 피드백). 리드가 계약을 확인한 결과 실행 기록을 취소·삭제하는
-  엔드포인트가 없다(`execution-logs`는 POST만 존재) — 즉 지금은 구현할
-  방법 자체가 없다. 그래서 버튼을 감추는 대신 `disabled` +
-  `disabledReason`으로 "왜 못 쓰는지"를 항상 보이는 텍스트로 남긴다
-  (Button.jsx의 disabledReason은 hover 툴팁이 아니라 caption으로 렌더되어
-  키보드/스크린리더 사용자도 이유를 알 수 있다 — SYS-07 §7.2 선례와 동일).
+  거짓 성공 피드백). 실행 기록을 취소·삭제하는 엔드포인트가 없어서
+  (`execution-logs`는 POST만 존재) 지금은 구현할 방법 자체가 없다.
   서버에 취소 엔드포인트가 생기면 이 disabled를 걷어내고 실제 뮤테이션을
   onClick에 연결하면 된다 — 버튼/레이아웃은 이미 갖춰져 있다.
 */
-const CANCEL_DISABLED_REASON = '아직 지원하지 않는 기능입니다'
 
 export function TodayBoard({
   error = false,
@@ -138,13 +134,14 @@ export function TodayBoard({
               <div className="flex shrink-0 items-center gap-2">
                 {item.completed ? (
                   // 항상 disabled — 취소를 수행할 서버 엔드포인트가 없다(위
-                  // 헤더 주석 참고). 오프라인일 땐 그 사유를 우선 보여준다
-                  // (더 급한 정보 — 온라인이어도 어차피 못 쓰는 건 매한가지).
+                  // 헤더 주석 참고). 오프라인일 땐 그 사유를 보여주고, 그 외엔
+                  // 별도 안내 문구 없이 조용히 비활성 상태로 둔다(오너 리뷰
+                  // 2026-09-05 — "지원 안 함" 문구가 오해 소지가 있다는 지적).
                   <Button
                     variant="secondary"
                     size={isDesktop ? 'sm' : 'lg'}
                     disabled
-                    disabledReason={!canWrite ? offlineReason : CANCEL_DISABLED_REASON}
+                    disabledReason={!canWrite ? offlineReason : undefined}
                   >
                     취소
                   </Button>

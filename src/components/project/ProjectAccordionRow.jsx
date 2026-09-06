@@ -1,8 +1,11 @@
 import { Badge } from '../common/Badge'
 import { ProgressBar } from '../common/ProgressBar'
+import { Skeleton } from '../common/Skeleton'
 import { AccordionRow } from '../common/AccordionRow'
 import { ChevronRightIcon } from '../plan/planIcons'
 import { ProjectExpandedPanel } from './ProjectExpandedPanel'
+import { useProjectTasks } from '../../features/project/useProjectData'
+import { deriveProjectAggregates } from '../../features/project/projectApi'
 
 /*
   One project row on the accordion SCR-PROJ-LIST (project-accordion
@@ -47,18 +50,58 @@ export function ProjectAccordionRow({
   onEdit,
   onDelete,
   onDuplicate,
+  // { data, isLoading } | undefined — ProjectsPage's own useProjectListAggregates
+  // result for THIS project, keyed off the SAME queryKey the line below reads
+  // (projectTasksKey) so the two never race each other into two requests. See
+  // that hook's own header for why this exists (COLLAPSED-card "태스크
+  // 0·완료 0" — the bug this row's own expand-time recompute below never
+  // reached, since a collapsed row never ran it).
+  listAggregate,
 }) {
-  const { projectId, name, dueDate, taskCount, completedCount, unplacedCount, placedCount, dueSoonCount } =
-    project
+  const { projectId, name, dueDate } = project
   const panelId = `project-panel-${projectId}`
+
+  // `project.taskCount`/etc. read a server rollup that real responses never
+  // send today (projectApi.normalizeProject's own CONFIRMED note) — while
+  // this row is the one open, its own task list is already being fetched
+  // for the panel body below (same query key, deduped by TanStack Query, so
+  // this is not a second request), so recompute the real numbers from that.
+  const tasksQuery = useProjectTasks(expanded ? projectId : null)
+
+  // Priority: this row's OWN expanded-panel fetch (freshest — reads straight
+  // off what the panel body below is already showing) > the list-level
+  // aggregate ProjectsPage fetched for every visible row, including this one
+  // while collapsed (SAME cache entry once this row expands, so falling back
+  // to it here just avoids a one-render flash back to a loading skeleton for
+  // a row that was already resolved before the user opened it) > `project`'s
+  // own server fields, which are only ever a last-resort default now (see
+  // `countsLoading` below for why a plain missing-aggregate case renders a
+  // placeholder instead of trusting that always-0 default outright).
+  const derivedFromExpanded = tasksQuery.data ? deriveProjectAggregates(tasksQuery.data) : undefined
+  const aggregateSource = derivedFromExpanded ?? listAggregate?.data
+  // `listAggregate === undefined` means this project was never queried at all
+  // (beyond useProjectListAggregates's own MAX_AGGREGATE_QUERIES cap, or a
+  // caller that doesn't pass the prop) — that case falls straight through to
+  // `project`'s own (always-0) fields below, same as before this hook
+  // existed, NOT a loading state (nothing is in flight for it)... UNLESS this
+  // row is the one EXPANDED: then `tasksQuery` above is its own independent
+  // fetch, running regardless of whether `listAggregate` exists at all (a
+  // project past the aggregate cap can still be opened and fetched). Gating
+  // the expanded branch on `Boolean(listAggregate)` too meant expanding one of
+  // those capped-out projects skipped the skeleton and showed the stale
+  // "태스크 0 · 완료 0" default for the whole fetch — exactly what this loading
+  // state exists to prevent (Thomas review). So only the COLLAPSED branch
+  // still needs `listAggregate` to exist before trusting its `isLoading`.
+  const countsLoading = !aggregateSource && (expanded ? tasksQuery.isLoading : Boolean(listAggregate) && listAggregate.isLoading)
+  const { taskCount, completedCount, unplacedCount, placedCount, dueSoonCount } = aggregateSource ?? project
 
   const meta = [`태스크 ${taskCount}`, `완료 ${completedCount}`, unplacedCount > 0 ? `미배치 ${unplacedCount}` : null]
     .filter(Boolean)
     .join(' · ')
 
-  const ariaLabel = `${name}, 마감 ${dueDate ?? '없음'}, 태스크 ${taskCount}개 중 완료 ${completedCount}, ${
-    expanded ? '접기' : '펼치기'
-  }`
+  const ariaLabel = `${name}, 마감 ${dueDate ?? '없음'}, ${
+    countsLoading ? '태스크 집계 불러오는 중' : `태스크 ${taskCount}개 중 완료 ${completedCount}`
+  }, ${expanded ? '접기' : '펼치기'}`
 
   const header = (
     <>
@@ -110,6 +153,17 @@ export function ProjectAccordionRow({
         label={project.closedAt ? '기간이 지나 자동 종료됨' : '중지되었던 프로젝트가 종료되었습니다'}
       />
     </div>
+  ) : countsLoading ? (
+    // First paint before this project's own aggregate query resolves — a
+    // determinate "태스크 0 · 완료 0" here would be indistinguishable from a
+    // genuinely empty project (the exact complaint this hook exists to fix),
+    // so a shimmering placeholder stands in until the real numbers land
+    // instead (SYS-03 CLS budget: sized to roughly the text/bar it replaces,
+    // so swapping in the real content doesn't jump the row's height).
+    <>
+      <Skeleton width="9rem" height="0.75rem" className="mt-2" />
+      <Skeleton width="100%" height="0.375rem" radius="var(--radius-full)" className="mt-3" />
+    </>
   ) : (
     <>
       <p className="mt-2 text-caption text-text-muted">{meta}</p>
