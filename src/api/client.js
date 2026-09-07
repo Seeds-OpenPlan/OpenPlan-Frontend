@@ -118,6 +118,37 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error),
 )
 
+/*
+  갱신은 한 번만 보낸다 — 401 이 동시에 여럿 나도.
+
+  🔴 왜 필요한가. 서버는 refresh 회전을 재사용 탐지와 함께 구현한다(AuthService.refresh).
+  회전이 커밋된 뒤 `Set-Cookie` 가 이 브라우저에 닿기까지 응답 왕복만큼 시차가 있고, 그 창에서
+  출발한 두 번째 갱신은 아직 헌 토큰을 들고 간다. 서버는 그것을 탈취로 읽고 그 사용자의 활성
+  세션을 전부 끊는다 — 방금 발급된 정상 refresh 까지. 액세스 토큰이 만료되는 순간 화면에 떠
+  있는 쿼리 여러 개가 같은 틱에 401 을 받으므로 이 창에 걸릴 확률이 낮지 않고, 실제로
+  "30분마다 로그인이 풀린다" 는 신고의 원인이 이것이었다.
+
+  진행 중인 갱신이 있으면 그 프라미스를 함께 기다리게 해서 헌 토큰이 두 번 나가지 않게 한다.
+
+  `finally` 로 비우는 것이 중요하다 — 갱신이 끝난 뒤에 401 이 오는 요청은 이미 새 쿠키를 들고
+  있으므로 새로 회전해도 정상이다. 계속 붙잡고 있으면 오히려 만료된 갱신 결과를 재사용하게 된다.
+
+  이 가드는 이 탭 안에서만 유효하다(모듈 스코프). 탭이 둘이면 여전히 경쟁할 수 있고, 그쪽은
+  서버의 유예창이 받는다(OpenPlan-Backend PR #74).
+*/
+let refreshInFlight = null
+
+function refreshSession() {
+  if (!refreshInFlight) {
+    refreshInFlight = apiClient
+      .post('/auth/token-refresh', null, { _skipAuthRefresh: true })
+      .finally(() => {
+        refreshInFlight = null
+      })
+  }
+  return refreshInFlight
+}
+
 // --- Response interceptor: unwrap envelope, refresh on 401, normalize errors. ---
 apiClient.interceptors.response.use(
   // Success: hand the caller the unwrapped payload. `data.data` is the envelope
@@ -168,9 +199,9 @@ apiClient.interceptors.response.use(
     const { loggingOut } = useSessionStore.getState()
     if (appError.status === 401 && !config._retry && !config._skipAuthRefresh && !loggingOut) {
       try {
-        // Path per openapi single source (/auth/token-refresh, no request body —
-        // refresh token travels as the httpOnly op_rt cookie, ADR-0001).
-        await apiClient.post('/auth/token-refresh', null, { _skipAuthRefresh: true })
+        // 경로·본문 규약은 refreshSession() 헤더 참조(/auth/token-refresh, 본문 없음 —
+        // refresh 는 httpOnly op_rt 쿠키로만 오간다, ADR-0001). 동시 401 은 한 요청으로 합친다.
+        await refreshSession()
         // Re-issue the original request once. The success interceptor unwraps it,
         // so the caller receives the retried payload transparently.
         return apiClient({ ...config, _retry: true })
