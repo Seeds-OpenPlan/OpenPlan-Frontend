@@ -140,7 +140,8 @@ function DisconnectConfirmDialog({ connection, onClose, onConfirm, submitting })
         {connection.label} 연동을 해제할까요?
       </h2>
       <p className="text-body text-text-muted">
-        연동을 해제하면 이후 반영되지 않습니다. 이미 계획에 반영된 일정은 그대로 남습니다.
+        연동을 해제하면 이후 양방향 반영이 멈춥니다. 이미 계획에 반영된 일정과, 이미 외부 캘린더에
+        만들어진 일정은 <b>양쪽 모두 그대로 남습니다</b> — 어느 쪽도 임의로 지우지 않습니다.
       </p>
       <div className="flex justify-end gap-2">
         <Button variant="secondary" size="md" onClick={onClose}>
