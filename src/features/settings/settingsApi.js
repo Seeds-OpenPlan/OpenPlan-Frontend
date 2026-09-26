@@ -286,6 +286,27 @@ export function replaceSelectedCalendars(connectionId, selections) {
 }
 
 /**
+ * PUT /external-calendar-connections/{connectionId}/write-calendar (이슈 #69
+ * 내보낼 대상 캘린더 지정). **가져올 캘린더 선택(replaceSelectedCalendars)과는
+ * 반대 방향이다** — 그쪽은 외부에서 우리 쪽으로 읽어올 캘린더 여러 개,
+ * 이쪽은 우리 변경을 내보낼 캘린더 딱 하나다.
+ *
+ * `externalCalendarId`에 `null`을 주면 «내보내지 않음»으로 해제된다(계약 원문:
+ * null·생략·빈 문자열 모두 해제). 서버는 받은 식별자를 제공자 목록과 대조하므로
+ * 목록에 없는 값은 422로 돌아온다 — 호출부는 getAvailableCalendars가 돌려준
+ * 값만 넘긴다.
+ */
+export function setWriteCalendar(connectionId, externalCalendarId) {
+  return withDevFallback(
+    () =>
+      apiClient.put(`/external-calendar-connections/${connectionId}/write-calendar`, {
+        externalCalendarId,
+      }),
+    async () => (await loadSettingsMock()).setWriteCalendar(connectionId, externalCalendarId),
+  )
+}
+
+/**
  * DELETE /external-calendar-connections/{connectionId} (FIX-17 연동 해제).
  * setConnectionStatus(DISABLED)와 달리 자격증명 자체를 지워 그 행이 통째로
  * 사라지고 "미연결"로 되돌아간다 — 그래서 호출부(CalendarConnectionSection)는

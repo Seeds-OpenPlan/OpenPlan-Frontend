@@ -80,6 +80,10 @@ let connections = [
     provider: 'GOOGLE',
     status: 'CONNECTED',
     accountIdentifier: 'user@gmail.com',
+    // 이슈 #69 — 대상 캘린더를 고르기 전 상태로 시드한다(내보내기 꺼짐). 화면이
+    // "왜 안 나가는가"를 말하는 경로를 dev에서도 기본으로 밟게 하려는 것이다.
+    writeCalendarId: null,
+    canWrite: true,
     selectedCalendars: [
       { externalCalendarId: 'gcal-1', name: '기본 캘린더' },
       { externalCalendarId: 'gcal-2', name: '업무' },
@@ -219,6 +223,33 @@ export const mockBackend = {
       throw err
     }
     conn.selectedCalendars = [...selections]
+    return { ...conn }
+  },
+
+  // PUT .../{connectionId}/write-calendar (이슈 #69 내보낼 대상 지정). 서버가
+  // 제공자 목록과 대조하는 것까지 흉내낸다 — mock이 무엇이든 받아 주면 422
+  // 분기가 dev에서 한 번도 실행되지 않는다(필드명 버그가 그렇게 숨었다).
+  async setWriteCalendar(connectionId, externalCalendarId) {
+    await delay()
+    const conn = connections.find((c) => c.connectionId === connectionId)
+    if (!conn) {
+      const err = new Error('mock: unknown connectionId')
+      err.status = 404
+      throw err
+    }
+    if (externalCalendarId == null || externalCalendarId === '') {
+      conn.writeCalendarId = null
+      return { ...conn }
+    }
+    const known = (CALENDAR_CATALOG[conn.provider] ?? []).some(
+      (c) => c.externalCalendarId === externalCalendarId,
+    )
+    if (!known) {
+      const err = new Error('mock: E-COM-009 목록에 없는 캘린더')
+      err.status = 422
+      throw err
+    }
+    conn.writeCalendarId = externalCalendarId
     return { ...conn }
   },
 

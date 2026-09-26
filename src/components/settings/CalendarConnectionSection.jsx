@@ -13,6 +13,7 @@ import {
   useAvailableCalendars,
   useSetConnectionStatus,
   useReplaceSelectedCalendars,
+  useSetWriteCalendar,
   useDisconnectConnection,
   useApplyCandidateEvents,
 } from '../../features/settings/useSettings'
@@ -129,6 +130,95 @@ function CalendarSelectDialog({ connection, onClose, onSubmit, submitting }) {
   )
 }
 
+/*
+  WriteCalendarDialog — 내보낼 대상 캘린더 하나 (이슈 #69).
+
+  CalendarSelectDialog(가져올 캘린더)와 방향이 반대다: 그쪽은 여러 개를 체크해
+  외부→OpenPlan 으로 읽어오고, 이쪽은 **하나만** 골라 OpenPlan→외부로 내보낸다.
+  그래서 체크박스가 아니라 라디오이고, "내보내지 않음"이 목록의 첫 항목으로 늘
+  있다 — 해제가 설정 해제 버튼이 아니라 하나의 선택지여야 되돌리기가 쉽다.
+
+  목록을 다이얼로그가 열릴 때 그 자리에서 불러오는 이유는 CalendarSelectDialog
+  와 같다(settingsApi.getAvailableCalendars 헤더): 이 조회가 제공자를 실제로
+  호출하므로 설정 화면을 여는 것만으로 두 번 부르게 만들지 않는다.
+*/
+function WriteCalendarDialog({ connection, onClose, onSubmit, submitting }) {
+  const isDesktop = useIsDesktop()
+  const titleId = useId()
+  const firstOptionRef = useRef(null)
+  const calendarsQuery = useAvailableCalendars(connection.connectionId)
+  // 서버가 돌려준 현재 대상으로 시드한다. null(미지정)이면 "내보내지 않음"이 선택된다.
+  const [picked, setPicked] = useState(() => connection.writeCalendarId ?? null)
+
+  const options = [
+    { externalCalendarId: null, name: '내보내지 않음' },
+    ...(calendarsQuery.data ?? []),
+  ]
+
+  const listBody = calendarsQuery.isLoading ? (
+    <LoadingSkeleton preset="listRow" count={2} />
+  ) : calendarsQuery.isError ? (
+    <ErrorState variant="inline" onAction={() => calendarsQuery.refetch()} />
+  ) : (
+    <ul className="flex flex-col gap-1">
+      {options.map((cal, i) => (
+        <li key={cal.externalCalendarId ?? '__none__'}>
+          <label className="flex items-center gap-3 rounded-control px-2 py-2 hover:bg-surface-sunken">
+            <input
+              ref={i === 0 ? firstOptionRef : undefined}
+              type="radio"
+              name={`write-calendar-${connection.connectionId}`}
+              checked={picked === cal.externalCalendarId}
+              onChange={() => setPicked(cal.externalCalendarId)}
+            />
+            <span className="text-label text-text">{cal.name}</span>
+          </label>
+        </li>
+      ))}
+    </ul>
+  )
+
+  const body = (
+    <div className="flex flex-col gap-4">
+      <h2 id={titleId} className="text-title font-semibold text-text">
+        {connection.label}에 내보낼 캘린더
+      </h2>
+      <p className="text-caption text-text-muted">
+        OpenPlan 에서 만들거나 고친 일정·태스크가 여기 고른 캘린더에 반영됩니다. 고르지 않으면 아무것도
+        내보내지 않습니다. 이미 내보낸 일정은 대상을 바꿔도 외부에 그대로 남습니다.
+      </p>
+      {listBody}
+      <div className="mt-1 flex justify-end gap-2">
+        <Button variant="secondary" size="md" onClick={onClose}>
+          취소
+        </Button>
+        <Button
+          variant="primary"
+          size="md"
+          loading={submitting}
+          disabled={calendarsQuery.isLoading}
+          onClick={() => onSubmit(picked)}
+        >
+          저장
+        </Button>
+      </div>
+    </div>
+  )
+
+  if (isDesktop) {
+    return (
+      <Dialog open onClose={onClose} labelledById={titleId} initialFocusRef={firstOptionRef}>
+        {body}
+      </Dialog>
+    )
+  }
+  return (
+    <BottomSheet open onClose={onClose} labelledById={titleId} initialFocusRef={firstOptionRef}>
+      {body}
+    </BottomSheet>
+  )
+}
+
 function DisconnectConfirmDialog({ connection, onClose, onConfirm, submitting }) {
   const isDesktop = useIsDesktop()
   const titleId = useId()
@@ -189,11 +279,13 @@ export function CalendarConnectionSection() {
   const query = useConnections()
   const setStatus = useSetConnectionStatus()
   const replaceCalendars = useReplaceSelectedCalendars()
+  const setWriteCalendar = useSetWriteCalendar()
   const disconnect = useDisconnectConnection()
   const applyEvents = useApplyCandidateEvents()
 
   const [disconnectTarget, setDisconnectTarget] = useState(null) // {connectionId, label} | null
   const [calendarEditTarget, setCalendarEditTarget] = useState(null) // {connectionId, label, selectedCalendars} | null
+  const [writeCalendarTarget, setWriteCalendarTarget] = useState(null) // {connectionId, label, writeCalendarId} | null
   const [connectingProvider, setConnectingProvider] = useState(null) // 'APPLE' | null
 
   if (query.isLoading) return <LoadingSkeleton preset="listRow" count={2} />
@@ -264,8 +356,25 @@ export function CalendarConnectionSection() {
 
               {conn && isActive && (
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                  {/*
+                    «가져오기 n개» 만 보여 주던 자리에 내보내기 상태를 나란히 둔다.
+                    두 방향이 별개 설정인데 한쪽만 보이면, 가져오기를 켠 사용자가
+                    내보내기도 켜진 것으로 읽는다. canWrite·writeCalendarId 가 없는
+                    (이 계약 이전의) 서버에서는 내보내기 문구를 아예 감춘다 — 모르는
+                    것을 «꺼짐» 이라 적으면 그것이 거짓이 된다.
+                  */}
                   <span className="text-caption text-text-muted">
-                    {conn.selectedCalendars.length}개 캘린더 선택됨
+                    {conn.selectedCalendars.length}개 캘린더 가져오기
+                    {conn.canWrite !== undefined && (
+                      <>
+                        {' · '}
+                        {conn.canWrite === false
+                          ? '내보내기 불가(쓰기 권한 없음)'
+                          : conn.writeCalendarId
+                            ? '내보내기 켜짐'
+                            : '내보내기 꺼짐'}
+                      </>
+                    )}
                   </span>
                   <div className="flex gap-2">
                     {/*
@@ -300,6 +409,29 @@ export function CalendarConnectionSection() {
                       onClick={() => setCalendarEditTarget({ ...conn, label })}
                     >
                       가져올 캘린더 선택
+                    </Button>
+                    {/*
+                      이슈 #69 — 내보내기의 유일한 스위치다. 이 대상이 비어 있으면
+                      서버는 변경을 큐에 넣지 않고 조용히 지나간다(오류도 표시도 없다).
+                      canWrite 가 거짓이면 대상을 골라도 나가지 않으므로 그때는 막고
+                      이유를 title 로 말한다 — "가져와 반영" 버튼이 캘린더 미선택을
+                      다루는 방식과 같은 관례다.
+
+                      canWrite 가 undefined 인 경우(이 계약 이전의 서버)는 막지 않는다:
+                      프론트가 먼저 배포됐을 때 기능을 없는 것으로 만들면 안 된다.
+                    */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={conn.canWrite === false}
+                      title={
+                        conn.canWrite === false
+                          ? '쓰기 권한이 없어 내보낼 수 없습니다 — 연동을 해제하고 다시 연동하면 권한을 요청합니다'
+                          : undefined
+                      }
+                      onClick={() => setWriteCalendarTarget({ ...conn, label })}
+                    >
+                      내보낼 캘린더
                     </Button>
                     <Button variant="danger" size="sm" onClick={() => setDisconnectTarget({ ...conn, label })}>
                       연동 해제
@@ -337,6 +469,20 @@ export function CalendarConnectionSection() {
             replaceCalendars.mutate(
               { connectionId: calendarEditTarget.connectionId, selections },
               { onSuccess: () => setCalendarEditTarget(null) },
+            )
+          }
+        />
+      )}
+
+      {writeCalendarTarget && (
+        <WriteCalendarDialog
+          connection={writeCalendarTarget}
+          onClose={() => setWriteCalendarTarget(null)}
+          submitting={setWriteCalendar.isPending}
+          onSubmit={(externalCalendarId) =>
+            setWriteCalendar.mutate(
+              { connectionId: writeCalendarTarget.connectionId, externalCalendarId },
+              { onSuccess: () => setWriteCalendarTarget(null) },
             )
           }
         />
