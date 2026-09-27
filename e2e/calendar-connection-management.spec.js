@@ -14,7 +14,7 @@ test.describe('SCR-SET-CALENDAR — 기존 연동 관리 (Google 데모 연결)'
 
   test('T7: Google은 시드 데이터로 이미 연결돼 있고 계정 식별자가 보인다', async ({ page }) => {
     await expect(page.getByText('user@gmail.com')).toBeVisible()
-    await expect(page.getByText('2개 캘린더 선택됨')).toBeVisible()
+    await expect(page.getByText('2개 캘린더 가져오기')).toBeVisible()
   })
 
   test('T8: Toggle을 끄면 확인창 없이 즉시 "제외됨" 캡션이 뜬다(PATCH status — 비파괴적)', async ({
@@ -70,6 +70,6 @@ test.describe('SCR-SET-CALENDAR — 기존 연동 관리 (Google 데모 연결)'
     await dialog.getByRole('checkbox').nth(1).uncheck()
     await dialog.getByRole('button', { name: '저장' }).click()
     await expect(dialog).toHaveCount(0)
-    await expect(page.getByText('0개 캘린더 선택됨')).toBeVisible()
+    await expect(page.getByText('0개 캘린더 가져오기')).toBeVisible()
   })
 })

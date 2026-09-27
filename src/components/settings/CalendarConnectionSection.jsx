@@ -424,9 +424,13 @@ export function CalendarConnectionSection() {
                       variant="secondary"
                       size="sm"
                       disabled={conn.canWrite === false}
-                      title={
+                      // hover 전용 title 이 아니라 Button 의 disabledReason 을 쓴다 —
+                      // 그 계약이 "키보드·스크린리더 사용자도 hover 없이 읽어야 한다"
+                      // (SYS-07 §7.2)를 명시하고, 이 화면은 BottomSheet 분기를 둘 만큼
+                      // 터치를 실제 대상으로 삼는다(hover 가 아예 없는 기기).
+                      disabledReason={
                         conn.canWrite === false
-                          ? '쓰기 권한이 없어 내보낼 수 없습니다 — 연동을 해제하고 다시 연동하면 권한을 요청합니다'
+                          ? '쓰기 권한이 없습니다. 연동을 해제하고 다시 연동하면 권한을 요청합니다.'
                           : undefined
                       }
                       onClick={() => setWriteCalendarTarget({ ...conn, label })}
