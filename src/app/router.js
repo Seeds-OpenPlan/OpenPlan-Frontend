@@ -27,6 +27,8 @@ import SettingsSupportPage from '../pages/settings/SettingsSupportPage'
 import SettingsNoticesPage from '../pages/settings/SettingsNoticesPage'
 import HelpDetailPage from '../pages/HelpDetailPage'
 import AnnouncementDetailPage from '../pages/AnnouncementDetailPage'
+import PrivacyPolicyPage from '../pages/legal/PrivacyPolicyPage'
+import TermsPage from '../pages/legal/TermsPage'
 import NotFoundPage from '../pages/NotFoundPage'
 import ForbiddenPage from '../pages/ForbiddenPage'
 import RootErrorBoundary from './RootErrorBoundary'
@@ -281,6 +283,14 @@ export const router = createBrowserRouter([
       { path: 'verify-email', Component: VerifyEmailPage }, // SCR-AUTH-VERIFY
       { path: 'reset-password', Component: ResetPasswordRequestPage }, // SCR-AUTH-RESET-REQ
       { path: 'reset-password/confirm', Component: ResetPasswordPage }, // SCR-AUTH-RESET
+      /*
+        법적 고지 2종. 이 형제 트리에 두는 이유는 위 주석과 같다 — 세션 없이
+        열려야 한다. 여기서는 그 요구가 로그인 화면보다 더 강하다: 가입 화면의
+        동의 문구가 이 링크를 가리키는데 그때 이용자에겐 계정이 아직 없고,
+        구글 OAuth 심사도 로그인하지 않은 채 이 URL 을 직접 연다.
+      */
+      { path: 'legal/privacy', Component: PrivacyPolicyPage }, // SCR-LEGAL-PRIVACY
+      { path: 'legal/terms', Component: TermsPage }, // SCR-LEGAL-TERMS
     ],
   },
   /*

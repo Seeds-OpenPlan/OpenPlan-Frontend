@@ -132,7 +132,39 @@ export function SignupPage() {
             onChange={(e) => setAgreedToTerms(e.target.checked)}
             className="mt-0.5 h-5 w-5 shrink-0 rounded border-border-strong text-brand-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
           />
-          <span className="text-label text-text">이용약관 및 개인정보 처리방침에 동의합니다</span>
+          {/*
+            동의 문구가 가리키는 두 문서로 실제로 갈 수 있어야 한다 — 링크 없이
+            "동의합니다"만 받고 있으면 이용자는 볼 수 없는 것에 동의하게 된다.
+            새 탭으로 여는 이유: 이 화면은 입력 중인 폼이라 같은 탭에서 이동하면
+            이메일·비밀번호가 사라진 채 돌아오게 된다.
+
+            stopPropagation 이 필요한 이유: 이 두 링크는 <label> 안에 있어서
+            클릭이 그대로 올라가면 라벨이 체크박스를 토글한다 — 약관을 읽으려고
+            누른 것이 동의를 켜고 끄는 부작용이 된다. 링크 이동만 남기고 라벨
+            활성화는 끊는다.
+          */}
+          <span className="text-label text-text">
+            <Link
+              to="/legal/terms"
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="underline underline-offset-2 hover:text-brand-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
+            >
+              이용약관
+            </Link>{' '}
+            및{' '}
+            <Link
+              to="/legal/privacy"
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="underline underline-offset-2 hover:text-brand-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
+            >
+              개인정보 처리방침
+            </Link>
+            에 동의합니다
+          </span>
         </label>
 
         {signupErrorCopy && (
