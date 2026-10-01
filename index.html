@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenPlan</title>
+    <!-- PWA/TWA 설치 메타데이터: Bubblewrap이 빌드 입력값으로 참조한다
+         (public/manifest.webmanifest, scripts/generate-icons.mjs 참고). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#2563eb" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <!--
       Pretendard. src/index.css의 --font-sans가 이 폰트를 1순위로 지목해 왔지만
       정작 로드하는 곳이 없어서, 실제로는 계속 Segoe UI / 맑은 고딕 폴백으로
