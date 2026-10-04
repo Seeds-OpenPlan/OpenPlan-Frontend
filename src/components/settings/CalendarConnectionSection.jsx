@@ -148,7 +148,12 @@ function DisconnectConfirmDialog({ connection, onClose, onConfirm, submitting })
 
         판정은 피처 플래그가 아니라 서버가 주는 사실로 한다: writeCalendarId 가 비어 있으면
         큐가 아무것도 적지 않으므로(= 내보낸 것이 없다) 가져오기 전용 문구가 맞다.
-        이 계약 이전의 서버는 그 필드를 안 보내므로 undefined → 역시 가져오기 전용이다.
+
+        🔴 이 필드는 아직 main 의 계약에 없다 — BE #85(`setWriteCalendar`)가 머지되면서
+        ExternalConnection 스키마에 writeCalendarId·canWrite 가 추가된다. 그전까지 서버는
+        이 필드를 보내지 않아 undefined 이고, **그때는 가져오기 전용 문구가 사실이므로
+        그대로가 맞다.** 즉 이 분기는 BE #85 배포 전에는 «항상 가져오기 전용», 배포 뒤에는
+        «사용자가 대상을 고른 연동만 양방향» 으로 동작한다. 의도한 순서다.
       */}
       {connection.writeCalendarId ? (
         <p className="text-body text-text-muted">
