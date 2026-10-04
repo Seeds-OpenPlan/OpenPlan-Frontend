@@ -319,6 +319,12 @@ export const mockBackend = {
         provider: 'APPLE',
         status: 'CONNECTED',
         accountIdentifier: appleId,
+        // 이슈 #69 — BE 의 ExternalConnection 은 이 두 필드를 모든 연동에 항상 싣는다
+        // (canWrite 는 record 컴포넌트라 null 이 될 수 없다). 새로 연동한 계정에만
+        // 빼 두면 dev 에서 «계약 이전 서버» 상태를 영구히 흉내내게 되고, 그러면 이
+        // 사이클이 추가한 내보내기 캡션·버튼 비활성화를 새 연동에서 확인할 수 없다.
+        writeCalendarId: null,
+        canWrite: true,
         selectedCalendars: [],
       }
       connections.push(conn)
@@ -338,6 +344,9 @@ export const mockBackend = {
         provider: 'GOOGLE',
         status: 'CONNECTED',
         accountIdentifier: 'user@gmail.com',
+        // 이슈 #69 — 애플 분기와 같은 이유(위 주석 참고).
+        writeCalendarId: null,
+        canWrite: true,
         selectedCalendars: [],
       }
       connections.push(conn)
