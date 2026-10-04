@@ -139,10 +139,27 @@ function DisconnectConfirmDialog({ connection, onClose, onConfirm, submitting })
       <h2 id={titleId} className="text-title font-semibold text-text">
         {connection.label} 연동을 해제할까요?
       </h2>
-      <p className="text-body text-text-muted">
-        연동을 해제하면 이후 양방향 반영이 멈춥니다. 이미 계획에 반영된 일정과, 이미 외부 캘린더에
-        만들어진 일정은 <b>양쪽 모두 그대로 남습니다</b> — 어느 쪽도 임의로 지우지 않습니다.
-      </p>
+      {/*
+        🔴 아웃바운드 문구는 **실제로 내보내고 있을 때만** 보여 준다.
+
+        이 문구를 조건 없이 띄우면, 아웃바운드가 배포되기 전이거나 사용자가 대상
+        캘린더를 고르지 않은 연동에서도 "이미 외부 캘린더에 만들어진 일정" 이 있는 것처럼
+        안내하게 된다 — 한 번도 만들어진 적 없는 것을 두고.
+
+        판정은 피처 플래그가 아니라 서버가 주는 사실로 한다: writeCalendarId 가 비어 있으면
+        큐가 아무것도 적지 않으므로(= 내보낸 것이 없다) 가져오기 전용 문구가 맞다.
+        이 계약 이전의 서버는 그 필드를 안 보내므로 undefined → 역시 가져오기 전용이다.
+      */}
+      {connection.writeCalendarId ? (
+        <p className="text-body text-text-muted">
+          연동을 해제하면 이후 양방향 반영이 멈춥니다. 이미 계획에 반영된 일정과, 이미 외부 캘린더에
+          만들어진 일정은 <b>양쪽 모두 그대로 남습니다</b> — 어느 쪽도 임의로 지우지 않습니다.
+        </p>
+      ) : (
+        <p className="text-body text-text-muted">
+          연동을 해제하면 이후 반영되지 않습니다. 이미 계획에 반영된 일정은 그대로 남습니다.
+        </p>
+      )}
       <div className="flex justify-end gap-2">
         <Button variant="secondary" size="md" onClick={onClose}>
           취소
