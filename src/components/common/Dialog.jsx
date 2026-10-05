@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { useOverlayBackButton } from '../../hooks/useOverlayBackButton'
 import {
   getOverlayStackSnapshot,
   isTopmostOverlay,
@@ -130,6 +131,10 @@ export function Dialog({
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [open, overlayId])
+
+  // 안드로이드 하드웨어 뒤로 가기 — Esc 와 같은 규칙(최상단 + onClose 있을 때만).
+  // 히스토리 엔트리 관리는 utils/overlayHistory.js 의 브리지가 한다.
+  useOverlayBackButton(overlayId, open, onCloseRef)
 
   if (!open) return null
 
