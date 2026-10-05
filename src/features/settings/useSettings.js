@@ -27,6 +27,7 @@ import {
   getAvailableCalendars,
   setConnectionStatus,
   replaceSelectedCalendars,
+  setWriteCalendar,
   disconnectConnection,
   createAppleConnection,
   createGoogleConnection,
@@ -215,6 +216,30 @@ export function useReplaceSelectedCalendars() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: connectionsKey() })
       toast({ tone: 'success', message: '저장했습니다' })
+    },
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
+  })
+}
+
+/**
+ * PUT write-calendar — 내보낼 대상 캘린더 지정/해제(이슈 #69).
+ *
+ * 성공 토스트를 «지정/해제»로 갈라 띄운다: 해제도 사용자가 의도적으로 하는
+ * 동작인데 "저장했습니다"만 뜨면 무엇이 저장됐는지가 화면에서 사라진다.
+ */
+export function useSetWriteCalendar() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ connectionId, externalCalendarId }) =>
+      setWriteCalendar(connectionId, externalCalendarId),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: connectionsKey() })
+      toast({
+        tone: 'success',
+        message: variables?.externalCalendarId
+          ? '내보낼 캘린더를 지정했습니다'
+          : '내보내기를 끄고 대상을 해제했습니다',
+      })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
