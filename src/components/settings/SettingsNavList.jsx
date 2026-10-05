@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { isAndroidAppShell } from '../../utils/appShell'
 import {
   ClockIcon,
   CalendarIcon,
@@ -209,7 +210,9 @@ export function SettingsNavList({ onTutorialRestart }) {
           to="/settings/calendar"
           icon={CalendarIcon}
           title="캘린더 연동"
-          subtitle="Google·Apple 캘린더 가져오기"
+          // 안드로이드 앱에서는 애플 행을 그리지 않으므로(CalendarConnectionSection
+          // 헤더 참고) 부제도 같이 맞춘다 — 없는 제공자를 안내하면 안 된다.
+          subtitle={isAndroidAppShell() ? 'Google 캘린더 가져오기' : 'Google·Apple 캘린더 가져오기'}
           trailing={
             calendarBadge.loading ? (
               <Skeleton width="3rem" height="0.875rem" />

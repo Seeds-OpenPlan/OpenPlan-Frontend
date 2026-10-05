@@ -8,6 +8,7 @@ import { ErrorState } from '../common/ErrorState'
 import { GoogleGIcon, AppleGlyphIcon } from './settingsIcons'
 import { AppleConnectDialog } from './AppleConnectDialog'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { isAndroidAppShell } from '../../utils/appShell'
 import {
   useConnections,
   useAvailableCalendars,
@@ -25,10 +26,32 @@ import {
 // PROVIDER_ICON — 이미 정본(서버가 화면에 맞춰졌다, 6주차 문서 §0). 이 상수
 // 자체는 W6 connectionId 전환과 무관하게 그대로 둔다.
 const PROVIDER_ICON = { GOOGLE: GoogleGIcon, APPLE: AppleGlyphIcon }
-const PROVIDERS = [
+const ALL_PROVIDERS = [
   { provider: 'GOOGLE', label: 'Google 캘린더' },
   { provider: 'APPLE', label: 'Apple 캘린더' },
 ]
+
+/*
+  안드로이드 앱(TWA)에서는 애플 캘린더 행을 그리지 않는다.
+
+  이 배열이 제공자 행을 그리는 유일한 곳이라, 여기서 빠지면 **애플 연동을 만들 경로가
+  사라진다**(온보딩 캘린더 단계도 이 컴포넌트를 그대로 재사용한다). 서버·계약·기존 연동은
+  그대로 두므로, 웹에서는 지금과 똑같이 동작하고 나중에 되살리는 것도 이 한 줄이다.
+
+  🔴 **코드를 지우는 것이 아니라 숨기는 것이다.** 애플 CalDAV 어댑터는 BE 에 그대로 있고
+  이미 연동해 둔 이용자의 데이터도 건드리지 않는다 — 앱에서 제공자 «추가» 입구만 닫는다.
+  (이미 애플을 연동한 이용자가 앱으로 들어오면 그 행이 안 보이는데, 연동 자체는 서버에
+  살아 있어 가져오기는 계속 돈다. 해제하려면 웹에서 하면 된다.)
+
+  왜 앱에서만인가 — 안드로이드 앱 이용자에게 Apple ID 앱 암호 발급을 요구하는 것은
+  현실적이지 않은데(appleid.apple.com 에서 직접 발급해야 한다), 웹에는 맥·아이폰에서
+  쓰는 이용자가 있다. 그래서 웹에서는 그대로 둔다.
+*/
+function visibleProviders() {
+  return isAndroidAppShell()
+    ? ALL_PROVIDERS.filter(({ provider }) => provider !== 'APPLE')
+    : ALL_PROVIDERS
+}
 
 function CalendarSelectDialog({ connection, onClose, onSubmit, submitting }) {
   const isDesktop = useIsDesktop()
@@ -205,7 +228,7 @@ export function CalendarConnectionSection() {
   return (
     <>
       <ul className="flex flex-col gap-3">
-        {PROVIDERS.map(({ provider, label }) => {
+        {visibleProviders().map(({ provider, label }) => {
           const Icon = PROVIDER_ICON[provider]
           const conn = connectionFor(provider)
           const isActive = conn?.status === CONNECTION_STATUS.CONNECTED
