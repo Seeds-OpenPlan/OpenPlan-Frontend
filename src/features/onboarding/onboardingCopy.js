@@ -1,3 +1,5 @@
+import { isAndroidAppShell } from '../../utils/appShell'
+
 /*
   Single copy catalog for ST-F1-13 (온보딩·튜토리얼) — same "one catalog, P4 grep
   audits it once" principle violationMessages.js already established for V1~V7.
@@ -111,7 +113,13 @@ export const onboardingCopy = {
     // 자신이 이미 안내 문구를 갖고 있어(버튼 라벨·선택 캘린더 수 등) 이 단계는
     // 도입 문구만 갖는다 — 옛 ImportReviewList 전용 문구(importHeading 등)는
     // 그 컴포넌트와 함께 삭제했다.
-    body: 'Google·Apple 캘린더를 연결하면 기존 일정을 OpenPlan으로 가져올 수 있습니다. 지금 하지 않아도 나중에 설정에서 언제든 연결할 수 있습니다.',
+    // 안드로이드 앱에서는 애플 행이 그려지지 않으므로 문구도 제공자를 맞춘다
+    // (CalendarConnectionSection 헤더 참고).
+    get body() {
+      return isAndroidAppShell()
+        ? 'Google 캘린더를 연결하면 기존 일정을 OpenPlan으로 가져올 수 있습니다. 지금 하지 않아도 나중에 설정에서 언제든 연결할 수 있습니다.'
+        : 'Google·Apple 캘린더를 연결하면 기존 일정을 OpenPlan으로 가져올 수 있습니다. 지금 하지 않아도 나중에 설정에서 언제든 연결할 수 있습니다.'
+    },
   },
   tutorial: {
     kickoffTitle: '핵심 조작을 실습해 볼까요',
