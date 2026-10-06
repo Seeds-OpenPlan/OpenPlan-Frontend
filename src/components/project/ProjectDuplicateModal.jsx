@@ -100,7 +100,9 @@ export function ProjectDuplicateModal({ project, onClose, onDuplicate, submittin
       )}
 
       {step === 2 && (
-        <div className="grid grid-cols-2 gap-4 text-label">
+        // B3: 모바일 폭에서 두 목록이 나란히 눌려 글자가 좁아지던 것 — 작은
+        // 화면에서는 세로로 쌓고(grid-cols-1), sm 이상에서만 둘로 나눈다.
+        <div className="grid grid-cols-1 gap-4 text-label sm:grid-cols-2">
           <div>
             <p className="mb-2 font-medium text-text">복제되는 항목</p>
             <ul className="flex flex-col gap-1.5 text-text-muted">

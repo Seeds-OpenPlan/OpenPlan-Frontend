@@ -30,6 +30,64 @@ import { systemMessages } from '../../constants/systemMessages'
 const COMMIT_DEBOUNCE_MS = 500
 
 /*
+  B2: WBS 바·리사이즈 손잡이·마감선 손잡이 셋 다 pointerdown에서 즉시
+  setPointerCapture하고 드래그를 시작했다(아래 startDrag/startDeadlineDrag).
+  터치에서는 이게 문제다 — 이 타임라인은 `overflow-x-auto`로 가로 스크롤하는
+  화면인데(아래 timelineRef), 손가락이 스크롤하려고 살짝 움직이는 순간에도
+  이미 "드래그"로 캡처돼 있어서 브라우저의 가로 패닝이 끼어들며
+  pointercancel로 끊긴다 — 스크롤하려던 스와이프가 매번 날짜 드래그로
+  가로채이는, weekly 그리드(usePlanDrag.js)와 똑같은 증상이다.
+
+  해법도 같다: 마우스/펜은 즉시 시작하고(behavior 그대로), 터치만 롱프레스
+  (LONG_PRESS_MS) 뒤에야 시작한다 — 그 전에 CANCEL_PX 이상 움직이면 스크롤
+  의도로 보고 조용히 포기해 네이티브 스크롤이 그대로 일어나게 둔다. 세 손잡이
+  모두 겪는 문제라 한 번만 구현해 공유한다(usePlanDrag는 윈도우 리스너 +
+  자체 delta 계산을 갖는 더 큰 구조라 그대로 재사용하지 않고, 여기 맞는
+  작은 형태로 따로 둔다).
+*/
+const LONG_PRESS_MS = 450
+const LONG_PRESS_CANCEL_PX = 10
+
+// `activate(shim)`을 마우스/펜은 즉시, 터치는 롱프레스 뒤에만 호출하는
+// pointerdown 래퍼. `shim`은 원본 이벤트에서 꺼낸 { clientX, pointerId,
+// currentTarget }뿐이다 — 450ms 뒤에 실행될 수도 있어 리액트 합성 이벤트
+// 객체 자체가 아니라 필요한 값만 복사해 넘긴다.
+function withLongPressGate(activate) {
+  return (e) => {
+    const shim = { clientX: e.clientX, pointerId: e.pointerId, currentTarget: e.currentTarget }
+    if (e.pointerType !== 'touch') {
+      activate(shim)
+      return
+    }
+    const x0 = e.clientX
+    const y0 = e.clientY
+    let timer = null
+    // window 레벨로 듣는다(요소 자체가 아니라) — 손잡이는 24~44px로 작아서,
+    // 활성화 전(아직 pointer capture 전) 손가락이 그 경계를 살짝만 넘어가도
+    // 이후 move/up/cancel의 실제 타깃이 다른 엘리먼트로 바뀐다. 요소에만
+    // 리스너를 달면 그 순간부터 이벤트를 영영 못 받아 취소 판정도, 정리도
+    // 멈춘다 — usePlanDrag.js(A1)가 같은 이유로 window를 쓰는 것과 동일.
+    const cleanup = () => {
+      clearTimeout(timer)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', cleanup)
+      window.removeEventListener('pointercancel', cleanup)
+    }
+    const onMove = (ev) => {
+      const moved = Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0)
+      if (moved >= LONG_PRESS_CANCEL_PX) cleanup()
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', cleanup)
+    window.addEventListener('pointercancel', cleanup)
+    timer = setTimeout(() => {
+      cleanup()
+      activate(shim)
+    }, LONG_PRESS_MS)
+  }
+}
+
+/*
   Zoom (accordion restructure, owner spec: "WBS 기간 +/− 버튼으로 확대/축소 —
   WbsTimeline의 하루 칸 픽셀 폭에 스케일 상태 추가"). A discrete step INDEX into
   this fixed table, not a free float multiplier — every resulting `dayPx` is a
@@ -248,10 +306,13 @@ export function WbsTimeline({
     }, COMMIT_DEBOUNCE_MS)
   }
 
-  const startDeadlineDrag = (e) => {
+  // B2: shim = { clientX, pointerId, currentTarget } — withLongPressGate may
+  // call this well after the original pointerdown event, so it never reads
+  // a raw event here.
+  const startDeadlineDrag = ({ clientX, pointerId, currentTarget }) => {
     if (disabled) return
-    e.currentTarget.setPointerCapture(e.pointerId)
-    deadlineDragRef.current = { originX: e.clientX, originISO: effectiveDueDateISO }
+    currentTarget.setPointerCapture(pointerId)
+    deadlineDragRef.current = { originX: clientX, originISO: effectiveDueDateISO }
     setDeadlineTooltipVisible(true)
   }
 
@@ -267,6 +328,17 @@ export function WbsTimeline({
     if (!deadlineDragRef.current) return
     deadlineDragRef.current = null
     if (deadlineDrag) commitDeadline(deadlineDrag.previewISO)
+    setDeadlineTooltipVisible(false)
+  }
+
+  // B2: a touch drag the browser itself interrupted (it decided to scroll
+  // instead) must NOT commit — unlike pointerup, there's no real "release at
+  // this date" intent here, only an aborted gesture. Falls back to the last
+  // committed `project.dueDate` by simply dropping the uncommitted preview.
+  const onDeadlinePointerCancel = () => {
+    if (!deadlineDragRef.current) return
+    deadlineDragRef.current = null
+    setDeadlineDrag(null)
     setDeadlineTooltipVisible(false)
   }
 
@@ -518,10 +590,15 @@ export function WbsTimeline({
                   aria-live="polite"
                   tabIndex={disabled ? -1 : 0}
                   onKeyDown={onDeadlineKeyDown}
-                  onPointerDown={startDeadlineDrag}
+                  // Deferred to event time (not called inline during render,
+                  // which the react-hooks/refs rule flags since
+                  // startDeadlineDrag touches a ref) — see the resize spans
+                  // below for the identical shape.
+                  onPointerDown={(e) => withLongPressGate(startDeadlineDrag)(e)}
                   onPointerMove={onDeadlinePointerMove}
                   onPointerUp={onDeadlinePointerUp}
-                  style={{ left: (deadlineIndex + 1) * dayPx }}
+                  onPointerCancel={onDeadlinePointerCancel}
+                  style={{ left: (deadlineIndex + 1) * dayPx, touchAction: 'pan-x pan-y' }}
                   className={[
                     'absolute top-0 z-10 h-14 w-6 -translate-x-1/2 md:w-11',
                     'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
@@ -716,10 +793,14 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
   // called directly from each real, inline event handler below — the
   // straightforward shape react-hooks/refs expects for "this ref write only
   // ever happens inside an event handler, never during render".
-  const startDrag = (mode, e) => {
+  //
+  // B2: shim = { clientX, pointerId, currentTarget }, same reasoning as
+  // WbsTimeline's own startDeadlineDrag above — withLongPressGate may call
+  // this after the triggering pointerdown event is long gone.
+  const startDrag = (mode, { clientX, pointerId, currentTarget }) => {
     if (disabled) return
-    e.currentTarget.setPointerCapture(e.pointerId)
-    dragRef.current = { mode, originStart: start, originEnd: end, originX: e.clientX }
+    currentTarget.setPointerCapture(pointerId)
+    dragRef.current = { mode, originStart: start, originEnd: end, originX: clientX }
     setIsDragging(true)
   }
 
@@ -745,6 +826,20 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
     if (!dragRef.current) return
     dragRef.current = null
     if (preview) commit(preview.start, preview.end)
+    setIsDragging(false)
+  }
+
+  // B2: same reasoning as WbsTimeline's own onDeadlinePointerCancel — a
+  // cancel means the BROWSER aborted this gesture (decided to scroll
+  // instead), not the user releasing at a deliberate position, so the
+  // uncommitted preview is discarded rather than committed. Clearing
+  // `preview` (not just `dragRef`) matters: `start`/`end` above fall back to
+  // `preview?.start ?? node.plannedStartDate`, so leaving a stale preview set
+  // would freeze the bar at the aborted position forever.
+  const onPointerCancel = () => {
+    if (!dragRef.current) return
+    dragRef.current = null
+    setPreview(null)
     setIsDragging(false)
   }
 
@@ -781,8 +876,9 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       onKeyDown={onKeyDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerDown={(e) => startDrag('move', e)}
-      style={{ left: left * dayPx, width: width * dayPx }}
+      onPointerCancel={onPointerCancel}
+      onPointerDown={(e) => withLongPressGate((shim) => startDrag('move', shim))(e)}
+      style={{ left: left * dayPx, width: width * dayPx, touchAction: 'pan-x pan-y' }}
       className={[
         'absolute top-1 flex h-7 items-center rounded-chip border px-2 text-caption font-medium text-brand-900',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
@@ -805,8 +901,9 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       <span
         onPointerDown={(e) => {
           e.stopPropagation()
-          startDrag('start', e)
+          withLongPressGate((shim) => startDrag('start', shim))(e)
         }}
+        style={{ touchAction: 'pan-x pan-y' }}
         className="absolute inset-y-0 left-0 w-6 cursor-ew-resize md:w-11"
         aria-hidden="true"
       />
@@ -815,8 +912,9 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       <span
         onPointerDown={(e) => {
           e.stopPropagation()
-          startDrag('end', e)
+          withLongPressGate((shim) => startDrag('end', shim))(e)
         }}
+        style={{ touchAction: 'pan-x pan-y' }}
         className="absolute inset-y-0 right-0 w-6 cursor-ew-resize md:w-11"
         aria-hidden="true"
       />
