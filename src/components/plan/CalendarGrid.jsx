@@ -214,6 +214,13 @@ export function CalendarGrid({
   const scrollRef = useRef(null)
   const headerRef = useRef(null)
   const [resizeState, setResizeState] = useState(null) // {planBlockId,startMin,endMin}
+  // 리드 셀프리뷰 지적: 안드로이드 Chrome(TWA 포함)은 터치 롱프레스(~500ms
+  // 전후)에 네이티브 contextmenu를 자체적으로 쏜다 — 그 빈 슬롯 배경의 A3
+  // 롱프레스 타이머(450ms)가 먼저 메뉴를 열고 나면, 그 뒤에 도착하는 이
+  // contextmenu가 같은 메뉴를 또 열려고 한다. 어느 pointerType으로 이
+  // contextmenu가 시작됐는지 판별하는 폴백으로 쓴다(그리드 배경 pointerdown
+  // 에서 기록).
+  const lastPointerTypeRef = useRef('mouse')
 
   // 요일 헤더 실측 → 페이지(맞춤 축척 계산). border-box 높이를 그대로 넘긴다.
   // useLayoutEffect인 이유: 이 값이 도착해야 맞춤 축척이 확정되므로, 페인트
@@ -637,9 +644,19 @@ export function CalendarGrid({
             )
             if (!slot) return
             e.preventDefault()
+            // 리드 셀프리뷰 지적: 터치 롱프레스가 일으킨 contextmenu는 메뉴를
+            // 또 열지 않는다 — 바로 아래 onPointerDown의 450ms 타이머가 이미
+            // 열었을 것이다(또는 손가락이 아직 떨어지지 않아 곧 열 것이다).
+            // preventDefault는 그대로 해서 네이티브 메뉴 UI는 막는다. 마우스
+            // 우클릭은 pointerType이 'touch'가 아니므로 그대로 통과.
+            const pointerType = e.nativeEvent?.pointerType || lastPointerTypeRef.current
+            if (pointerType === 'touch') return
             onEmptySlot({ x: e.clientX, y: e.clientY }, slot)
           }}
           onPointerDown={(e) => {
+            // 위 onContextMenu가 마우스/터치를 가를 때 쓰는 폴백 — 터치
+            // 분기 밖(아래 return)으로 가기 전에 항상 기록해 둔다.
+            lastPointerTypeRef.current = e.pointerType
             // A3: 터치에는 우클릭이 없으니 빈 슬롯 롱프레스로 같은 메뉴를 연다.
             // 블록/고정 일정/가용 손잡이(모두 role="button" 또는 실제 button)
             // 위에서 시작된 터치는 건너뛴다 — 그쪽은 A1의 자기 롱프레스-드래그를

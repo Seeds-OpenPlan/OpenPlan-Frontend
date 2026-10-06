@@ -44,6 +44,12 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
   // 안 움직인 채 왔으면 탭으로 보고 메뉴를 연다. 드래그가 없는 블록이라
   // PlanBlock의 롱프레스 분기(usePlanDrag)는 필요 없다.
   const touchStartRef = useRef(null)
+  // 리드 셀프리뷰 지적: 안드로이드 Chrome(TWA 포함)은 터치를 ~500ms 누르고
+  // 있으면 네이티브 contextmenu를 자체적으로 쏜다. 이 블록은 손을 떼는
+  // 순간(onPointerUp, 위)이 메뉴를 여는 정본 경로이므로 — 길게 눌렀다 떼도
+  // 결국 pointerup이 열어 준다 — contextmenu가 또 열면 같은 메뉴가 중복으로
+  // 열린다. pointerType을 기억해 그 경로만 막는다(마우스 우클릭은 통과).
+  const lastPointerTypeRef = useRef('mouse')
 
   return (
     <div
@@ -51,8 +57,12 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
       tabIndex={disabled ? -1 : 0}
       aria-label={`${schedule.title}, ${timeLabel}, 고정 일정${inactive ? ', 이번 주 제외' : ''}${disabled ? ', 읽기 전용' : ''}`}
       aria-disabled={disabled || undefined}
-      style={style}
+      // 리드 셀프리뷰 지적 2: select-none(아래 className)은 텍스트 선택만
+      // 막고 iOS의 콜아웃(길게 눌렀을 때 뜨는 복사/공유 팝업)은 안 막는다 —
+      // 별도로 끈다.
+      style={{ ...style, WebkitTouchCallout: 'none' }}
       onPointerDown={(e) => {
+        lastPointerTypeRef.current = e.pointerType
         if (disabled || e.pointerType !== 'touch') return
         touchStartRef.current = { x: e.clientX, y: e.clientY }
       }}
@@ -71,6 +81,12 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
         // Same reasoning as PlanBlock: keep this on the block, not the grid's
         // empty-slot placement menu (ST-F1-03 PLAN-07) underneath it.
         e.stopPropagation()
+        // 터치 롱프레스가 일으킨 contextmenu는 메뉴를 열지 않는다 — 위
+        // onPointerUp이 손을 떼는 순간 이미 연다(또는 열 것이다). 여기서도
+        // 열면 중복이다. preventDefault/stopPropagation은 그대로 해 둬서
+        // iOS 콜아웃·네이티브 메뉴는 여전히 막는다.
+        const pointerType = e.nativeEvent?.pointerType || lastPointerTypeRef.current
+        if (pointerType === 'touch') return
         if (disabled) return
         openMenuFromEvent(e)
       }}

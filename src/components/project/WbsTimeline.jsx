@@ -598,9 +598,20 @@ export function WbsTimeline({
                   onPointerMove={onDeadlinePointerMove}
                   onPointerUp={onDeadlinePointerUp}
                   onPointerCancel={onDeadlinePointerCancel}
-                  style={{ left: (deadlineIndex + 1) * dayPx, touchAction: 'pan-x pan-y' }}
+                  // 리드 셀프리뷰 후속: 이 손잡이엔 데스크톱 우클릭 메뉴가
+                  // 원래 없지만(그래서 기존엔 onContextMenu 자체가 없었다),
+                  // 터치 롱프레스가 네이티브 contextmenu를 띄우면 드래그가
+                  // 활성화된 바로 그 순간 시스템 메뉴가 화면을 덮는다 —
+                  // preventDefault만으로 막는다(열 메뉴가 없으니 분기도
+                  // 필요 없다).
+                  onContextMenu={(e) => e.preventDefault()}
+                  style={{
+                    left: (deadlineIndex + 1) * dayPx,
+                    touchAction: 'pan-x pan-y',
+                    WebkitTouchCallout: 'none',
+                  }}
                   className={[
-                    'absolute top-0 z-10 h-14 w-6 -translate-x-1/2 md:w-11',
+                    'absolute top-0 z-10 h-14 w-6 select-none -translate-x-1/2 md:w-11',
                     'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
                     disabled ? 'cursor-default' : 'cursor-ew-resize',
                   ].join(' ')}
@@ -877,10 +888,21 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      // 리드 셀프리뷰 후속: WBS 바에는 원래 우클릭 메뉴가 없다 — 그래도 터치
+      // 롱프레스가 일으키는 네이티브 contextmenu(시스템 공유/복사 팝업)는
+      // 막아 둔다. 그대로 두면 드래그가 막 활성화된 순간 화면을 덮는다.
+      onContextMenu={(e) => e.preventDefault()}
       onPointerDown={(e) => withLongPressGate((shim) => startDrag('move', shim))(e)}
-      style={{ left: left * dayPx, width: width * dayPx, touchAction: 'pan-x pan-y' }}
+      // 리드 셀프리뷰 지적 2: 길게 눌러 끄는 롱프레스 드래그 중 iOS 콜아웃
+      // (복사/공유 팝업)이나 텍스트 선택이 끼어들면 드래그가 끊긴다.
+      style={{
+        left: left * dayPx,
+        width: width * dayPx,
+        touchAction: 'pan-x pan-y',
+        WebkitTouchCallout: 'none',
+      }}
       className={[
-        'absolute top-1 flex h-7 items-center rounded-chip border px-2 text-caption font-medium text-brand-900',
+        'absolute top-1 flex h-7 select-none items-center rounded-chip border px-2 text-caption font-medium text-brand-900',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
         disabled ? 'cursor-default opacity-70' : 'cursor-grab active:cursor-grabbing',
         // G-6 (owner review 2026-07-24, bug fix): `danger-400` was never a

@@ -146,6 +146,12 @@ export function PlanBlock({
 
   const rootRef = useRef(null)
   const reducedMotion = useReducedMotion()
+  // 리드 셀프리뷰 지적: 안드로이드 Chrome(TWA 포함)은 터치 롱프레스(~500ms
+  // 전후)에 네이티브 contextmenu를 자체적으로 쏜다 — usePlanDrag의 롱프레스
+  // (450ms, 드래그 활성화)와 거의 동시에 겹친다. Chrome은 그 contextmenu를
+  // PointerEvent로 보내 pointerType을 실어 주지만, 혹시 안 실리는 경우를
+  // 대비해 방금 pointerdown에서 본 pointerType을 폴백으로 기억해 둔다.
+  const lastPointerTypeRef = useRef('mouse')
 
   /*
     PLAN-23: bring this block into view and give it keyboard focus when the review
@@ -349,15 +355,21 @@ export function PlanBlock({
         // 바꿔도 적용되지 않는다). 마우스/펜은 touch-action의 영향을 받지
         // 않으므로 이 값과 무관하게 그대로 동작한다.
         touchAction: 'pan-x pan-y',
+        // 리드 셀프리뷰 지적: 롱프레스 중 iOS의 콜아웃(복사/공유 팝업)이나
+        // 텍스트 선택이 끼어들면 드래그가 중간에 끊긴다 — select-none(아래
+        // className)은 텍스트 선택만 막고 콜아웃 자체는 안 막으므로 별도로
+        // 끈다. Android는 이 속성이 없어도 무해하다(무시됨).
+        WebkitTouchCallout: 'none',
       }}
-      onPointerDown={
-        moveBlocked
-          ? undefined
-          : (e) => {
-              closeDetail()
-              onPointerDown?.(e, block, startMin)
-            }
-      }
+      onPointerDown={(e) => {
+        // moveBlocked 여부와 무관하게 항상 기록한다 — 바로 아래 onContextMenu
+        // 가 "이 블록 위에서 가장 최근에 시작된 포인터가 터치였는가"를 폴백으로
+        // 물어볼 자리이므로, 드래그를 안 시작하는 경우에도 비워 두면 안 된다.
+        lastPointerTypeRef.current = e.pointerType
+        if (moveBlocked) return
+        closeDetail()
+        onPointerDown?.(e, block, startMin)
+      }}
       onClick={() => {
         /*
           블록을 누르면 그 블록에 **포커스**를 준다 — 검토 패널이 항목을 지목했을
@@ -381,6 +393,15 @@ export function PlanBlock({
         // Keep a block right-click on the block: don't let it bubble to the grid
         // body's empty-slot placement menu (ST-F1-03 PLAN-07).
         e.stopPropagation()
+        // 리드 셀프리뷰 지적: 터치 롱프레스가 일으킨 네이티브 contextmenu는
+        // 메뉴를 열지 않는다 — PLAN-09의 터치 정본 경로는 usePlanDrag의
+        // 롱프레스(드래그 활성화)와 탭(onTap, 메뉴)이므로, 여기서 또 열면
+        // 드래그 중에 메뉴가 같이 뜨거나 탭 경로와 중복으로 열린다.
+        // preventDefault/stopPropagation은 위에서 이미 했으니 iOS 콜아웃·
+        // 길게 눌렀을 때의 선택 메뉴도 같이 막힌다. 마우스 우클릭과 키보드
+        // (Shift+F10/메뉴 키)는 pointerType이 'touch'가 아니므로 그대로 통과.
+        const pointerType = e.nativeEvent?.pointerType || lastPointerTypeRef.current
+        if (pointerType === 'touch') return
         if (locked) return
         openMenuFromEvent(e)
       }}
