@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { PlanBlock } from './PlanBlock'
 import { FixedScheduleBlock } from './FixedScheduleBlock'
 import { usePlanDrag } from '../../features/plan/usePlanDrag'
+import { useMediaQuery } from '../../hooks/useMediaQuery'
 import {
   availabilityForColumn,
   blockRect,
@@ -27,6 +28,13 @@ import {
   WEEKDAY_LABELS_KO,
   WEEKEND_COLUMN_INDICES,
 } from '../../features/plan/planTime'
+
+// A3: 빈 슬롯 "여기에 배치" 메뉴의 터치 진입(롱프레스) — usePlanDrag.js의 블록
+// 롱프레스(A1)와 같은 시간/거리 값을 쓴다. 두 파일이 같은 리듬으로 느껴져야
+// "이 화면에서는 롱프레스가 이런 뜻이다"가 일관되므로, 값을 따로 고르지 않고
+// 그대로 맞춘다.
+const EMPTY_SLOT_LONG_PRESS_MS = 450
+const EMPTY_SLOT_TOUCH_CANCEL_PX = 10
 
 /*
   달력 상자의 세로 크기. **max-height가 아니라 height다** — 축척을 바꿔도 상자
@@ -104,6 +112,12 @@ function BgColumn({ availWindow, range, pxPerMin }) {
   reported through onPreview so the band tracks the drag before it commits.
 */
 function AvailabilityHandle({ columnIndex, edge, minutes, gridRef, range, pxPerMin, onPreview, onCommit }) {
+  // A4: group-hover로만 보이던 그립이 터치(hover 없음)에서는 영영 안 보이면서
+  // touchAction:none 영역(아래 button의 style)만 조용히 남아 "여기 뭔가
+  // 있는데 스크롤도 안 된다"는 죽은 자리가 된다. coarse 포인터(터치 주력
+  // 기기)에서는 늘 켜 둔다 — 숨겨서 발견 못 하게 하는 대신, 있다는 것 자체로
+  // 그 자리가 touchAction:none인 이유를 설명한다.
+  const isCoarse = useMediaQuery('(pointer: coarse)')
   const onPointerDown = (e) => {
     e.stopPropagation()
     e.preventDefault()
@@ -131,14 +145,21 @@ function AvailabilityHandle({ columnIndex, edge, minutes, gridRef, range, pxPerM
       className="group/avail absolute z-20 flex h-3.5 cursor-ns-resize items-center justify-center"
     >
       {/* Hidden until THIS handle's strip is hovered/focused (like the block resize
-          grips). The edge reads as a thin rule across the column with a small
-          centered grip — quieter than a solid pill. */}
+          grips) — EXCEPT on a coarse pointer (A4), where it's always on; see
+          `isCoarse` above. The edge reads as a thin rule across the column with
+          a small centered grip — quieter than a solid pill. */}
       <span
-        className="absolute inset-x-1 h-px bg-brand-500 opacity-0 transition-opacity group-hover/avail:opacity-70 group-focus-within/avail:opacity-70"
+        className={[
+          'absolute inset-x-1 h-px bg-brand-500 transition-opacity',
+          isCoarse ? 'opacity-70' : 'opacity-0 group-hover/avail:opacity-70 group-focus-within/avail:opacity-70',
+        ].join(' ')}
         aria-hidden="true"
       />
       <span
-        className="relative h-1.5 w-9 rounded-full border border-brand-500/70 bg-surface opacity-0 shadow-card transition-opacity group-hover/avail:opacity-100 group-focus-within/avail:opacity-100"
+        className={[
+          'relative h-1.5 w-9 rounded-full border border-brand-500/70 bg-surface shadow-card transition-opacity',
+          isCoarse ? 'opacity-100' : 'opacity-0 group-hover/avail:opacity-100 group-focus-within/avail:opacity-100',
+        ].join(' ')}
         aria-hidden="true"
       />
     </button>
@@ -252,6 +273,9 @@ export function CalendarGrid({
     pxPerMin,
     onCommit: onMoveCommit,
     onDropOutside: onBlockDropOutside,
+    // A2: 터치로 블록을 "탭"하면(드래그로 이어지지 않고 금방 뗀 경우) 액션
+    // 메뉴를 연다 — 마우스 우클릭이 여는 바로 그 메뉴다(onOpenMenu).
+    onTap: (block, point) => onOpenMenu(block, point),
     disabled: readOnly,
   })
 
@@ -614,6 +638,35 @@ export function CalendarGrid({
             if (!slot) return
             e.preventDefault()
             onEmptySlot({ x: e.clientX, y: e.clientY }, slot)
+          }}
+          onPointerDown={(e) => {
+            // A3: 터치에는 우클릭이 없으니 빈 슬롯 롱프레스로 같은 메뉴를 연다.
+            // 블록/고정 일정/가용 손잡이(모두 role="button" 또는 실제 button)
+            // 위에서 시작된 터치는 건너뛴다 — 그쪽은 A1의 자기 롱프레스-드래그를
+            // 이미 갖고 있고, 여기서 또 반응하면 둘이 동시에 타이머를 켠다
+            // (요구사항의 "1과 충돌 없게"). 이 요소 자체(배경)에 닿았을 때만.
+            if (e.pointerType !== 'touch' || readOnly || !onEmptySlot) return
+            if (e.target.closest('[role="button"], button')) return
+            const rect = e.currentTarget.getBoundingClientRect()
+            const point = { x: e.clientX, y: e.clientY }
+            const cleanup = () => {
+              clearTimeout(timer)
+              window.removeEventListener('pointermove', onMove)
+              window.removeEventListener('pointerup', cleanup)
+              window.removeEventListener('pointercancel', cleanup)
+            }
+            const onMove = (ev) => {
+              const moved = Math.abs(ev.clientX - point.x) + Math.abs(ev.clientY - point.y)
+              if (moved >= EMPTY_SLOT_TOUCH_CANCEL_PX) cleanup()
+            }
+            const timer = setTimeout(() => {
+              cleanup()
+              const slot = resolveGridSlot(point, rect, range, pxPerMin)
+              if (slot) onEmptySlot(point, slot)
+            }, EMPTY_SLOT_LONG_PRESS_MS)
+            window.addEventListener('pointermove', onMove)
+            window.addEventListener('pointerup', cleanup)
+            window.addEventListener('pointercancel', cleanup)
           }}
         >
           {/* Background columns (weekend tint + availability band). */}

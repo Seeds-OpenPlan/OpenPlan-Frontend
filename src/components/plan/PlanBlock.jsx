@@ -341,7 +341,14 @@ export function PlanBlock({
         ...style,
         // Stripe painted into the block's own background — see VIOLATION_STRIPES.
         ...(violation ? { backgroundImage: VIOLATION_STRIPES[violation.severity] } : null),
-        touchAction: 'none',
+        // 모바일 레이아웃 작업(A1): 예전엔 항상 'none'이라 터치로 그리드를
+        // 스크롤하려는 스와이프까지 전부 블록 이동으로 가로채였다. 이제는 평소
+        // pan-x pan-y로 둬 네이티브 스크롤을 그대로 허용하고, usePlanDrag의
+        // 롱프레스가 실제로 드래그를 켠 "뒤"에만 non-passive touchmove로
+        // 스크롤을 막는다(그 훅 헤더 참고 — touch-action은 제스처 시작 후
+        // 바꿔도 적용되지 않는다). 마우스/펜은 touch-action의 영향을 받지
+        // 않으므로 이 값과 무관하게 그대로 동작한다.
+        touchAction: 'pan-x pan-y',
       }}
       onPointerDown={
         moveBlocked
@@ -407,7 +414,15 @@ export function PlanBlock({
       )}
       {/* A2 resize handles (top/bottom edge). Pointer-only; keyboard users edit
           time via the task/schedule form. onResizeStart stops propagation so it
-          never starts a block MOVE. Group-hover reveals a subtle grip. */}
+          never starts a block MOVE. Group-hover reveals a subtle grip.
+
+          모바일 레이아웃 작업: 이 손잡이는 터치-스크롤 정책(위 루트 div의
+          touchAction 주석)을 일부러 안 따른다 — 8px 높이의 작은 영역이라
+          "거기서 시작한 스와이프"가 스크롤이었을 가능성이 낮고, 늘 즉시
+          반응해야 리사이즈가 쓸만하다(롱프레스를 기다리면 손잡이를 누른 채
+          450ms를 버텨야 하는 것이 오히려 더 나쁘다). hover 전용이라 터치에서
+          안 보이는 것은 기존 한계로 남겨 둔다(가용성 손잡이의 A4 수정과 달리
+          이번 범위 밖). */}
       {onResizeStart && !moveBlocked && !dragging && (
         <>
           <span

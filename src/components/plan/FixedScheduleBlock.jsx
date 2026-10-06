@@ -1,5 +1,11 @@
+import { useRef } from 'react'
 import { formatMinutesLabel } from '../../features/plan/planTime'
 import { LockIcon } from '../common/statusIcons'
+
+// A2: 터치는 우클릭이 없으므로 "탭"으로 메뉴를 연다. 이 블록은 드래그가 없어
+// (헤더 주석 참고) PlanBlock처럼 롱프레스와 탭을 가를 필요가 없다 — 많이 안
+// 움직이고 뗐으면 그냥 탭이다.
+const TAP_MOVE_PX = 10
 
 /*
   A recurring fixed schedule (ST-F1-06 — PLAN-33/34), positioned by the caller
@@ -34,6 +40,11 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
     onOpenMenu?.({ x: e.clientX || rect.right, y: e.clientY || rect.top })
   }
 
+  // A2: 터치 탭 추적 — pointerdown 지점을 적어 두고, pointerup이 거기서 많이
+  // 안 움직인 채 왔으면 탭으로 보고 메뉴를 연다. 드래그가 없는 블록이라
+  // PlanBlock의 롱프레스 분기(usePlanDrag)는 필요 없다.
+  const touchStartRef = useRef(null)
+
   return (
     <div
       role="button"
@@ -41,6 +52,20 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
       aria-label={`${schedule.title}, ${timeLabel}, 고정 일정${inactive ? ', 이번 주 제외' : ''}${disabled ? ', 읽기 전용' : ''}`}
       aria-disabled={disabled || undefined}
       style={style}
+      onPointerDown={(e) => {
+        if (disabled || e.pointerType !== 'touch') return
+        touchStartRef.current = { x: e.clientX, y: e.clientY }
+      }}
+      onPointerUp={(e) => {
+        const start = touchStartRef.current
+        touchStartRef.current = null
+        if (disabled || !start || e.pointerType !== 'touch') return
+        const moved = Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y)
+        if (moved < TAP_MOVE_PX) openMenuFromEvent(e)
+      }}
+      onPointerCancel={() => {
+        touchStartRef.current = null
+      }}
       onContextMenu={(e) => {
         e.preventDefault()
         // Same reasoning as PlanBlock: keep this on the block, not the grid's
