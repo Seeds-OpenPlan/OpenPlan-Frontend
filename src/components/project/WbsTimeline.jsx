@@ -48,6 +48,20 @@ const COMMIT_DEBOUNCE_MS = 500
 const LONG_PRESS_MS = 450
 const LONG_PRESS_CANCEL_PX = 10
 
+// Thomas 리뷰 BLOCKER: 이 파일 안의 모든 WbsBar/마감선 손잡이가 같은
+// withLongPressGate 함수를 쓰고, 그 안의 window 리스너는 pointerId를 대조하지
+// 않았다 — 손가락 A로 하나를 롱프레스하는 중에 손가락 B가 움직이면 A의
+// 취소 판정이 B의 움직임으로 오염되고(cleanup이 잘못 불려 드래그가 시작 안
+// 되거나), B의 pointercancel이 A의 대기까지 취소했다. 모듈 레벨 변수로
+// "지금 대기 중인 롱프레스가 있는가"를 추적한다 — 이 파일 안의 바가 여러
+// 개 동시에 렌더돼 있어도(프로젝트에 태스크가 많을 때) 대기 단계는 전체
+// 타임라인에서 하나만 유효해야 손가락 B의 새 pointerdown이 A를 방해하지
+// 않는다. 활성화(activate) 뒤의 실제 드래그는 각 바 컴포넌트 자신의
+// onPointerMove/Up/Cancel + setPointerCapture로 넘어가 이 가드 범위 밖이다
+// — 그쪽은 이미 컴포넌트 인스턴스별로 격리돼 있어 서로 다른 바를 각각
+// 다른 손가락으로 동시에 드래그하는 것은 이 변경과 무관하게 안전하다.
+let pendingLongPressPointerId = null
+
 // `activate(shim)`을 마우스/펜은 즉시, 터치는 롱프레스 뒤에만 호출하는
 // pointerdown 래퍼. `shim`은 원본 이벤트에서 꺼낸 { clientX, pointerId,
 // currentTarget }뿐이다 — 450ms 뒤에 실행될 수도 있어 리액트 합성 이벤트
@@ -59,6 +73,10 @@ function withLongPressGate(activate) {
       activate(shim)
       return
     }
+    // 이미 다른 포인터가 대기 중이면 이 pointerdown은 무시한다.
+    if (pendingLongPressPointerId != null) return
+    const pointerId = e.pointerId
+    pendingLongPressPointerId = pointerId
     const x0 = e.clientX
     const y0 = e.clientY
     let timer = null
@@ -70,16 +88,28 @@ function withLongPressGate(activate) {
     const cleanup = () => {
       clearTimeout(timer)
       window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', cleanup)
-      window.removeEventListener('pointercancel', cleanup)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+      if (pendingLongPressPointerId === pointerId) pendingLongPressPointerId = null
     }
+    // 세 리스너 모두 이 pointerId가 아니면 무시 — 다른 손가락의 move/up/
+    // cancel이 이 대기 중인 제스처를 건드리지 않는다.
     const onMove = (ev) => {
+      if (ev.pointerId !== pointerId) return
       const moved = Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0)
       if (moved >= LONG_PRESS_CANCEL_PX) cleanup()
     }
+    const onUp = (ev) => {
+      if (ev.pointerId !== pointerId) return
+      cleanup()
+    }
+    const onCancel = (ev) => {
+      if (ev.pointerId !== pointerId) return
+      cleanup()
+    }
     window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', cleanup)
-    window.addEventListener('pointercancel', cleanup)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
     timer = setTimeout(() => {
       cleanup()
       activate(shim)

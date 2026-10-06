@@ -18,38 +18,41 @@ export function OnboardingStepper({ currentIndex }) {
         {currentIndex + 1} / {WIZARD_STEPS.length} · {current?.label}
       </p>
       <ol className="hidden items-center gap-1 md:flex" aria-label="온보딩 단계">
-      {WIZARD_STEPS.map((step, i) => {
-        const isDone = i < currentIndex
-        const isCurrent = i === currentIndex
-        return (
-          <li key={step.key} className="flex flex-1 items-center gap-1">
-            <span className="flex items-center gap-2">
-              <span
-                aria-hidden="true"
-                className={[
-                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-caption font-semibold',
-                  isDone
-                    ? 'bg-brand-600 text-white'
-                    : isCurrent
-                      ? 'border-2 border-brand-600 text-brand-700'
-                      : 'border border-border-strong text-text-muted',
-                ].join(' ')}
-              >
-                {isDone ? '✓' : i + 1}
+        {WIZARD_STEPS.map((step, i) => {
+          const isDone = i < currentIndex
+          const isCurrent = i === currentIndex
+          return (
+            <li key={step.key} className="flex flex-1 items-center gap-1">
+              <span className="flex items-center gap-2">
+                <span
+                  aria-hidden="true"
+                  className={[
+                    'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-caption font-semibold',
+                    isDone
+                      ? 'bg-brand-600 text-white'
+                      : isCurrent
+                        ? 'border-2 border-brand-600 text-brand-700'
+                        : 'border border-border-strong text-text-muted',
+                  ].join(' ')}
+                >
+                  {isDone ? '✓' : i + 1}
+                </span>
+                <span
+                  aria-current={isCurrent ? 'step' : undefined}
+                  className={['text-caption', isCurrent ? 'font-semibold text-text' : 'text-text-muted'].join(' ')}
+                >
+                  {step.label}
+                </span>
               </span>
-              <span
-                aria-current={isCurrent ? 'step' : undefined}
-                className={['text-caption', isCurrent ? 'font-semibold text-text' : 'text-text-muted'].join(' ')}
-              >
-                {step.label}
-              </span>
-            </span>
-            {i < WIZARD_STEPS.length - 1 && (
-              <span aria-hidden="true" className={['mx-1 h-px flex-1', isDone ? 'bg-brand-600' : 'bg-border'].join(' ')} />
-            )}
-          </li>
-        )
-      })}
+              {i < WIZARD_STEPS.length - 1 && (
+                <span
+                  aria-hidden="true"
+                  className={['mx-1 h-px flex-1', isDone ? 'bg-brand-600' : 'bg-border'].join(' ')}
+                />
+              )}
+            </li>
+          )
+        })}
       </ol>
     </>
   )

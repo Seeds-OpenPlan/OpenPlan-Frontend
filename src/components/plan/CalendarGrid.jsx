@@ -35,6 +35,10 @@ import {
 // 그대로 맞춘다.
 const EMPTY_SLOT_LONG_PRESS_MS = 450
 const EMPTY_SLOT_TOUCH_CANCEL_PX = 10
+// Thomas 리뷰 HIGH: 키보드로 연 contextmenu는 pointerType이 없다 — 그걸
+// "최근에 터치가 있었는가"로 오판하지 않도록, 터치 플래그를 이 시간만
+// 유효한 것으로 둔다(그 뒤엔 키보드 경로가 항상 열린다).
+const TOUCH_GESTURE_WINDOW_MS = 1000
 
 /*
   달력 상자의 세로 크기. **max-height가 아니라 height다** — 축척을 바꿔도 상자
@@ -214,13 +218,29 @@ export function CalendarGrid({
   const scrollRef = useRef(null)
   const headerRef = useRef(null)
   const [resizeState, setResizeState] = useState(null) // {planBlockId,startMin,endMin}
-  // 리드 셀프리뷰 지적: 안드로이드 Chrome(TWA 포함)은 터치 롱프레스(~500ms
-  // 전후)에 네이티브 contextmenu를 자체적으로 쏜다 — 그 빈 슬롯 배경의 A3
-  // 롱프레스 타이머(450ms)가 먼저 메뉴를 열고 나면, 그 뒤에 도착하는 이
-  // contextmenu가 같은 메뉴를 또 열려고 한다. 어느 pointerType으로 이
-  // contextmenu가 시작됐는지 판별하는 폴백으로 쓴다(그리드 배경 pointerdown
-  // 에서 기록).
-  const lastPointerTypeRef = useRef('mouse')
+  // 리드 셀프리뷰 지적 + Thomas 리뷰 HIGH: 안드로이드 Chrome(TWA 포함)은
+  // 터치 롱프레스(~500ms 전후)에 네이티브 contextmenu를 자체적으로 쏜다 —
+  // 그 빈 슬롯 배경의 A3 롱프레스 타이머(450ms)가 먼저 메뉴를 열고 나면,
+  // 그 뒤에 도착하는 이 contextmenu가 같은 메뉴를 또 열려고 한다.
+  //
+  // 처음엔 "직전 pointerdown의 pointerType"을 영구 보관하는 ref로 막았는데,
+  // 그러면 키보드(Shift+F10/메뉴 키)로 연 contextmenu는 pointerType 자체가
+  // 없어 그 영구 값(몇 분 전 터치에서 남은 'touch')으로 폴백하면서 메뉴가
+  // 조용히 안 열리는 버그가 생겼다. 그래서 "영구 기억"이 아니라 "최근
+  // TOUCH_GESTURE_WINDOW_MS 안에 터치가 있었는가"로 바꾼다 — 그 창을 벗어난
+  // 키보드 contextmenu는 항상 통과한다.
+  const touchGestureUntilRef = useRef(0)
+  // 멀티터치 가드(Thomas 리뷰 BLOCKER) — 이미 다른 pointerId가 이 배경의
+  // 롱프레스 제스처를 쥐고 있으면 새 pointerdown을 무시한다.
+  const activeEmptySlotPointerIdRef = useRef(null)
+  // 언마운트 시 진행 중인 롱프레스 타이머/리스너를 정리하기 위한 자리
+  // (Thomas 리뷰 권장 4) — usePlanDrag.js의 activeCleanupRef와 동일한 패턴.
+  const activeEmptySlotCleanupRef = useRef(null)
+  useEffect(() => {
+    return () => {
+      activeEmptySlotCleanupRef.current?.()
+    }
+  }, [])
 
   // 요일 헤더 실측 → 페이지(맞춤 축척 계산). border-box 높이를 그대로 넘긴다.
   // useLayoutEffect인 이유: 이 값이 도착해야 맞춤 축척이 확정되므로, 페인트
@@ -644,19 +664,27 @@ export function CalendarGrid({
             )
             if (!slot) return
             e.preventDefault()
-            // 리드 셀프리뷰 지적: 터치 롱프레스가 일으킨 contextmenu는 메뉴를
-            // 또 열지 않는다 — 바로 아래 onPointerDown의 450ms 타이머가 이미
-            // 열었을 것이다(또는 손가락이 아직 떨어지지 않아 곧 열 것이다).
-            // preventDefault는 그대로 해서 네이티브 메뉴 UI는 막는다. 마우스
-            // 우클릭은 pointerType이 'touch'가 아니므로 그대로 통과.
-            const pointerType = e.nativeEvent?.pointerType || lastPointerTypeRef.current
-            if (pointerType === 'touch') return
+            // 리드 셀프리뷰 지적 + Thomas 리뷰 HIGH: 터치 롱프레스가 일으킨
+            // contextmenu는 메뉴를 또 열지 않는다 — 바로 아래 onPointerDown의
+            // 450ms 타이머가 이미 열었을 것이다(또는 곧 열 것이다).
+            // preventDefault는 그대로 해서 네이티브 메뉴 UI는 막는다.
+            //
+            // 판별: nativeEvent.pointerType이 'touch'면 바로 억제. 그 값이
+            // 없을 때(키보드 Shift+F10/메뉴 키는 pointerType 자체가 없다)만
+            // "최근 TOUCH_GESTURE_WINDOW_MS 안에 터치가 있었는가"로 폴백한다
+            // — 영구 ref였다면 몇 분 전 터치 흔적이 지금의 키보드 contextmenu
+            // 까지 조용히 막아 버린다. 마우스 우클릭은 pointerType이 'mouse'로
+            // 명시되므로 이 폴백 자체를 안 타고 항상 통과한다.
+            const pointerType = e.nativeEvent?.pointerType
+            const touchRecently = Date.now() < touchGestureUntilRef.current
+            if (pointerType === 'touch' || (!pointerType && touchRecently)) return
             onEmptySlot({ x: e.clientX, y: e.clientY }, slot)
           }}
           onPointerDown={(e) => {
-            // 위 onContextMenu가 마우스/터치를 가를 때 쓰는 폴백 — 터치
-            // 분기 밖(아래 return)으로 가기 전에 항상 기록해 둔다.
-            lastPointerTypeRef.current = e.pointerType
+            // 위 onContextMenu가 키보드 폴백으로 쓰는 "최근 터치" 창을 연다.
+            if (e.pointerType === 'touch') {
+              touchGestureUntilRef.current = Date.now() + TOUCH_GESTURE_WINDOW_MS
+            }
             // A3: 터치에는 우클릭이 없으니 빈 슬롯 롱프레스로 같은 메뉴를 연다.
             // 블록/고정 일정/가용 손잡이(모두 role="button" 또는 실제 button)
             // 위에서 시작된 터치는 건너뛴다 — 그쪽은 A1의 자기 롱프레스-드래그를
@@ -664,17 +692,38 @@ export function CalendarGrid({
             // (요구사항의 "1과 충돌 없게"). 이 요소 자체(배경)에 닿았을 때만.
             if (e.pointerType !== 'touch' || readOnly || !onEmptySlot) return
             if (e.target.closest('[role="button"], button')) return
+            // 멀티터치 가드(Thomas 리뷰 BLOCKER) — 이미 다른 손가락이 이
+            // 배경에서 롱프레스를 진행 중이면 새 pointerdown은 무시한다.
+            if (activeEmptySlotPointerIdRef.current != null) return
+            const pointerId = e.pointerId
+            activeEmptySlotPointerIdRef.current = pointerId
             const rect = e.currentTarget.getBoundingClientRect()
             const point = { x: e.clientX, y: e.clientY }
             const cleanup = () => {
               clearTimeout(timer)
               window.removeEventListener('pointermove', onMove)
-              window.removeEventListener('pointerup', cleanup)
-              window.removeEventListener('pointercancel', cleanup)
+              window.removeEventListener('pointerup', onUp)
+              window.removeEventListener('pointercancel', onCancel)
+              if (activeEmptySlotPointerIdRef.current === pointerId) {
+                activeEmptySlotPointerIdRef.current = null
+              }
+              if (activeEmptySlotCleanupRef.current === cleanup) {
+                activeEmptySlotCleanupRef.current = null
+              }
             }
+            activeEmptySlotCleanupRef.current = cleanup
             const onMove = (ev) => {
+              if (ev.pointerId !== pointerId) return
               const moved = Math.abs(ev.clientX - point.x) + Math.abs(ev.clientY - point.y)
               if (moved >= EMPTY_SLOT_TOUCH_CANCEL_PX) cleanup()
+            }
+            const onUp = (ev) => {
+              if (ev.pointerId !== pointerId) return
+              cleanup()
+            }
+            const onCancel = (ev) => {
+              if (ev.pointerId !== pointerId) return
+              cleanup()
             }
             const timer = setTimeout(() => {
               cleanup()
@@ -682,8 +731,8 @@ export function CalendarGrid({
               if (slot) onEmptySlot(point, slot)
             }, EMPTY_SLOT_LONG_PRESS_MS)
             window.addEventListener('pointermove', onMove)
-            window.addEventListener('pointerup', cleanup)
-            window.addEventListener('pointercancel', cleanup)
+            window.addEventListener('pointerup', onUp)
+            window.addEventListener('pointercancel', onCancel)
           }}
         >
           {/* Background columns (weekend tint + availability band). */}

@@ -7,7 +7,10 @@ import { BrandLogo } from '../common/BrandLogo'
 // 데스크톱 공통 상단 헤더 + 상단 내비게이션. md 미만에서는 숨김.
 function TopNav() {
   return (
-    <header className="hidden border-b border-border bg-surface md:block">
+    // Thomas 리뷰 HIGH: MobileTopBar.jsx와 같은 이유 — 데스크톱 셸도 같은
+    // Android TWA 안에서 돌므로 edge-to-edge 상태 바 겹침이 폭 breakpoint와
+    // 무관하게 똑같이 일어날 수 있다.
+    <header className="hidden border-b border-border bg-surface pt-[env(safe-area-inset-top)] md:block">
       <div className="mx-auto flex h-bar max-w-page items-center justify-between px-page-x">
         {/* 로고 클릭 시 대시보드로 이동. 메뉴는 가운데 정렬(justify-between). */}
         <BrandLogo to="/" />

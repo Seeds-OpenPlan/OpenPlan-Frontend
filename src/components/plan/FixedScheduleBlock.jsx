@@ -6,6 +6,9 @@ import { LockIcon } from '../common/statusIcons'
 // (헤더 주석 참고) PlanBlock처럼 롱프레스와 탭을 가를 필요가 없다 — 많이 안
 // 움직이고 뗐으면 그냥 탭이다.
 const TAP_MOVE_PX = 10
+// Thomas 리뷰 HIGH(PlanBlock/CalendarGrid와 같은 수정) — 키보드 contextmenu
+// 오판 방지용 "최근 터치" 판정 창.
+const TOUCH_GESTURE_WINDOW_MS = 1000
 
 /*
   A recurring fixed schedule (ST-F1-06 — PLAN-33/34), positioned by the caller
@@ -43,13 +46,21 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
   // A2: 터치 탭 추적 — pointerdown 지점을 적어 두고, pointerup이 거기서 많이
   // 안 움직인 채 왔으면 탭으로 보고 메뉴를 연다. 드래그가 없는 블록이라
   // PlanBlock의 롱프레스 분기(usePlanDrag)는 필요 없다.
-  const touchStartRef = useRef(null)
-  // 리드 셀프리뷰 지적: 안드로이드 Chrome(TWA 포함)은 터치를 ~500ms 누르고
-  // 있으면 네이티브 contextmenu를 자체적으로 쏜다. 이 블록은 손을 떼는
-  // 순간(onPointerUp, 위)이 메뉴를 여는 정본 경로이므로 — 길게 눌렀다 떼도
-  // 결국 pointerup이 열어 준다 — contextmenu가 또 열면 같은 메뉴가 중복으로
-  // 열린다. pointerType을 기억해 그 경로만 막는다(마우스 우클릭은 통과).
-  const lastPointerTypeRef = useRef('mouse')
+  //
+  // Thomas 리뷰 BLOCKER(usePlanDrag/CalendarGrid와 같은 수정) — pointerId도
+  // 같이 적어 둔다. 손가락 A로 탭을 추적하는 중에 손가락 B가 같은 블록을
+  // 짚으면 start가 B의 좌표로 덮어써지고, A가 손을 뗄 때 그 오염된 좌표와
+  // 비교해 "많이 움직였다/안 움직였다"를 잘못 판정한다.
+  const touchStartRef = useRef(null) // { x, y, pointerId } | null
+  // 리드 셀프리뷰 지적 + Thomas 리뷰 HIGH: 안드로이드 Chrome(TWA 포함)은
+  // 터치를 ~500ms 누르고 있으면 네이티브 contextmenu를 자체적으로 쏜다.
+  // 이 블록은 손을 떼는 순간(onPointerUp, 위)이 메뉴를 여는 정본 경로이므로
+  // — 길게 눌렀다 떼도 결국 pointerup이 열어 준다 — contextmenu가 또 열면
+  // 같은 메뉴가 중복으로 열린다. "최근 터치가 있었는가"(시간 창)로 그
+  // 경로만 막는다 — 영구 ref라면 몇 분 전 터치가 지금의 키보드(Shift+F10/
+  // 메뉴 키) contextmenu까지 막아 버린다(마우스 우클릭은 pointerType이
+  // 'mouse'로 명시되므로 애초에 이 폴백을 안 탄다).
+  const touchGestureUntilRef = useRef(0)
 
   return (
     <div
@@ -62,19 +73,26 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
       // 별도로 끈다.
       style={{ ...style, WebkitTouchCallout: 'none' }}
       onPointerDown={(e) => {
-        lastPointerTypeRef.current = e.pointerType
+        if (e.pointerType === 'touch') {
+          touchGestureUntilRef.current = Date.now() + TOUCH_GESTURE_WINDOW_MS
+        }
         if (disabled || e.pointerType !== 'touch') return
-        touchStartRef.current = { x: e.clientX, y: e.clientY }
+        // 멀티터치 가드 — 이미 다른 손가락이 탭을 추적 중이면 새 pointerdown
+        // 은 무시한다(두 손가락이 겹쳐 좌표가 섞이지 않게).
+        if (touchStartRef.current != null) return
+        touchStartRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId }
       }}
       onPointerUp={(e) => {
         const start = touchStartRef.current
+        if (disabled || !start || e.pointerType !== 'touch' || e.pointerId !== start.pointerId) {
+          return
+        }
         touchStartRef.current = null
-        if (disabled || !start || e.pointerType !== 'touch') return
         const moved = Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y)
         if (moved < TAP_MOVE_PX) openMenuFromEvent(e)
       }}
-      onPointerCancel={() => {
-        touchStartRef.current = null
+      onPointerCancel={(e) => {
+        if (touchStartRef.current?.pointerId === e.pointerId) touchStartRef.current = null
       }}
       onContextMenu={(e) => {
         e.preventDefault()
@@ -84,9 +102,11 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
         // 터치 롱프레스가 일으킨 contextmenu는 메뉴를 열지 않는다 — 위
         // onPointerUp이 손을 떼는 순간 이미 연다(또는 열 것이다). 여기서도
         // 열면 중복이다. preventDefault/stopPropagation은 그대로 해 둬서
-        // iOS 콜아웃·네이티브 메뉴는 여전히 막는다.
-        const pointerType = e.nativeEvent?.pointerType || lastPointerTypeRef.current
-        if (pointerType === 'touch') return
+        // iOS 콜아웃·네이티브 메뉴는 여전히 막는다. 판별은 PlanBlock과 동일
+        // (nativeEvent.pointerType 우선, 없을 때만 "최근 터치" 폴백).
+        const pointerType = e.nativeEvent?.pointerType
+        const touchRecently = Date.now() < touchGestureUntilRef.current
+        if (pointerType === 'touch' || (!pointerType && touchRecently)) return
         if (disabled) return
         openMenuFromEvent(e)
       }}

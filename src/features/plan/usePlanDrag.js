@@ -68,6 +68,23 @@ export function usePlanDrag({
   // 축척도 range와 같은 이유로 ref를 거쳐 읽는다 — 드래그 도중 확대/축소가
   // 일어나도 진행 중인 드래그가 옛 축척으로 계산하지 않도록.
   const pxPerMinRef = useRef(pxPerMin)
+  // Thomas 리뷰 BLOCKER: 멀티터치 가드. onBlockPointerDown은 블록마다 독립된
+  // 클로저(s)와 window 리스너를 등록하므로, 손가락 A로 제스처가 진행되는
+  // 중에 손가락 B가 다른 블록을 누르면 두 번째 호출이 "또 하나의" window
+  // 리스너 세트를 등록해 버린다 — 이후 A/B 어느 쪽 pointermove가 와도 두
+  // 세트가 전부 반응해 좌표가 서로 오염된다. 훅 레벨(블록 호출 전체가 공유)
+  // 에서 "지금 어느 pointerId가 이 제스처를 쥐고 있는가"를 추적해, 그 밖의
+  // pointerdown은 통째로 무시하고, 리스너 안에서도 매번 pointerId를 대조한다.
+  const activePointerIdRef = useRef(null)
+  // 언마운트 시 진행 중인 제스처를 정리하기 위한 자리(요구사항 4) — 매
+  // onBlockPointerDown 호출이 자신의 cleanup을 여기 심어 두고, 끝나면(cleanup
+  // 자신이) 비운다.
+  const activeCleanupRef = useRef(null)
+  useEffect(() => {
+    return () => {
+      activeCleanupRef.current?.()
+    }
+  }, [])
 
   // Commit through a ref so a drag that started earlier still calls the latest
   // handler without re-binding the window listeners mid-drag. Drag math is
@@ -90,11 +107,27 @@ export function usePlanDrag({
       // 통과한다); `disabled` (a read-only past week, or — plan-polish fix G —
       // an auto-place draft under review) disables dragging entirely.
       if (disabled || e.button !== 0) return
+      // 멀티터치 가드: 이미 다른 pointerId가 제스처를 쥐고 있으면 새
+      // pointerdown은 무시한다 — 손가락 B로 다른 블록을 눌러도 A의 드래그가
+      // 끝나기 전까진 아무 일도 일어나지 않는다.
+      if (activePointerIdRef.current != null) return
 
       const isTouch = e.pointerType === 'touch'
+      const pointerId = e.pointerId
+      activePointerIdRef.current = pointerId
+      // 가능하면 즉시 포인터를 캡처한다 — window 리스너가 주 경로라 캡처
+      // 없이도 동작하지만, 캡처가 걸리면 이 포인터의 move/up/cancel이 중간에
+      // 다른 요소로 새지 않아 더 견고하다. 실패해도(미지원/이미 해제된
+      // 포인터 등) 조용히 넘어간다 — window 리스너가 어차피 주 경로다.
+      try {
+        e.currentTarget?.setPointerCapture?.(pointerId)
+      } catch {
+        /* no-op — window 리스너가 대신한다 */
+      }
       const duration = (new Date(block.endAt) - new Date(block.startAt)) / 60000
       const s = {
         planBlockId: block.planBlockId,
+        pointerId,
         clientX0: e.clientX,
         clientY0: e.clientY,
         // 롱프레스 타이머가 끝날 때 쓸 "최신 위치" — 타이머가 끝날 때까지는
@@ -150,7 +183,16 @@ export function usePlanDrag({
         if (s.blockScrollWhileDragging) {
           window.removeEventListener('touchmove', s.blockScrollWhileDragging)
         }
+        // 이 제스처가 쥐고 있던 슬롯/정리 핸들을 비운다 — 다른 pointerId의
+        // 새 pointerdown이 다시 시작할 수 있게 되는 지점이다. 두 체크 모두
+        // "지금 비우는 게 바로 나인지"를 확인한다 — 이론상 겹칠 일은 없지만
+        // (한 번에 한 제스처만 활성화되므로) 방어적으로 둔다.
+        if (activePointerIdRef.current === pointerId) activePointerIdRef.current = null
+        if (activeCleanupRef.current === cleanup) activeCleanupRef.current = null
       }
+      // 언마운트 시 정리용(요구사항 4) — 지금 막 등록한 이 cleanup이 "현재
+      // 진행 중인 제스처"가 된다.
+      activeCleanupRef.current = cleanup
       // 롱프레스가 끝났을 때(터치) 드래그를 실제로 켠다 — 고스트가 그 즉시
       // 나타나는 것 자체가 "지금부터 이동 모드"라는 시각 신호다(요구사항의
       // "살짝 들림" 피드백을 새 CSS 없이 기존 dragging 스타일 재사용으로
@@ -163,6 +205,10 @@ export function usePlanDrag({
         setDragState(compute(s.lastX, s.lastY))
       }
       const handleMove = (ev) => {
+        // Thomas 리뷰 BLOCKER: 다른 손가락/포인터의 move는 무시한다 — 안
+        // 그러면 손가락 B가 움직일 때마다 A의 드래그 좌표가 B의 위치로
+        // 덮어써진다.
+        if (ev.pointerId !== pointerId) return
         if (!s.active) {
           if (isTouch) {
             // 터치는 움직임만으로 활성화하지 않는다(그러면 스크롤과 구분이
@@ -184,6 +230,9 @@ export function usePlanDrag({
         setDragState(compute(ev.clientX, ev.clientY))
       }
       const handleUp = (ev) => {
+        // 다른 포인터의 up은 이 제스처와 무관하다 — 무시(이 포인터가 끝날 때
+        // 까지 cleanup도, 커밋도 하지 않는다).
+        if (ev.pointerId !== pointerId) return
         cleanup()
         // Commit FIRST (applies the optimistic cache move synchronously), THEN
         // clear the ghost — both land in the same React batch, so the block never
@@ -205,7 +254,11 @@ export function usePlanDrag({
         }
         setDragState(null)
       }
-      const handleCancel = () => {
+      const handleCancel = (ev) => {
+        // Thomas 리뷰 BLOCKER: 손가락 B가 스크롤로 전환되며 받는
+        // pointercancel이 A의 드래그까지 취소해 버리던 것 — 이 포인터가
+        // 아니면 무시한다.
+        if (ev.pointerId !== pointerId) return
         cleanup()
         setDragState(null)
       }
@@ -222,7 +275,13 @@ export function usePlanDrag({
         // 직접 preventDefault하는 것이다. 드래그가 아직 `active`가 아닐
         // 때는 호출하지 않으므로 롱프레스 전 스와이프는 평소처럼 스크롤된다.
         s.blockScrollWhileDragging = (ev) => {
-          if (s.active) ev.preventDefault()
+          // 네이티브 TouchEvent에는 pointerId가 없어(touches[].identifier로
+          // 다른 체계) 이 포인터만 골라낼 수 없다 — 최선의 방어로, 터치가
+          // 동시에 두 개 이상이면(두 번째 손가락이 내려온 상태) 막지 않는다.
+          // 그래야 A가 드래그 중이어도 B가 화면을 두 손가락으로 조작하려는
+          // 시도를 가로채지 않는다. 터치가 하나뿐일 때만(=A 자신일 가능성이
+          // 가장 높을 때) 막는다.
+          if (s.active && ev.touches.length <= 1) ev.preventDefault()
         }
         window.addEventListener('touchmove', s.blockScrollWhileDragging, { passive: false })
       }
