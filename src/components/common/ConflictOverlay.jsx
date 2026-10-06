@@ -3,7 +3,7 @@ import { Dialog } from './Dialog'
 import { BottomSheet } from './BottomSheet'
 import { Button } from './Button'
 import { Badge } from './Badge'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { systemMessages } from '../../constants/systemMessages'
 
 /*
@@ -132,7 +132,8 @@ function OverlayBody({ latest, current, onAccept, onRetry, titleId, firstActionR
 }
 
 export function ConflictOverlay({ open, latest, current, onAccept, onRetry, returnFocusRef }) {
-  const isDesktop = useIsDesktop()
+  // D1: open prop으로 상시 마운트된 채 토글됨 — 열리는 시점에 셸을 고정한다.
+  const isDesktop = useLockedIsDesktop(open)
   const titleId = useId()
   const firstActionRef = useRef(null)
 

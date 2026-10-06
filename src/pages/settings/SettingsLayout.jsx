@@ -2,7 +2,7 @@ import { useLayoutEffect } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { BottomSheet } from '../../components/common/BottomSheet'
 import { SettingsNavList } from '../../components/settings/SettingsNavList'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop, useMediaQuery } from '../../hooks/useMediaQuery'
 import { SETTINGS_FIRST_DETAIL_PATH } from '../../features/settings/settingsNavOrder'
 import { useTutorialRestart } from '../../features/onboarding/useTutorialRestart'
 
@@ -15,7 +15,14 @@ const DETAIL_TITLE_ID = 'settings-detail-title'
 // Sidebar width once a detail screen is open (desktop). Named so the list
 // pane's and the detail pane's width classes below both read off the SAME
 // number instead of two literals that could silently drift apart.
-const SIDEBAR_WIDTH = '340px'
+//
+// D3: 768~900px(폴드를 펼친 기기가 데스크톱 셸로 떨어지는 구간, 또는 세로
+// 태블릿)에서는 340px 고정 사이드바가 남는 상세 폭을 너무 많이 가져가
+// 상세 쪽이 눈에 띄게 좁아진다(예: 820px 너비면 상세가 ≈456px). lg(1024px)
+// 미만에서는 260px로 줄여 상세에 더 내준다 — lg 이상(원래 디자인 기준폭)은
+// 340px 그대로.
+const SIDEBAR_WIDTH_NARROW = '260px'
+const SIDEBAR_WIDTH_WIDE = '340px'
 
 /*
   SCR-SET shell (ui-spec §SET). 오너 리뷰 누적 반영:
@@ -49,8 +56,19 @@ const SIDEBAR_WIDTH = '340px'
 function SettingsLayout() {
   const navigate = useNavigate()
   const location = useLocation()
-  const isDesktop = useIsDesktop()
   const atHub = location.pathname === '/settings'
+  // D1: 상세 라우트가 열려 있는 동안(!atHub) 폴드 펼침/접힘으로 데스크톱
+  // 2단 ↔ 모바일 허브+시트가 바뀌면 그 안의 <Outlet/>(상세 페이지)이 완전히
+  // 다른 DOM 자리로 옮겨가며 통째로 마운트 해제·재마운트된다 — 입력 중이던
+  // 폼이 날아간다. 허브에 있을 때(atHub)는 고정할 대상(Outlet 내용)이 없으니
+  // 그냥 실시간 값을 쓰고, 상세로 들어가는 순간의 값으로 고정한다.
+  const isDesktop = useLockedIsDesktop(!atHub)
+  // D3: lg 미만(768~1023px)에서는 좁은 사이드바를 쓴다 — 위 SIDEBAR_WIDTH_*
+  // 주석 참고. 데스크톱 셸이 아니면(모바일) 안 쓰이는 값이라 isLg는 그냥
+  // 실시간으로 읽어도 된다(고정할 대상이 아니다 — 셸 자체는 이미 isDesktop
+  // 으로 고정돼 있고, 이건 그 데스크톱 셸 내부의 폭 배분일 뿐).
+  const isLg = useMediaQuery('(min-width: 1024px)')
+  const sidebarWidth = isLg ? SIDEBAR_WIDTH_WIDE : SIDEBAR_WIDTH_NARROW
   // TUT-09 재실행 확인 다이얼로그 + 재시작 로직은 useTutorialRestart로 뽑혀
   // 있다(ST-F1-15가 FAQ 배너라는 두 번째 진입점을 추가하면서 — 그 훅 자신의
   // 헤더 참고) — 이 레이아웃은 트리거(아래 navList)와 dialog 렌더 위치만 안다.
@@ -90,7 +108,7 @@ function SettingsLayout() {
               frame here (the redirect effect above fires immediately after),
               so this branch mostly renders already-narrowed. */}
           <div
-            style={{ width: atHub ? '100%' : SIDEBAR_WIDTH }}
+            style={{ width: atHub ? '100%' : sidebarWidth }}
             className="shrink-0 motion-safe:transition-[width] motion-safe:duration-slow motion-safe:ease-emphasized"
           >
             {navList}
@@ -103,7 +121,7 @@ function SettingsLayout() {
               opacity/width fade would otherwise leave. */}
           <div
             inert={atHub || undefined}
-            style={{ width: atHub ? 0 : `calc(100% - ${SIDEBAR_WIDTH} - 1.5rem)` }}
+            style={{ width: atHub ? 0 : `calc(100% - ${sidebarWidth} - 1.5rem)` }}
             className={[
               'shrink-0 overflow-hidden rounded-card border border-border bg-surface',
               'motion-safe:transition-[width,opacity] motion-safe:duration-slow motion-safe:ease-emphasized',

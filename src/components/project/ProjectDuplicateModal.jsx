@@ -3,7 +3,7 @@ import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { ErrorState } from '../common/ErrorState'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useProjectTasks, useProjectWbs } from '../../features/project/useProjectData'
 
 /*
@@ -33,7 +33,8 @@ const STEP_TITLES = ['대상 확인', '항목 확인', '복제']
 const TITLE_ID = 'project-dup-title'
 
 export function ProjectDuplicateModal({ project, onClose, onDuplicate, submitting = false, submitError }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const headingRef = useRef(null)
   const nameRef = useRef(null)
 

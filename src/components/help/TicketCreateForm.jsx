@@ -6,7 +6,7 @@ import { ErrorState } from '../common/ErrorState'
 import { useCreateTicket } from '../../features/help/useHelp'
 import { TICKET_CATEGORIES } from '../../features/help/ticketCategories'
 import { useAccount } from '../../features/settings/useSettings'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { toast } from '../../hooks/useToasts'
 
 const FIELD =
@@ -41,7 +41,8 @@ const MAX_ATTACHMENTS = 5
   호출자(SettingsSupportPage)가 모달을 닫고 "내 문의" 탭으로 전환하는 데 쓴다.
 */
 export function TicketCreateForm({ onClose, onSuccess }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleRef = useRef(null)
   const accountQuery = useAccount()
   const createTicket = useCreateTicket()

@@ -3,7 +3,7 @@ import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { ErrorState } from '../common/ErrorState'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { formatISODate } from '../../features/plan/planTime'
 
 /*
@@ -18,7 +18,8 @@ const FIELD =
 const TITLE_ID = 'project-create-title'
 
 export function ProjectCreateForm({ onClose, onSubmit, submitting = false, submitError, onRetry }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const nameRef = useRef(null)
 
   const [name, setName] = useState('')

@@ -5,7 +5,7 @@ import { Button } from '../common/Button'
 import { ErrorState } from '../common/ErrorState'
 import { MinuteStepper } from '../plan/MinuteStepper'
 import { priorityLabelKO } from '../../features/plan/planPlacement'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useTaskCategories } from '../../features/project/useProjectData'
 
 /*
@@ -38,7 +38,8 @@ const TITLE_ID = 'task-create-title'
 const PRIORITIES = [1, 2, 3] // 높음·보통·낮음 (priorityLabelKO)
 
 export function TaskCreateForm({ task, onClose, onSubmit, submitting = false, submitError, onRetry }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleRef = useRef(null)
   const isEdit = Boolean(task)
 

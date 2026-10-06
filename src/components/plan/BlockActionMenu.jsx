@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { BottomSheet } from '../common/BottomSheet'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { getPopoverAnchorStyle } from '../../utils/popoverPosition'
 
 /*
@@ -49,7 +49,8 @@ function MenuList({ block, items, onClose }) {
 }
 
 export function BlockActionMenu({ open, block, position, items = [], onClose }) {
-  const isDesktop = useIsDesktop()
+  // D1: open prop으로 상시 마운트된 채 토글됨 — 열리는 시점에 셸을 고정한다.
+  const isDesktop = useLockedIsDesktop(open)
 
   useEffect(() => {
     if (!open) return undefined

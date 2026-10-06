@@ -4,7 +4,7 @@ import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { Banner } from '../common/Banner'
 import { ConflictOverlay } from '../common/ConflictOverlay'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import {
   WEEKDAY_KEYS,
   WEEKDAY_LABELS_KO,
@@ -103,7 +103,8 @@ export function FixedScheduleForm({
   onConflictRetry,
   onNavigateToWeek, // (weekStartDate) => void — FIX-08 "항목 → 주간 계획 이동"
 }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleRef = useRef(null)
   const deleteTitleId = useId()
   const deleteConfirmBtnRef = useRef(null)

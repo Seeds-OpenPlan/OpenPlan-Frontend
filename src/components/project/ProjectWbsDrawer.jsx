@@ -2,7 +2,7 @@ import { useEffect, useId, useRef } from 'react'
 import { BottomSheet } from '../common/BottomSheet'
 import { ChevronLeftIcon } from '../plan/planIcons'
 import { WbsTimeline } from './WbsTimeline'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { isTopmostOverlay, popOverlay, pushOverlay } from '../../utils/overlayStack'
 import { useProjectWbs, useUpdateProject, useUpdateTaskSchedule } from '../../features/project/useProjectData'
@@ -49,7 +49,8 @@ import { useProjectWbs, useUpdateProject, useUpdateTaskSchedule } from '../../fe
   around it) must stay scrollable while it's open.
 */
 export function ProjectWbsDrawer({ project, tasks, onClose, disabled, disabledReason }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const closeRef = useRef(null)
   const containerRef = useRef(null)

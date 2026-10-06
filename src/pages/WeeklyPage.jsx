@@ -48,6 +48,7 @@ import {
 } from '../features/plan/usePlanHistory'
 import { usePlacementDrag } from '../features/plan/usePlacementDrag'
 import { useHourScale } from '../features/plan/useHourScale'
+import { useMediaQuery } from '../hooks/useMediaQuery'
 import {
   availabilityForColumn,
   fitHourPx,
@@ -115,6 +116,11 @@ function WeeklyPage() {
 
   const [weekStartISO, setWeekStartISO] = useState(() => currentWeekStartISO())
   const [mode, setMode] = useState('focus')
+  // D4: 가로 모드(높이 360~420px대)에서는 모바일 셸의 플로팅 바들(아래
+  // floatingControlsRef/autoDraft 배너)이 쌓인 높이가 뷰포트 자체를 거의
+  // 다 차지한다 — 짧은 높이에서는 그 바들의 바닥 간격을 줄여 달력이 조금이라도
+  // 더 보이게 한다(완전히 없애지는 않는다 — 접근은 여전히 가능해야 한다).
+  const shortViewport = useMediaQuery('(max-height: 480px)')
   const [menu, setMenu] = useState({ open: false, block: null, position: null })
   const [reviewOpen, setReviewOpen] = useState(false)
 
@@ -255,9 +261,17 @@ function WeeklyPage() {
       }
       // 서브픽셀 반올림으로 1~2px이 넘쳐 스크롤바만 생기는 일이 없도록 한 숨.
       const BREATHING = 8
-      // 240px 바닥: 세로가 극단적으로 짧은 창(또는 측정 레이스)에서 달력이
+      // 바닥값: 세로가 극단적으로 짧은 창(또는 측정 레이스)에서 달력이
       // 한 줄로 찌부러지지 않게 한다. 그런 창에서는 스크롤이 생기는 게 맞다.
-      setGridMaxHeight(Math.max(240, Math.round(window.innerHeight - top - below - BREATHING)))
+      //
+      // D4: 가로 모드(360~420px대 높이)에서는 위아래로 쌓인 다른 요소들
+      // (상단바·요약줄·플로팅 바들)만으로도 240px보다 더 많이 먹어, 이 바닥값
+      // 자체가 "달력이 거의 안 보이고 페이지가 더 스크롤되는" 상태를 강제했다
+      // — 짧은 뷰포트에서는 160으로 낮춰 조금이라도 더 양보한다. 보통
+      // 높이에서는 실측값이 어차피 240을 넉넉히 넘으므로 이 분기가 결과에
+      // 영향을 주지 않는다.
+      const floor = window.matchMedia('(max-height: 480px)').matches ? 160 : 240
+      setGridMaxHeight(Math.max(floor, Math.round(window.innerHeight - top - below - BREATHING)))
     }
     measure()
     // Resize is the only thing that can move these landmarks without this
@@ -1699,7 +1713,15 @@ function WeeklyPage() {
             // 플로팅 컨트롤 줄(bottom-18, 바로 아래에서 같은 처리) 보다 더
             // 낮아지면 안 되므로 같은 inset을 함께 더한다. md는 탭바가
             // 없으니(bottom-24) 그대로.
-            className="pointer-events-none fixed bottom-[calc(9rem+env(safe-area-inset-bottom))] left-4 right-4 z-30 md:absolute md:bottom-24 md:left-6 md:right-auto md:max-w-sm"
+            // D4: 가로 모드처럼 세로가 짧을 때는 9rem(144px) 간격이 그 자체로
+            // 뷰포트의 상당 부분을 차지한다 — shortViewport에서는 6rem으로
+            // 줄인다(여전히 아래 floatingControls 줄 위로 쌓이긴 하지만 그
+            // 간격이 좁아져 달력에 조금이라도 더 높이를 돌려준다).
+            className={`pointer-events-none fixed left-4 right-4 z-30 md:absolute md:bottom-24 md:left-6 md:right-auto md:max-w-sm ${
+              shortViewport
+                ? 'bottom-[calc(6rem+env(safe-area-inset-bottom))]'
+                : 'bottom-[calc(9rem+env(safe-area-inset-bottom))]'
+            }`}
           >
             <div className="pointer-events-auto rounded-card shadow-modal">
               <AutoPlaceBar
