@@ -42,15 +42,20 @@ function Caption({ tone, children }) {
   return <p className={`mt-1 text-caption font-medium ${TONE_TEXT[tone]}`}>{children}</p>
 }
 
-function Card({ label, value, children }) {
+function Card({ label, value, children, className = '' }) {
   return (
-    <div className="rounded-card border border-border bg-surface p-4">
+    <div className={`rounded-card border border-border bg-surface p-4 ${className}`}>
       <p className="text-caption text-text-muted">{label}</p>
       <p className="mt-1 text-title font-bold text-text tabular-nums">{value}</p>
       {children}
     </div>
   )
 }
+
+// C2: 모바일(grid-cols-2)에서 3번째 카드만 둘째 줄에 혼자 남아 왼쪽 절반에
+// 치우쳐 보인다 — 그 한 장만 두 칸을 다 차지하게 해서 어색한 반쪽 줄을
+// 없앤다. md(grid-cols-3)에서는 원래대로 한 칸.
+const THIRD_CARD_CLASS = 'col-span-2 md:col-span-1'
 
 export function SummaryCards({ period, completionRate, totalEstimatedMinutes, totalActualMinutes, varianceRate }) {
   // 계약엔 avgDeviation.direction 같은 별도 필드가 없다 — varianceRate 부호로
@@ -85,7 +90,7 @@ export function SummaryCards({ period, completionRate, totalEstimatedMinutes, to
         </Caption>
       </Card>
 
-      <Card label="평균 시간 오차" value={formatSignedPercent(varianceRate ?? 0)}>
+      <Card label="평균 시간 오차" value={formatSignedPercent(varianceRate ?? 0)} className={THIRD_CARD_CLASS}>
         <Caption tone={deviationCopy.tone}>{deviationCopy.text}</Caption>
       </Card>
     </div>
@@ -98,7 +103,12 @@ export function SummaryCardsSkeleton() {
   return (
     <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
       {Array.from({ length: 3 }).map((_, i) => (
-        <div key={i} className="rounded-card border border-border p-4">
+        // 실제 카드(위 SummaryCards)와 똑같이 3번째만 모바일에서 두 칸을
+        // 차지해야 한다 — 그래야 로딩→실데이터 전환에서 레이아웃이 안 튄다.
+        <div
+          key={i}
+          className={`rounded-card border border-border p-4 ${i === 2 ? THIRD_CARD_CLASS : ''}`}
+        >
           <Skeleton width="45%" height="0.75rem" className="mb-2" />
           <Skeleton width="35%" height="1.5rem" className="mb-2" />
           <SkeletonText lines={1} />

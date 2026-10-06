@@ -2,7 +2,13 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- C3: viewport-fit=cover — Android 15+의 edge-to-edge 강제(그리고 일부
+         제스처 내비게이션 기기)에서는 WebView가 시스템 바 뒤까지 그려지므로,
+         env(safe-area-inset-*)가 실제 값을 돌려주려면 이게 있어야 한다(없으면
+         항상 0). 데스크톱/구형 Android는 영향 없음 — env()가 그냥 0으로
+         떨어진다. 실제 패딩 적용은 BottomTabBar/AppLayout/Toaster/WeeklyPage
+         쪽(각자의 C3 주석 참고). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>OpenPlan</title>
     <!-- PWA/TWA 설치 메타데이터: Bubblewrap이 빌드 입력값으로 참조한다
          (public/manifest.webmanifest, scripts/generate-icons.mjs 참고). -->

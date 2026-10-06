@@ -8,8 +8,16 @@ import { WIZARD_STEPS } from '../../features/onboarding/onboardingCopy'
   an icon-only color swap) so "done" is legible without color either.
 */
 export function OnboardingStepper({ currentIndex }) {
+  const current = WIZARD_STEPS[currentIndex]
   return (
-    <ol className="flex items-center gap-1" aria-label="온보딩 단계">
+    <>
+      {/* C1: 4단계 전부(아이콘 28px×4 + 라벨 + 연결선)를 한 줄에 늘어놓으면
+          360px 같은 좁은 폭에서 글자가 겹친다. 모바일에서는 "N/4 · 현재 단계
+          이름"만 보여 주고, 전체 단계 목록(아래 <ol>)은 md 이상에서만 편다. */}
+      <p className="text-caption font-medium text-text md:hidden" aria-live="polite">
+        {currentIndex + 1} / {WIZARD_STEPS.length} · {current?.label}
+      </p>
+      <ol className="hidden items-center gap-1 md:flex" aria-label="온보딩 단계">
       {WIZARD_STEPS.map((step, i) => {
         const isDone = i < currentIndex
         const isCurrent = i === currentIndex
@@ -42,7 +50,8 @@ export function OnboardingStepper({ currentIndex }) {
           </li>
         )
       })}
-    </ol>
+      </ol>
+    </>
   )
 }
 

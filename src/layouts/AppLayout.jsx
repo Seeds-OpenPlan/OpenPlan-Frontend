@@ -52,7 +52,13 @@ function AppLayout() {
       <MobileTopBar />
       <OfflineBanner />
 
-      <main className="mx-auto max-w-page px-page-x py-6 pb-24 md:pb-10">
+      {/* C3: pb-24(96px) was 56px bar + 40px buffer, measured from the viewport
+          bottom. BottomTabBar now grows TALLER by env(safe-area-inset-bottom)
+          on devices whose gesture bar overlaps the WebView (that file's own
+          C3 comment) — its top edge moves up by that same amount, so this
+          reservation has to grow with it or the 40px buffer silently shrinks
+          (and could let content sit under the bar on a large inset). */}
+      <main className="mx-auto max-w-page px-page-x py-6 pb-[calc(6rem+env(safe-area-inset-bottom))] md:pb-10">
         <Outlet />
       </main>
 

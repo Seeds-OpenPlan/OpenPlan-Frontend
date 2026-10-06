@@ -1693,7 +1693,13 @@ function WeeklyPage() {
         {autoDraft && (
           <div
             role="status"
-            className="pointer-events-none fixed bottom-36 left-4 right-4 z-30 md:absolute md:bottom-24 md:left-6 md:right-auto md:max-w-sm"
+            // C3: bottom-36(144px)에 env(safe-area-inset-bottom)을 더한다 —
+            // BottomTabBar(그 파일 C3 주석)가 커지는 기기에서 이 배너가 그
+            // 위로 쌓이는 간격 자체가 기준으로 삼는 "탭바 56px+16px" 아래
+            // 플로팅 컨트롤 줄(bottom-18, 바로 아래에서 같은 처리) 보다 더
+            // 낮아지면 안 되므로 같은 inset을 함께 더한다. md는 탭바가
+            // 없으니(bottom-24) 그대로.
+            className="pointer-events-none fixed bottom-[calc(9rem+env(safe-area-inset-bottom))] left-4 right-4 z-30 md:absolute md:bottom-24 md:left-6 md:right-auto md:max-w-sm"
           >
             <div className="pointer-events-auto rounded-card shadow-modal">
               <AutoPlaceBar
@@ -1734,7 +1740,12 @@ function WeeklyPage() {
             the grid they act on. */}
         <div
           ref={floatingControlsRef}
-          className="pointer-events-none fixed inset-x-4 bottom-18 z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6"
+          // C3: bottom-18(72px)에 env(safe-area-inset-bottom)을 더한다 — 이
+          // 72px은 "BottomTabBar 56px + 16px 틈"으로 정해진 값(헤더 주석)인데,
+          // 그 탭바가 제스처 영역을 피해 더 커지는 기기(BottomTabBar.jsx의 C3
+          // 주석)에서는 탭바의 새 윗경계가 이 72px보다 아래에 있지 않다는
+          // 보장이 깨진다 — 같은 inset을 더해 항상 탭바 위 16px을 유지한다.
+          className="pointer-events-none fixed inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6"
         >
           <div className="pointer-events-auto">
             {/* fix G: an undo/redo IS a block move, so it's gated the same as
