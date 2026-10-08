@@ -26,6 +26,13 @@ const delay = (ms = MOCK_LATENCY_MS) => new Promise((resolve) => setTimeout(reso
 // 다른 개발 서버 테스트도 튕기지 않는다.
 const STORAGE_KEY = 'openplan-dev.onboarding-progress'
 
+// tutorialStep/tutorialSkipped 삭제(2026-10 수정) — 이 둘은 실 계약
+// `OnboardingProgress`에 없는 필드였다(onboardingApi.js 헤더 참조). 예전엔
+// 여기서 영속해 주다 보니 dev에서만 튜토리얼이 멀쩡히 넘어가고, 실서버
+// 앞에서는 매 클릭마다 킥오프로 되돌아가는 BLOCKER가 dev 검증을 통과한 채
+// 배포까지 갔다. 이제 mock도 계약 그대로(tutorialCompleted만) 맞춰서, dev가
+// 다시 그 경로를 그대로 재현/검증할 수 있게 한다 — 스텝 커서는
+// features/tutorial/tutorialProgressStore.js가 (dev/운영 공통으로) 맡는다.
 const DEFAULT_PROGRESS = {
   onboardingCompleted: false,
   introSeen: false,
@@ -33,9 +40,6 @@ const DEFAULT_PROGRESS = {
   currentStep: 'PROFILE',
   profile: null, // { name, purpose, timezone, weekStartDay } — set by ONB-02
   tutorialCompleted: false,
-  tutorialSkipped: false,
-  // 0 = not started; 1..6 = TUT-03(생성)~08(완료) 진행 인덱스.
-  tutorialStep: 0,
   version: 1,
 }
 
