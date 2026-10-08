@@ -428,8 +428,7 @@ export function useNotificationSettings() {
  * 책임진다.
  *
  * Thomas PR 리뷰 SHOULD-FIX #1 (onSuccess 누락): PUT 응답은 서버가 부분
- * 저장을 적용한 뒤 돌려주는 5종 전체 최신값이다(saveNotificationSettings가
- * 이미 normalizeNotificationSettings를 거쳐 둠) — 그런데 onSuccess가 없어서
+ * 저장을 적용한 뒤 돌려주는 5종 전체 최신값이다 — 그런데 onSuccess가 없어서
  * 그 값을 그냥 버리고 있었다. 지금은 캐시에 반영한다. `requestId` 순번
  * 가드를 같이 두는 이유: SettingsNotificationsPage가 `save.isPending` 동안
  * 토글 전체를 disabled로 막아 겹쳐 보내는 경로 자체를 없앴지만(SHOULD-FIX
@@ -440,6 +439,17 @@ export function useNotificationSettings() {
  * 보낸" 낙관적 상태를 "더 오래된" 서버 응답이 덮어써 화면이 거꾸로 간다.
  * `latestRequestId`와 다르면 onSuccess가 그 응답을 조용히 버려 항상 "가장
  * 마지막으로 보낸 요청"만 캐시에 반영되게 한다.
+ *
+ * PR #69 AI 리뷰 Blocking 수정: `saveNotificationSettings`(settingsApi.js
+ * `parseSavedSettings`)는 이제 "알려진 5종을 전부 포함한 배열"일 때만 값을
+ * 주고, 그렇지 않으면(계약이 PUT 200 응답 본문을 보장하지 않는다 — 빈
+ * 본문·일부 누락 전부 가능) `null`을 준다. `data`가 `null`이면 캐시를
+ * 섣불리 덮어쓰지 않는다 — 이미 반영된 낙관적 값(onMutate가 쓴 값)을 그대로
+ * 둔 채 GET을 invalidate해 다음 조회가 서버 진실값으로 수렴하게 한다. 이
+ * 분기를 두지 않고 `null`을 그대로 캐시에 썼다면 이후 모든 `settings[type]`
+ * 읽기가 TypeError로 깨졌을 것이고, 빈 배열을 "켜짐 기본값"으로 메웠다면
+ * (이전 버전의 실수) 방금 끈 토글이 저장 성공 직후 다시 켜진 것처럼 보였을
+ * 것이다.
  */
 export function useSaveNotificationSettings() {
   const queryClient = useQueryClient()
@@ -461,6 +471,12 @@ export function useSaveNotificationSettings() {
       // 더 최근 요청이 이미 나갔다면 이 응답(더 오래된 요청의 응답)은 버린다
       // — 위 헤더 주석의 순번 가드.
       if (context?.requestId !== latestRequestId.current) return
+      if (data == null) {
+        // 계약이 보장하지 않는 응답(빈 본문 등) — 낙관적 값을 그대로 두고
+        // 서버 진실값을 다시 받아온다. setQueryData로 덮어쓰지 않는다.
+        queryClient.invalidateQueries({ queryKey: notificationSettingsKey() })
+        return
+      }
       queryClient.setQueryData(notificationSettingsKey(), data)
     },
     onError: (_err, _vars, context) => {

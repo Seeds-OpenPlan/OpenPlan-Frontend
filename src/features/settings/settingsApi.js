@@ -509,8 +509,10 @@ export function reactivateAccount() {
 // 배열·저장은 `{settings:[...]}`다) + 5종 키 이름(dueSoonTasks 등, 전부 서버
 // enum과 다른 이름)까지 셋 다 틀렸다. 그대로 실서버에 붙였으면 PATCH가 405,
 // GET 파싱이 전부 undefined로 떨어져 토글이 다 꺼진 것처럼 보이고 저장은
-// 아무것도 하지 않았을 것이다. 이제부터는 REAL — 이 섹션 바깥(화면·훅)은 이
-// 경계(normalizeNotificationSettings) 하나만 거치면 서버 모양을 몰라도 된다.
+// 아무것도 하지 않았을 것이다. 이제부터는 REAL — 이 섹션 바깥(화면·훅)은
+// 이 경계(GET은 normalizeNotificationSettings, PUT은 parseSavedSettings —
+// 왜 둘로 나뉘는지는 parseSavedSettings 자신의 헤더 참고)만 거치면 서버
+// 모양을 몰라도 된다.
 
 /** 계약 enum 그대로(NotificationSetting.notificationType) — 화면에 보일 순서도
  * 이 순서다. 서버가 선언 순서(enum 순)로 5건을 고정 반환하므로
@@ -523,25 +525,36 @@ export const NOTIFICATION_TYPES = [
   'SUPPORT_ANSWERED',
 ]
 
-/**
- * GET 응답 `[{ notificationType, isEnabled }, ...]`(계약 그대로, `data` 래퍼는
- * client.js가 이미 벗겨 배열만 남긴다)를 화면이 쓰기 좋은
- * `{ DEADLINE_SOON: true, ... }` 객체로 접는다 — 토글 5개가 유형별로 값을
- * 읽고 쓰므로, 매번 배열을 find()로 훑지 않게 이 경계 한 곳에서 변환한다
- * (putPreferences 섹션의 normalizePreferences와 같은 원칙).
- *
- * 서버는 최초 조회 시 5행을 기본 켜짐으로 시드하므로(컨트롤러 주석 "최초
- * 조회 시 기본 켜짐으로 시드") 정상 응답엔 다섯 키가 항상 있다. 그래도
- * `?? true`로 방어하는 이유는 mock·구버전 캐시 등 다섯 미만이 섞여 들어올
- * 경로를 막아, 누락된 유형이 "꺼짐"으로 잘못 보이는 사고를 피하기 위해서다.
- */
-function normalizeNotificationSettings(r) {
-  const list = unwrapList(r, 'settings')
+/** 배열 `[{ notificationType, isEnabled }, ...]`을 `{ TYPE: bool }` 맵으로 접는
+ * 공통 파싱부. GET 전용 정규화(아래 normalizeNotificationSettings)와 PUT 전용
+ * 엄격 파싱(아래 parseSavedSettings) 둘 다 이 맵 만들기 로직을 공유한다 —
+ * "누락 유형을 뭘로 채울지"만 호출부마다 다르다(PR #69 AI 리뷰 Blocking
+ * 대응으로 분리했다, 아래 parseSavedSettings 헤더 참고). */
+function toByTypeMap(list) {
   const byType = {}
   for (const item of list) {
     const type = item?.notificationType ?? item?.notification_type
     if (type) byType[type] = Boolean(item?.isEnabled ?? item?.is_enabled)
   }
+  return byType
+}
+
+/**
+ * GET 응답(계약 그대로, `data` 래퍼는 client.js가 이미 벗겨 배열만 남긴다)을
+ * 화면이 쓰기 좋은 `{ DEADLINE_SOON: true, ... }` 객체로 접는다 — 토글 5개가
+ * 유형별로 값을 읽고 쓰므로, 매번 배열을 find()로 훑지 않게 이 경계 한 곳에서
+ * 변환한다(putPreferences 섹션의 normalizePreferences와 같은 원칙).
+ *
+ * 서버는 최초 조회 시 5행을 기본 켜짐으로 시드하므로(컨트롤러 주석 "최초
+ * 조회 시 기본 켜짐으로 시드") 정상 응답엔 다섯 키가 항상 있다. 그래도
+ * `?? true`로 방어하는 이유는 mock·구버전 캐시 등 다섯 미만이 섞여 들어올
+ * 경로를 막아, 누락된 유형이 "꺼짐"으로 잘못 보이는 사고를 피하기 위해서다.
+ *
+ * 이 `?? true` 기본값은 **GET 전용**이다 — PUT 응답엔 적용하지 않는다(아래
+ * parseSavedSettings 헤더 참고, PR #69 AI 리뷰 Blocking).
+ */
+function normalizeNotificationSettings(r) {
+  const byType = toByTypeMap(unwrapList(r, 'settings'))
   return NOTIFICATION_TYPES.reduce((acc, type) => {
     acc[type] = byType[type] ?? true
     return acc
@@ -557,6 +570,33 @@ export function getNotificationSettings() {
 }
 
 /**
+ * PUT 응답 전용 파싱 — GET과 달리 "누락 유형을 켜짐으로 채우는" 방어를
+ * 하지 않는다. 이유(PR #69 AI 리뷰 Blocking): 계약(openapi.yaml:894-912
+ * `put:` → `responses: "200": { description: 저장 완료 }`)엔 응답 **본문
+ * 스키마 자체가 없다** — 몸체가 있다는 보장이 없다는 뜻이다(실제 BE
+ * `NotificationController.saveSettings`는 5종 전체를 돌려주지만, 계약에
+ * 없는 동작에 의존하면 BE가 몸체를 비우는 변경만으로도 FE가 깨진다). 응답이
+ * 비어 있을 때(`unwrapList`가 `[]`) `?? true`로 채웠다면 5종이 전부 켜짐으로
+ * 보여 방금 끈 토글이 저장 성공 직후 다시 켜지는 사고가 난다.
+ *
+ * 그래서 "알려진 5종을 전부 포함한 배열"일 때만 그 값을 돌려주고, 그렇지
+ * 않으면(빈 배열·비배열·일부 누락) `null`을 돌려준다 — 호출부
+ * (useSaveNotificationSettings.onSuccess)가 `null`을 보면 캐시를 덮어쓰지
+ * 않고 낙관적 값을 유지한 채 GET을 invalidate해 서버 진실값으로 수렴시킨다.
+ *
+ * dev mock에서 "PUT이 빈 본문을 준다"를 흉내 내려면 settingsFixtures.js의
+ * `saveNotificationSettings`가 임시로 `{}`나 `{ settings: [] }`를 반환하게
+ * 바꿔 보면 된다(이 파일 자체는 손대지 않아도 재현 가능).
+ */
+function parseSavedSettings(r) {
+  const list = unwrapList(r, 'settings')
+  if (!Array.isArray(list) || list.length === 0) return null
+  const byType = toByTypeMap(list)
+  const hasAllTypes = NOTIFICATION_TYPES.every((type) => type in byType)
+  return hasAllTypes ? byType : null
+}
+
+/**
  * PUT /users/me/notification-settings (PATCH 아님) — body
  * `{ settings: [{ notificationType, isEnabled }, ...] }`.
  *
@@ -566,11 +606,15 @@ export function getNotificationSettings() {
  * 누를 때도 다섯 행 전부를 다시 보낼 필요가 없다. 마스터 토글(화면 전용,
  * SettingsNotificationsPage 헤더 참고)은 이 함수를 5개짜리 배열로 한 번
  * 호출해 같은 경계를 그대로 탄다 — 별도 엔드포인트나 모양을 만들지 않는다.
+ *
+ * 반환값은 `normalizeNotificationSettings`가 아니라 `parseSavedSettings`를
+ * 거친다 — PUT 응답은 계약상 보장되지 않으므로 완전한 5종 배열일 때만 값을
+ * 돌려주고, 그렇지 않으면 `null`(위 parseSavedSettings 헤더 참고).
  */
 export function saveNotificationSettings(changes) {
   const body = { settings: changes.map(({ type, enabled }) => ({ notificationType: type, isEnabled: enabled })) }
   return withDevFallback(
     () => apiClient.put('/users/me/notification-settings', body),
     async () => (await loadSettingsMock()).saveNotificationSettings(changes),
-  ).then(normalizeNotificationSettings)
+  ).then(parseSavedSettings)
 }
