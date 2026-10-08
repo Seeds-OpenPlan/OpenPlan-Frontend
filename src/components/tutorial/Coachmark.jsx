@@ -159,20 +159,31 @@ export function Coachmark({ targetId, title, body, stepNumber, total, isLast, on
 
   // Move focus/SR-announce to the new step's heading, same reasoning
   // ErrorState's `page` variant gives for doing the same on mount — EXCEPT
-  // while a modal is open (nothing to steal focus from in this component's
-  // OWN tree in that case; the modal already owns it) or while the user is
-  // actively editing some other on-page input that never registers on the
-  // overlay stack at all (e.g. WeeklyPage's own inline add-schedule popover
-  // for TUT-06/07 — not a Dialog/BottomSheet). Stealing focus out from under
-  // either would cut off whatever the user was mid-typing (owner report).
+  // while the user is actively editing some other on-page input that never
+  // registers on the overlay stack at all (e.g. WeeklyPage's own inline
+  // add-schedule popover for TUT-06/07 — not a Dialog/BottomSheet). Stealing
+  // focus out from under it would cut off whatever the user was mid-typing
+  // (owner report).
+  //
+  // Keyed ONLY on `title` (Thomas code review NIT, fixed 2026-10) — NOT
+  // `modalOpen`. An earlier version also depended on `modalOpen` so it could
+  // skip focusing while a modal was open, but a dependency re-runs the effect
+  // on EITHER edge, not just the one it was written for: the moment the
+  // user's form modal CLOSED (modalOpen true→false, same `title`, nothing
+  // about the step changed), this fired again and yanked focus back onto the
+  // coachmark heading right after the user had just finished dealing with
+  // their own form. No explicit `modalOpen` check is needed for the
+  // modal-open case either: this component returns null while a modal is
+  // open (render guard below), which unmounts the heading and resets
+  // `headingRef.current` to null before any effect runs, so `.focus()`
+  // already no-ops there with no extra guard.
   useEffect(() => {
-    if (modalOpen) return
     const active = document.activeElement
     const isEditing =
       active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)
     if (isEditing) return
     headingRef.current?.focus()
-  }, [title, modalOpen])
+  }, [title])
 
   // Fixed 320px reads fine on desktop/tablet widths but overflows a narrow
   // phone (e.g. a 360px-wide viewport leaves only 20px on each side once
