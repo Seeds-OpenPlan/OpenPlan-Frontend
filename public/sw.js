@@ -57,3 +57,86 @@ self.addEventListener('fetch', (event) => {
     fetch(request).catch(() => caches.match(OFFLINE_URL).then((cached) => cached ?? Response.error())),
   )
 })
+
+// ──────────────────────────────────────────────────────────────────────────
+// 푸시 알림 (ADR-0015 — 안드로이드 앱 전용 "시작 10분 전" 알림).
+//
+// 위 fetch/install/activate는 TWA 설치 요건(Bubblewrap)과 내비게이션 캐싱
+// 정책을 위한 것이고, 이 아래 두 핸들러는 그와 **완전히 독립된 관심사**다 —
+// 캐시 이름(CACHE_NAME)이나 OFFLINE_URL을 전혀 참조하지 않는다. 서버
+// 발송기(1분 주기)가 Web Push 프로토콜로 보낸 payload를 받아 OS 알림으로
+// 띄우는 것과, 그 알림을 탭했을 때 앱 화면으로 보내는 것 두 가지만 한다.
+// ──────────────────────────────────────────────────────────────────────────
+
+self.addEventListener('push', (event) => {
+  // payload가 없는 푸시(일부 브라우저의 "빈 알림으로 깨우기"용 핑)는 보여줄
+  // 내용이 없으므로 그대로 무시한다 — 서버는 항상 JSON을 싣지만, 방어적으로
+  // 비워 둔다.
+  if (!event.data) return
+
+  // JSON 파싱 실패(서버 payload 형식이 바뀌었거나 손상된 경우)는 조용히
+  // 삼킨다 — 여기서 던지면 이 이벤트 전체가 처리되지 않은 push로 남아
+  // 브라우저가 재시도하거나 경고를 띄울 수 있다. 알림 하나를 못 띄우는 것이
+  // 서비스워커를 깨뜨리는 것보다 낫다.
+  let payload
+  try {
+    payload = event.data.json()
+  } catch {
+    return
+  }
+
+  const { title, body, url, tag } = payload
+  // title이 없으면 showNotification 자체가 거부된다 — 서버가 항상 title을
+  // 싣지만, 방어적으로 제목 없는 호출을 막아 둔다.
+  if (!title) return
+
+  // tag를 넣는 이유: 같은 대상(같은 태스크·고정 일정 회차 등)에 대해 서버가
+  // 중복 발송을 DB UNIQUE로 막아도(ADR 결정 ③) 알림 센터에는 여러 발송기
+  // 회차의 알림이 쌓일 수 있다 — 같은 tag를 가진 이전 알림을 새 알림이
+  // 자동으로 교체하게 해, 기기 알림 목록이 같은 일로 여러 줄 쌓이지 않게
+  // 한다. 서버가 tag를 안 보내면(이전 계약) undefined로 전달돼 OS가 매번
+  // 새 알림으로 쌓는다 — 그 쪽이 기존 동작이라 안전한 기본값이다.
+  //
+  // url은 showNotification의 `data`에 실어 두고, 실제 이동은 아래
+  // notificationclick에서 처리한다 — showNotification 자체에는 클릭 동작을
+  // 지정하는 표준 옵션이 없다.
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      tag,
+      data: { url },
+      // manifest.webmanifest의 PWA 아이콘을 그대로 쓴다 — 알림 전용 아이콘을
+      // 새로 만들지 않는다. TWA에서는 Bubblewrap이 enableNotifications:
+      // true로 이 알림을 크롬이 아니라 앱 이름·아이콘으로 띄운다(ADR 결정
+      // ⑤) — 이 icon 값은 TWA가 아닌 환경(일반 브라우저 알림)에서만 실제로
+      // 쓰인다.
+      icon: '/icons/icon-192.png',
+    }),
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  const url = event.notification.data?.url ?? '/'
+  // 알림을 닫는 것도 waitUntil 안에서 해야 한다 — 클릭 핸들러가 비동기로
+  // 끝나기 전에 브라우저가 이벤트를 "처리 완료"로 보고 서비스워커를 재울
+  // 수 있다(알림이 화면에 남아 있는 채로).
+  event.notification.close()
+
+  event.waitUntil(
+    (async () => {
+      const clientsList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      // 이미 열려 있는 탭이 있으면 새 탭을 띄우지 않고 그 탭을 포커스 +
+      // 이동시킨다 — TWA는 보통 탭이 하나뿐이라 이 경로가 거의 항상 맞고,
+      // 여러 탭을 띄우는 동작은 "알림 하나 눌렀는데 창이 늘어난다"는 혼란을
+      // 준다. 같은 오리진이면 되고 정확히 같은 경로일 필요는 없다 — 알림이
+      // 가리키는 화면으로 그 탭을 이동시키는 것이 목적이다.
+      const sameOrigin = clientsList.find((c) => new URL(c.url).origin === self.location.origin)
+      if (sameOrigin) {
+        await sameOrigin.focus()
+        if ('navigate' in sameOrigin) await sameOrigin.navigate(url)
+        return
+      }
+      await self.clients.openWindow(url)
+    })(),
+  )
+})

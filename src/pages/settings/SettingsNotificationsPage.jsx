@@ -1,6 +1,7 @@
 import { Toggle } from '../../components/common/Toggle'
 import { LoadingSkeleton } from '../../components/common/LoadingSkeleton'
 import { ErrorState } from '../../components/common/ErrorState'
+import { PushNotificationSection } from '../../components/settings/PushNotificationSection'
 import { useNotificationSettings, usePatchNotificationSetting } from '../../features/settings/useSettings'
 
 // 5종 — key(서버 필드명) · label · description. 순서가 화면에 그대로 나온다.
@@ -80,6 +81,14 @@ function SettingsNotificationsPage() {
           </li>
         ))}
       </ul>
+      {/*
+        ADR-0015 — 안드로이드 앱(TWA) 전용 푸시 섹션. 위 5종 인앱 토글과는
+        별도 리소스(/users/me/push-settings)라 masterEnabled 게이트와
+        무관하게 독립적으로 보인다. 웹에서는 PushNotificationSection 자신이
+        아무것도 그리지 않는다(컴포넌트 헤더 참조) — 이 페이지는 조건을
+        중복으로 검사하지 않는다.
+      */}
+      <PushNotificationSection />
     </div>
   )
 }

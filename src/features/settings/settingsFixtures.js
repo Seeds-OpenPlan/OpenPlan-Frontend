@@ -144,6 +144,26 @@ let notificationSettings = {
   weeklyReminder: true, // 주간 계획 작성 리마인더
 }
 
+// --- 푸시 (ADR-0015, dev mock) ----------------------------------------------------
+// ADR 결정 ⑥ 기본값 그대로 — 셋 다 꺼짐으로 시작한다. 이 mock은 BE 발송기
+// 자체를 흉내내지 않는다(그건 서버 몫) — FE가 왕복하는 세 호출(설정 조회/저장·
+// 구독 생성)만 흉내낸다.
+let pushSettings = {
+  taskEnabled: false,
+  fixedScheduleEnabled: false,
+  scheduleEnabled: false,
+}
+
+// dev에서 VAPID 키가 항상 "준비됨"으로 보이게 하는 더미 값 — 실제 서명에는
+// 쓰이지 않는다(mock은 발송 자체를 하지 않으므로 형식만 base64url이면 된다).
+// 길이를 실제 P-256 압축되지 않은 공개키(65바이트 raw → base64url)와 비슷하게
+// 맞춰 둔 것은, urlBase64ToUint8Array 디코드 경로를 dev에서도 실제로 밟기
+// 위함이다.
+const DEV_VAPID_PUBLIC_KEY =
+  'BDd3_hVL9fZi9Ybo2UUzA284WG5FZR30_95YLw7I9t4KdDAfWFbNvdFH4-9VSmHjBRfc1BVeK73MD7qUGK73Cos'
+
+const pushSubscriptions = new Map() // endpoint -> payload (dev 재시작 전까지만 유지)
+
 export const mockBackend = {
   // GET /users/me/preferences — 세 필드(기본 예상 시간·기본 재계획 전략·가용
   // 시간)를 한 번에 돌려준다. settingsApi.getWeeklyAvailableMinutes는 이
@@ -397,6 +417,42 @@ export const mockBackend = {
     await delay()
     notificationSettings = { ...notificationSettings, [key]: enabled }
     return { ...notificationSettings }
+  },
+
+  async getPushSettings() {
+    await delay(60)
+    return { ...pushSettings }
+  },
+
+  // PUT 전체 교체 — settingsApi.updatePushSettings가 항상 세 필드를 다 실어
+  // 보내므로(read-modify-write는 호출부가 아니라 settingsApi 쪽에서 하지 않고,
+  // PushNotificationSection이 현재 캐시값 위에 바뀐 키만 얹어 보낸다) mock도
+  // 받은 그대로 갈아 끼운다.
+  async updatePushSettings(body) {
+    await delay()
+    pushSettings = { ...body }
+    return { ...pushSettings }
+  },
+
+  // 실 서버는 VAPID 키가 .env에 없으면 publicKey: null을 돌려준다(ADR 결정 ⑤)
+  // — dev mock은 항상 "준비됨"으로 둬서 섹션의 정상 경로를 기본으로 시연한다.
+  async getVapidPublicKey() {
+    await delay(60)
+    return { publicKey: DEV_VAPID_PUBLIC_KEY }
+  },
+
+  // endpoint UNIQUE — 같은 기기가 다시 POST해도(재동기화) 새 행이 아니라
+  // upsert다(ADR 결정 ④). Map 키를 endpoint로 둬서 이 동작을 그대로 흉내낸다.
+  async createPushSubscription(subscription) {
+    await delay()
+    pushSubscriptions.set(subscription.endpoint, { ...subscription })
+    return { endpoint: subscription.endpoint }
+  },
+
+  async deletePushSubscription(endpoint) {
+    await delay()
+    pushSubscriptions.delete(endpoint)
+    return { endpoint }
   },
 }
 

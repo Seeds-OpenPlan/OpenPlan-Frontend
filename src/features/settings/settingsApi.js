@@ -520,3 +520,71 @@ export function patchNotificationSetting(key, enabled) {
     async () => (await loadSettingsMock()).patchNotificationSetting(key, enabled),
   )
 }
+
+// --- 푸시 (ADR-0015 — 안드로이드 앱 전용, 시작 10분 전 알림) -----------------------
+//
+// 위 알림(notification-settings) 섹션과 리소스를 섞지 않는다 — ADR 결정 ⑥:
+// 인앱은 "무엇을 알림 센터에 쌓을지", 푸시는 "무엇을 기기로 보낼지"로 대상·축이
+// 다르다. 호출부(PushNotificationSection)는 반드시 isAndroidAppShell()이 참일
+// 때만 이 함수들을 부른다 — 서버도 구독 생성 시 `platform` 값을 보지만, 완전한
+// 차단은 FE 쪽 책임이다(ADR 결정 ④ 끝 문단).
+
+/** GET /users/me/push-settings → `{ taskEnabled, fixedScheduleEnabled, scheduleEnabled }`.
+ * 행이 없는 사용자(아직 한 번도 설정한 적 없음)는 서버가 셋 다 false로 돌려준다
+ * (ADR 결정 ⑥ "행이 없으면 전부 꺼짐"). */
+export function getPushSettings() {
+  return withDevFallback(
+    () => apiClient.get('/users/me/push-settings'),
+    async () => (await loadSettingsMock()).getPushSettings(),
+  )
+}
+
+/** PUT /users/me/push-settings — 세 필드 전체 교체. 호출부가 항상 현재 캐시
+ * 값에 바뀐 한 키만 얹어 세 필드를 다 실어 보낸다(위 preferences의
+ * read-modify-write와 같은 이유 — PUT은 빠진 필드를 지운다). */
+export function updatePushSettings(settings) {
+  return withDevFallback(
+    () => apiClient.put('/users/me/push-settings', settings),
+    async () => (await loadSettingsMock()).updatePushSettings(settings),
+  )
+}
+
+/**
+ * GET /push/vapid-public-key → `{ publicKey }`(base64url) 또는 서버 VAPID 키가
+ * 아직 `.env`에 없을 때 `{ publicKey: null }`(ADR 결정 ⑤ — "셋 중 하나라도
+ * 비면 발송기는 아무것도 하지 않는다"의 FE쪽 거울). `publicKey: null`은 오류가
+ * 아니다 — 호출부는 이 경우 섹션을 비활성 안내로만 보여주고 구독을 시도하지
+ * 않는다.
+ */
+export function getVapidPublicKey() {
+  return withDevFallback(
+    () => apiClient.get('/push/vapid-public-key'),
+    async () => (await loadSettingsMock()).getVapidPublicKey(),
+  )
+}
+
+/**
+ * POST /users/me/push-subscriptions. `endpoint` UNIQUE라 같은 기기에서 다시
+ * 불러도 서버가 upsert로 받는다(ADR 결정 ④) — 그래서 호출부가 페이지 로드마다
+ * "이미 구독돼 있나"를 묻지 않고 그냥 다시 POST해도 안전하다(재설치·키 회전
+ * 재동기화).
+ */
+export function createPushSubscription(subscription) {
+  return withDevFallback(
+    () => apiClient.post('/users/me/push-subscriptions', subscription),
+    async () => (await loadSettingsMock()).createPushSubscription(subscription),
+  )
+}
+
+/** DELETE /users/me/push-subscriptions body `{ endpoint }`. axios DELETE는
+ * body를 `config.data`로 실어야 한다 — 두 번째 인자에 바로 객체를 넘기면
+ * query string으로 붙어버려 서버가 못 읽는다. 지금은 아무 호출부도 쓰지
+ * 않는다(모든 토글 OFF여도 구독은 남긴다 — PushNotificationSection 헤더의
+ * "비용" 설명 참조) — 구독 자체를 끝내야 하는 경로(로그아웃·앱 삭제 감지 등)가
+ * 생기면 이 함수를 그대로 쓴다. */
+export function deletePushSubscription(endpoint) {
+  return withDevFallback(
+    () => apiClient.delete('/users/me/push-subscriptions', { data: { endpoint } }),
+    async () => (await loadSettingsMock()).deletePushSubscription(endpoint),
+  )
+}

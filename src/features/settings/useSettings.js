@@ -39,6 +39,9 @@ import {
   reactivateAccount,
   getNotificationSettings,
   patchNotificationSetting,
+  getPushSettings,
+  updatePushSettings,
+  getVapidPublicKey,
 } from './settingsApi'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
@@ -442,5 +445,41 @@ export function usePatchNotificationSetting() {
       }
       toast({ tone: 'error', message: systemMessages.error.writeTitle })
     },
+  })
+}
+
+// --- 푸시 (ADR-0015) -------------------------------------------------------------
+
+export const pushSettingsKey = () => ['pushSettings']
+export const vapidPublicKeyKey = () => ['vapidPublicKey']
+
+export function usePushSettings() {
+  return useQuery({ queryKey: pushSettingsKey(), queryFn: getPushSettings })
+}
+
+/** VAPID 공개키는 배포 동안 바뀌지 않는다(서버 .env 값) — `staleTime: Infinity`로
+ * 세션 안에서 한 번만 받는다. 조회 실패·`publicKey: null` 둘 다 호출부
+ * (PushNotificationSection)가 "아직 쓸 수 없음"으로 같이 처리하므로 여기서
+ * retry를 늘려 재시도 폭주를 만들지 않는다(default retry 그대로 — 즉 실패해도
+ * 한 번 더 조용히 시도하는 정도). */
+export function useVapidPublicKey() {
+  return useQuery({ queryKey: vapidPublicKeyKey(), queryFn: getVapidPublicKey, staleTime: Infinity })
+}
+
+/**
+ * PUT 전체 교체 — 토글 하나를 누르면 호출부가 캐시의 현재 세 필드 위에 그 키만
+ * 바꿔 통째로 보낸다. 위 알림(usePatchNotificationSetting)과 달리 **optimistic
+ * 업데이트를 하지 않는다**(팀장 지시, ADR-0015 작업 지시서의 명시 요구): 토글을
+ * 켤 때는 구독 생성(권한 요청 → PushManager.subscribe → POST)이 먼저 끝나야
+ * 하므로, 그 전에 스위치를 낙관적으로 먼저 넘기면 "권한 거부로 되돌림"이 눈에
+ * 거슬리게 깜빡인다. 대신 호출부가 `isPending`으로 저장 중 상태를 보여주고,
+ * 성공해야 스위치가 넘어간다.
+ */
+export function useUpdatePushSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: updatePushSettings,
+    onSuccess: (data) => queryClient.setQueryData(pushSettingsKey(), data),
+    onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
 }
