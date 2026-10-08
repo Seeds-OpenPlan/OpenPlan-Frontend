@@ -606,6 +606,10 @@ function parseSavedSettings(r) {
  * 누를 때도 다섯 행 전부를 다시 보낼 필요가 없다. 마스터 토글(화면 전용,
  * SettingsNotificationsPage 헤더 참고)은 이 함수를 5개짜리 배열로 한 번
  * 호출해 같은 경계를 그대로 탄다 — 별도 엔드포인트나 모양을 만들지 않는다.
+ * (PR #69 AI 재리뷰 "확인 필요": 부분 저장이라는 전제는 BE
+ * `NotificationController.saveSettings`의 `@Operation` summary "알림 설정
+ * 저장 (NOTI-01) — 보낸 유형만 반영(부분 저장)"과 `NotificationSettingService
+ * .saveSettings` 구현(요청에 담긴 유형만 `changeEnabled` 호출)으로 확인했다.)
  *
  * 반환값은 `normalizeNotificationSettings`가 아니라 `parseSavedSettings`를
  * 거친다 — PUT 응답은 계약상 보장되지 않으므로 완전한 5종 배열일 때만 값을

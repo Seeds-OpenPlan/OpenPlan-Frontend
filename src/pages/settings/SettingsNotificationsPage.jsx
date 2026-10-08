@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { Toggle } from '../../components/common/Toggle'
 import { LoadingSkeleton } from '../../components/common/LoadingSkeleton'
 import { ErrorState } from '../../components/common/ErrorState'
@@ -67,10 +68,34 @@ const NOTIFICATION_ITEMS = [
   수십~수백ms 안에 오므로(mock 70ms, 실서버도 단순 upsert) 깜빡임이 거슬릴
   정도로 길게 잠기지는 않는다 — 다른 설정 화면들(SettingsDefaultsPage 등)도
   이미 `mutation.isPending` 동안 저장 버튼을 잠그는 같은 관례를 쓴다.
+
+  동기 ref 가드 (PR #69 AI 재리뷰 Should-fix ③). 위 `disabled={save.isPending}`
+  는 React 상태라 "클릭 → 그 상태가 리렌더로 DOM에 반영"되기까지 한 틱의
+  틈이 있다 — 그 틈 안에서 두 번째 클릭(예: 개별 토글 직후 곧바로 마스터
+  토글)이 들어오면 여전히 두 PUT이 겹쳐 날아갈 수 있다(useSettings.js의
+  requestId/pendingCount 가드가 그 결과를 안전하게 수습하긴 하지만, 애초에
+  겹치지 않는 편이 낫다). `isSavingRef`는 React 상태가 아니라 일반 변수라
+  리렌더를 기다리지 않고 그 자리에서 즉시 참/거짓이 바뀐다 — `guardedSave`가
+  이 ref를 "클릭 즉시" 확인해 이미 하나가 나가 있으면 새 호출 자체를 아예
+  만들지 않는다(mutate를 호출하지 않음 — 네트워크에 두 번째 요청이 생성되지
+  않는다). `mutate()`의 두 번째 인자(call-level 콜백)로 ref를 되돌리는 이유는
+  훅 레벨 onSettled(useSettings.js)와는 독립적으로, "이 호출 하나"가
+  끝나는 시점만 보면 되기 때문이다.
 */
 function SettingsNotificationsPage() {
   const query = useNotificationSettings()
   const save = useSaveNotificationSettings()
+  const isSavingRef = useRef(false)
+
+  const guardedSave = (changes) => {
+    if (isSavingRef.current) return
+    isSavingRef.current = true
+    save.mutate(changes, {
+      onSettled: () => {
+        isSavingRef.current = false
+      },
+    })
+  }
 
   if (query.isLoading) return <LoadingSkeleton preset="listRow" count={6} />
   if (query.isError) return <ErrorState variant="section" onAction={() => query.refetch()} />
@@ -90,7 +115,7 @@ function SettingsNotificationsPage() {
   const allOn = NOTIFICATION_TYPES.every(isOn)
 
   const handleMasterToggle = (next) => {
-    save.mutate(NOTIFICATION_TYPES.map((type) => ({ type, enabled: next })))
+    guardedSave(NOTIFICATION_TYPES.map((type) => ({ type, enabled: next })))
   }
 
   // 저장 중엔 전체(마스터 포함) 잠금 — 위 파일 헤더 "PENDING 중 전체 잠금"
@@ -119,7 +144,7 @@ function SettingsNotificationsPage() {
           <li key={item.type} className="border-b border-border px-4 py-3 last:border-b-0">
             <Toggle
               checked={isOn(item.type)}
-              onChange={(next) => save.mutate([{ type: item.type, enabled: next }])}
+              onChange={(next) => guardedSave([{ type: item.type, enabled: next }])}
               label={item.label}
               description={item.description}
               showStateText
