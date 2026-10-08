@@ -1,9 +1,11 @@
 /*
-  OP functions for the ST-F1-12 설정 screens. 계정(account, deactivate 제외)·
-  알림(notification-settings)은 여전히 07 API 명세서에 없는 [가정-확장]이다
-  (개별 플래그, 일방적 확정 아님). **연동(connections)·기본값+가용 시간
-  (preferences)·계정 비활성화는 예외** — W6(2026-08-23)에 그 계약들이 확정돼
-  [가정-확장] 딱지를 뗐다(각 섹션 자신의 헤더 코멘트 참조).
+  OP functions for the ST-F1-12 설정 screens. 계정(account, deactivate 제외)은
+  여전히 07 API 명세서에 없는 [가정-확장]이다 (개별 플래그, 일방적 확정 아님).
+  **연동(connections)·기본값+가용 시간(preferences)·계정 비활성화·알림
+  (notification-settings)은 예외** — 연동/기본값/계정 비활성화는 W6
+  (2026-08-23)에, 알림은 2026-10-08 계약 대조(origin/main openapi.yaml:876/2614,
+  NotificationController/Service)에 그 계약들이 확정돼 [가정-확장] 딱지를
+  뗐다(각 섹션 자신의 헤더 코멘트 참조).
 
   가용 시간 범위·고정 일정·주차 예외 already have a REAL contract
   (ST-B1-09/ST-B2-12/13) and are NOT re-declared here — screens read those
@@ -499,24 +501,76 @@ export function reactivateAccount() {
   )
 }
 
-// --- 알림 (NOTI-01) -----------------------------------------------------------------
+// --- 알림 (NOTI-01, 확정 계약 — origin/main openapi.yaml:876 /users/me/notification-settings,
+// NotificationSetting 스키마 :2614) ---------------------------------------------------
+//
+// 🔴 2026-10-08 계약 대조 수정: 이 섹션은 전에 [가정-확장]으로 작성돼 실제
+// 계약과 전혀 다른 모양을 썼다 — PATCH(아님, PUT이다) + 단건 객체(아님, 조회는
+// 배열·저장은 `{settings:[...]}`다) + 5종 키 이름(dueSoonTasks 등, 전부 서버
+// enum과 다른 이름)까지 셋 다 틀렸다. 그대로 실서버에 붙였으면 PATCH가 405,
+// GET 파싱이 전부 undefined로 떨어져 토글이 다 꺼진 것처럼 보이고 저장은
+// 아무것도 하지 않았을 것이다. 이제부터는 REAL — 이 섹션 바깥(화면·훅)은 이
+// 경계(normalizeNotificationSettings) 하나만 거치면 서버 모양을 몰라도 된다.
 
-/** GET /users/me/notification-settings ([가정-확장]). */
+/** 계약 enum 그대로(NotificationSetting.notificationType) — 화면에 보일 순서도
+ * 이 순서다. 서버가 선언 순서(enum 순)로 5건을 고정 반환하므로
+ * (NotificationSettingService.getSettings 주석) 화면 쪽에서 다시 정렬할 필요가 없다. */
+export const NOTIFICATION_TYPES = [
+  'DEADLINE_SOON',
+  'TODAY_TASKS',
+  'PLAN_UNSAVED',
+  'RETROSPECT',
+  'SUPPORT_ANSWERED',
+]
+
+/**
+ * GET 응답 `[{ notificationType, isEnabled }, ...]`(계약 그대로, `data` 래퍼는
+ * client.js가 이미 벗겨 배열만 남긴다)를 화면이 쓰기 좋은
+ * `{ DEADLINE_SOON: true, ... }` 객체로 접는다 — 토글 5개가 유형별로 값을
+ * 읽고 쓰므로, 매번 배열을 find()로 훑지 않게 이 경계 한 곳에서 변환한다
+ * (putPreferences 섹션의 normalizePreferences와 같은 원칙).
+ *
+ * 서버는 최초 조회 시 5행을 기본 켜짐으로 시드하므로(컨트롤러 주석 "최초
+ * 조회 시 기본 켜짐으로 시드") 정상 응답엔 다섯 키가 항상 있다. 그래도
+ * `?? true`로 방어하는 이유는 mock·구버전 캐시 등 다섯 미만이 섞여 들어올
+ * 경로를 막아, 누락된 유형이 "꺼짐"으로 잘못 보이는 사고를 피하기 위해서다.
+ */
+function normalizeNotificationSettings(r) {
+  const list = unwrapList(r, 'settings')
+  const byType = {}
+  for (const item of list) {
+    const type = item?.notificationType ?? item?.notification_type
+    if (type) byType[type] = Boolean(item?.isEnabled ?? item?.is_enabled)
+  }
+  return NOTIFICATION_TYPES.reduce((acc, type) => {
+    acc[type] = byType[type] ?? true
+    return acc
+  }, {})
+}
+
+/** GET /users/me/notification-settings — 확정 계약. */
 export function getNotificationSettings() {
   return withDevFallback(
     () => apiClient.get('/users/me/notification-settings'),
     async () => (await loadSettingsMock()).getNotificationSettings(),
-  )
+  ).then(normalizeNotificationSettings)
 }
 
 /**
- * PATCH /users/me/notification-settings ([가정-확장]). One key per call —
- * matches AC "5종 토글 즉시 저장" (each switch commits on its own, no separate
- * save button/batch).
+ * PUT /users/me/notification-settings (PATCH 아님) — body
+ * `{ settings: [{ notificationType, isEnabled }, ...] }`.
+ *
+ * `changes`는 바뀐 유형만 담은 배열이다 — 서버가 "보낸 유형만 반영"하는
+ * 부분 저장이라서(SaveNotificationSettingsRequest 자신의 헤더 — "5행 전량을
+ * 요구하면 화면이 토글 하나를 바꿀 때도 전체를 재전송해야 한다"), 토글 하나를
+ * 누를 때도 다섯 행 전부를 다시 보낼 필요가 없다. 마스터 토글(화면 전용,
+ * SettingsNotificationsPage 헤더 참고)은 이 함수를 5개짜리 배열로 한 번
+ * 호출해 같은 경계를 그대로 탄다 — 별도 엔드포인트나 모양을 만들지 않는다.
  */
-export function patchNotificationSetting(key, enabled) {
+export function saveNotificationSettings(changes) {
+  const body = { settings: changes.map(({ type, enabled }) => ({ notificationType: type, isEnabled: enabled })) }
   return withDevFallback(
-    () => apiClient.patch('/users/me/notification-settings', { [key]: enabled }),
-    async () => (await loadSettingsMock()).patchNotificationSetting(key, enabled),
-  )
+    () => apiClient.put('/users/me/notification-settings', body),
+    async () => (await loadSettingsMock()).saveNotificationSettings(changes),
+  ).then(normalizeNotificationSettings)
 }

@@ -38,7 +38,7 @@ import {
   deactivateAccount,
   reactivateAccount,
   getNotificationSettings,
-  patchNotificationSetting,
+  saveNotificationSettings,
 } from './settingsApi'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
@@ -401,7 +401,7 @@ export function useReactivateAccount() {
   })
 }
 
-// --- 알림 (NOTI-01) -------------------------------------------------------------------
+// --- 알림 (NOTI-01, 확정 계약) --------------------------------------------------------
 
 export const notificationSettingsKey = () => ['notificationSettings']
 
@@ -411,34 +411,42 @@ export function useNotificationSettings() {
 
 /**
  * Each toggle saves itself immediately (AC "5종 토글 즉시 저장") — optimistic,
- * same shape as useSaveAvailability: write the flipped value synchronously so
- * the switch never visibly lags behind the click, roll back on failure.
+ * same shape as useSaveAvailability: write the flipped value(s) synchronously
+ * so the switch never visibly lags behind the click, roll back on failure.
  *
- * Thomas 리뷰 MEDIUM fix: rollback restores ONLY the failed toggle's OWN key,
- * not the whole cached object. The previous version snapshotted the entire
- * notificationSettings object in onMutate and restored that whole snapshot on
- * error — two toggles flipped quickly (both optimistic, both landed in the
- * cache) where the SECOND one fails would restore the pre-FIRST-toggle
- * snapshot, silently reverting the first toggle's already-succeeded change
- * too. Snapshotting just `prevValue = curr?.[key]` and restoring only that
- * one field makes each toggle's rollback independent of any other toggle's
- * concurrent mutation.
+ * `changes`는 `{ type, enabled }` 배열이다. 개별 토글은 원소 1개로 호출하고,
+ * 마스터 토글(화면 전용 편의 기능 — SettingsNotificationsPage 헤더 참고)은
+ * 5개를 한 번에 묶어 호출한다 — 계약 자체가 배열 저장(PUT `{settings:[...]}`)
+ * 이라 이 배열이 그대로 요청 모양이 된다(별도 "마스터 전용" 엔드포인트 없음).
+ *
+ * 2026-10-08 계약 수정에서도 롤백 범위는 이전 usePatchNotificationSetting의
+ * Thomas 리뷰 MEDIUM fix를 그대로 지킨다: 이 호출이 "바꾼 유형들만" 각자의
+ * 이전 값으로 되돌리고, 캐시 전체를 스냅샷/복원하지 않는다. 두 호출이 겹쳐
+ * 들어와도(토글 연타, 또는 마스터+개별 동시) 먼저 성공한 호출의 결과를 나중
+ * 실패한 호출의 롤백이 덮어쓰는 사고를 막는다 — 각 호출은 자기가 만진 키만
+ * 책임진다.
  */
-export function usePatchNotificationSetting() {
+export function useSaveNotificationSettings() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ key, enabled }) => patchNotificationSetting(key, enabled),
-    onMutate: ({ key, enabled }) => {
-      const prevValue = queryClient.getQueryData(notificationSettingsKey())?.[key]
-      queryClient.setQueryData(notificationSettingsKey(), (curr) => ({ ...curr, [key]: enabled }))
-      return { key, prevValue }
+    mutationFn: (changes) => saveNotificationSettings(changes),
+    onMutate: (changes) => {
+      const prev = queryClient.getQueryData(notificationSettingsKey())
+      const prevEntries = changes.map(({ type }) => [type, prev?.[type]])
+      queryClient.setQueryData(notificationSettingsKey(), (curr) => {
+        const next = { ...curr }
+        for (const { type, enabled } of changes) next[type] = enabled
+        return next
+      })
+      return { prevEntries }
     },
     onError: (_err, _vars, context) => {
       if (context) {
-        queryClient.setQueryData(notificationSettingsKey(), (curr) => ({
-          ...curr,
-          [context.key]: context.prevValue,
-        }))
+        queryClient.setQueryData(notificationSettingsKey(), (curr) => {
+          const next = { ...curr }
+          for (const [type, value] of context.prevEntries) next[type] = value
+          return next
+        })
       }
       toast({ tone: 'error', message: systemMessages.error.writeTitle })
     },
