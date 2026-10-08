@@ -56,11 +56,43 @@ const LONG_PRESS_CANCEL_PX = 10
 // "지금 대기 중인 롱프레스가 있는가"를 추적한다 — 이 파일 안의 바가 여러
 // 개 동시에 렌더돼 있어도(프로젝트에 태스크가 많을 때) 대기 단계는 전체
 // 타임라인에서 하나만 유효해야 손가락 B의 새 pointerdown이 A를 방해하지
-// 않는다. 활성화(activate) 뒤의 실제 드래그는 각 바 컴포넌트 자신의
-// onPointerMove/Up/Cancel + setPointerCapture로 넘어가 이 가드 범위 밖이다
-// — 그쪽은 이미 컴포넌트 인스턴스별로 격리돼 있어 서로 다른 바를 각각
-// 다른 손가락으로 동시에 드래그하는 것은 이 변경과 무관하게 안전하다.
+// 않는다.
+//
+// AI 리뷰 Should-fix (#68): 위 주석은 "활성화 뒤의 실제 드래그는 이 가드
+// 범위 밖"이라고 적었지만 틀렸다 — 활성화 후 pendingLongPressPointerId는
+// 비워지므로, 그 다음부터는 각 바/손잡이 자신의 onPointerMove/Up/Cancel이
+// e.pointerId를 전혀 보지 않고 동작했다. 롱프레스로 드래그 A가 켜진 채로
+// 손가락 B가 같은 바를 짚었다 떼면 B의 pointerup이 A의 드래그를 끝내며 그
+// 순간 preview를 커밋해 버렸다(pointercancel도 동일). activeDragPointerId를
+// 추가해 "대기 중이거나 이미 활성화된 드래그가 있는가"를 하나로 묶어
+// 추적한다 — 이 때문에 서로 다른 바를 각각 다른 손가락으로 동시에 드래그하는
+// 것은 이제 더 이상 허용되지 않는다(전체 타임라인에 한 번에 하나의 터치
+// 드래그만), pointerId 격리 정확성을 우선한 의도적인 트레이드오프다. 실제
+// 활성화 시점의 pointerId는 각 드래그 ref(dragRef.current.pointerId /
+// deadlineDragRef.current.pointerId)에도 저장해, move/up/cancel 핸들러가
+// "이 이벤트가 정말 이 드래그를 쥔 손가락에서 온 것인지"를 매번 다시
+// 확인한다 — 모듈 변수 하나만으로는 "지금 활성 드래그가 있다"만 알 수 있지,
+// "이 특정 핸들러 인스턴스가 쥔 게 맞는지"는 알 수 없기 때문이다.
 let pendingLongPressPointerId = null
+let activeDragPointerId = null
+
+// react-hooks/globals (eslint) flags any reassignment of a module-scope
+// variable found lexically inside a component/hook function body, even from
+// inside an event handler closure — it can't tell that these only ever run
+// on a real pointer event, never during render. `pendingLongPressPointerId`
+// above dodges this because every reassignment already lives in a plain
+// function declared OUTSIDE the component (withLongPressGate / its
+// cleanup). `activeDragPointerId` needs the same indirection since its
+// call sites (startDrag/startDeadlineDrag and their up/cancel handlers)
+// are defined INSIDE WbsTimeline/WbsBar — these two setters are the only
+// place that actually touches the variable, so everything downstream of a
+// real pointerdown/up/cancel still mutates it, just through here.
+function setActiveDragPointer(pointerId) {
+  activeDragPointerId = pointerId
+}
+function clearActiveDragPointer(pointerId) {
+  if (activeDragPointerId === pointerId) activeDragPointerId = null
+}
 
 // `activate(shim)`을 마우스/펜은 즉시, 터치는 롱프레스 뒤에만 호출하는
 // pointerdown 래퍼. `shim`은 원본 이벤트에서 꺼낸 { clientX, pointerId,
@@ -73,8 +105,11 @@ function withLongPressGate(activate) {
       activate(shim)
       return
     }
-    // 이미 다른 포인터가 대기 중이면 이 pointerdown은 무시한다.
-    if (pendingLongPressPointerId != null) return
+    // 이미 다른 포인터가 대기 중이거나, 이미 활성화된 드래그가 진행 중이면
+    // (AI 리뷰 Should-fix, #68) 이 pointerdown은 무시한다 — activate 뒤에도
+    // 같은 변수로 계속 추적되므로, 손가락 B가 활성 드래그 도중 새 대기
+    // 롱프레스를 시작하는 경로 자체가 막힌다.
+    if (pendingLongPressPointerId != null || activeDragPointerId != null) return
     const pointerId = e.pointerId
     pendingLongPressPointerId = pointerId
     const x0 = e.clientX
@@ -342,21 +377,36 @@ export function WbsTimeline({
   const startDeadlineDrag = ({ clientX, pointerId, currentTarget }) => {
     if (disabled) return
     currentTarget.setPointerCapture(pointerId)
-    deadlineDragRef.current = { originX: clientX, originISO: effectiveDueDateISO }
+    // AI 리뷰 Should-fix (#68): pointerId를 ref에 저장해 둔다 — 아래
+    // move/up/cancel이 "이 이벤트가 정말 이 손가락에서 왔는지"를 매번
+    // 대조할 수 있어야, 활성화 이후 두 번째 손가락의 pointerup/cancel이
+    // 이 드래그를 대신 끝내는 사고를 막을 수 있다. 모듈 변수에도 기록해
+    // withLongPressGate가 "이미 활성 드래그가 있다"로 보고 다른 대기
+    // 롱프레스의 시작을 막는다.
+    deadlineDragRef.current = { originX: clientX, originISO: effectiveDueDateISO, pointerId }
+    setActiveDragPointer(pointerId)
     setDeadlineTooltipVisible(true)
   }
 
   const onDeadlinePointerMove = (e) => {
     if (!deadlineDragRef.current) return
+    // 이 드래그를 쥔 손가락이 아니면 무시 — 다른 포인터의 move가 좌표를
+    // 오염시키지 않는다.
+    if (e.pointerId !== deadlineDragRef.current.pointerId) return
     const { originX, originISO } = deadlineDragRef.current
     const dayDelta = Math.round((e.clientX - originX) / dayPx)
     if (dayDelta === 0) return
     setDeadlineDrag({ previewISO: clampToVisibleRange(addDaysISO(originISO, dayDelta)) })
   }
 
-  const onDeadlinePointerUp = () => {
+  // AI 리뷰 Should-fix (#68): 이벤트 인자를 받아야 pointerId를 대조할 수
+  // 있다 — 원래 인자 없이 호출돼, 드래그 활성 중 다른 손가락의 pointerup이
+  // 와도 무조건 "지금 preview를 커밋"했다.
+  const onDeadlinePointerUp = (e) => {
     if (!deadlineDragRef.current) return
+    if (e.pointerId !== deadlineDragRef.current.pointerId) return
     deadlineDragRef.current = null
+    clearActiveDragPointer(e.pointerId)
     if (deadlineDrag) commitDeadline(deadlineDrag.previewISO)
     setDeadlineTooltipVisible(false)
   }
@@ -365,9 +415,14 @@ export function WbsTimeline({
   // instead) must NOT commit — unlike pointerup, there's no real "release at
   // this date" intent here, only an aborted gesture. Falls back to the last
   // committed `project.dueDate` by simply dropping the uncommitted preview.
-  const onDeadlinePointerCancel = () => {
+  //
+  // AI 리뷰 Should-fix (#68): 같은 이유로 pointerId를 대조한다 — 다른
+  // 손가락의 cancel이 이 드래그까지 끝내지 않도록.
+  const onDeadlinePointerCancel = (e) => {
     if (!deadlineDragRef.current) return
+    if (e.pointerId !== deadlineDragRef.current.pointerId) return
     deadlineDragRef.current = null
+    clearActiveDragPointer(e.pointerId)
     setDeadlineDrag(null)
     setDeadlineTooltipVisible(false)
   }
@@ -841,12 +896,22 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
   const startDrag = (mode, { clientX, pointerId, currentTarget }) => {
     if (disabled) return
     currentTarget.setPointerCapture(pointerId)
-    dragRef.current = { mode, originStart: start, originEnd: end, originX: clientX }
+    // AI 리뷰 Should-fix (#68): pointerId를 저장해 move/up/cancel이 "이
+    // 이벤트가 정말 이 손가락에서 왔는지" 매번 대조하게 한다 — 같은 바를
+    // 롱프레스로 드래그 중일 때 두 번째 손가락이 짚었다 떼면, 원래는 그
+    // 손가락의 pointerup/cancel이 이 드래그를 대신 끝내고 그 시점 preview를
+    // 커밋해 버렸다(리사이즈 손잡이도 이 함수를 그대로 쓰므로 함께
+    // 커버된다). 모듈 변수에도 기록해 withLongPressGate가 다른 바의 새
+    // 대기 롱프레스 시작을 막는다.
+    dragRef.current = { mode, originStart: start, originEnd: end, originX: clientX, pointerId }
+    setActiveDragPointer(pointerId)
     setIsDragging(true)
   }
 
   const onPointerMove = (e) => {
     if (!dragRef.current) return
+    // 이 드래그를 쥔 손가락이 아니면 무시.
+    if (e.pointerId !== dragRef.current.pointerId) return
     const { mode, originStart, originEnd, originX } = dragRef.current
     const dayDelta = Math.round((e.clientX - originX) / dayPx)
     if (dayDelta === 0) return
@@ -863,9 +928,15 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
     setPreview({ start: nextStart, end: nextEnd, mode })
   }
 
-  const onPointerUp = () => {
+  // AI 리뷰 Should-fix (#68): 이벤트 인자를 받도록 바꿔야 pointerId를 대조할
+  // 수 있다 — 원래 인자 없이 호출돼, 드래그 활성 중 다른 손가락의 pointerup
+  // 이 와도 무조건 preview를 커밋했다(바로 위 startDrag가 저장한
+  // dragRef.current.pointerId와 대조).
+  const onPointerUp = (e) => {
     if (!dragRef.current) return
+    if (e.pointerId !== dragRef.current.pointerId) return
     dragRef.current = null
+    clearActiveDragPointer(e.pointerId)
     if (preview) commit(preview.start, preview.end)
     setIsDragging(false)
   }
@@ -877,9 +948,14 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
   // `preview` (not just `dragRef`) matters: `start`/`end` above fall back to
   // `preview?.start ?? node.plannedStartDate`, so leaving a stale preview set
   // would freeze the bar at the aborted position forever.
-  const onPointerCancel = () => {
+  //
+  // AI 리뷰 Should-fix (#68): 같은 이유로 pointerId를 대조한다 — 다른
+  // 손가락의 cancel이 이 드래그까지 끝내지 않도록.
+  const onPointerCancel = (e) => {
     if (!dragRef.current) return
+    if (e.pointerId !== dragRef.current.pointerId) return
     dragRef.current = null
+    clearActiveDragPointer(e.pointerId)
     setPreview(null)
     setIsDragging(false)
   }
