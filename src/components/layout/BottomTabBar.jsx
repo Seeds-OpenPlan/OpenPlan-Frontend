@@ -13,9 +13,14 @@ import { navItems } from './navItems'
 // to reuse the same value as the header bars above — imperceptible, and it
 // only trims the last pixel of a tab item's own bottom padding, not any
 // icon/label content.
+//
+// Edge-to-edge (Android 15+ TWA): the bar grows by the gesture-bar inset and
+// pads its content above it, so the tabs stay a full h-bar tall and tappable.
+// Everything that clears this bar (AppLayout, Toaster, the floating controls)
+// adds the same --spacing-safe-bottom to its own number.
 function BottomTabBar() {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-10 h-bar border-t border-border bg-surface md:hidden">
+    <nav className="fixed inset-x-0 bottom-0 z-10 h-[calc(var(--spacing-bar)+var(--spacing-safe-bottom))] border-t border-border bg-surface pb-safe-bottom pl-safe-left pr-safe-right md:hidden">
       <ul className="flex">
         {navItems.map(({ to, label, Icon, end }) => (
           <li key={to} className="flex-1">

@@ -8,7 +8,9 @@ import { useToastStore, useToasts } from '../../hooks/useToasts'
   the mobile BottomTabBar the same way AppLayout's pb-24 does: --spacing-bar
   (56px, the tab bar's own height) + 40px of breathing room, kept as the
   literal utility rather than a calc() off the token so this owner-approved
-  96px can't drift from an arithmetic slip.
+  96px can't drift from an arithmetic slip. The calc() wrapping it only adds
+  --spacing-safe-bottom (the gesture-bar inset the tab bar now grows by under
+  edge-to-edge); the 96px literal itself is unchanged.
 
   This cycle only the reconnect toast ("다시 연결되었습니다") fires; the queue is
   ready for later save-success toasts.
@@ -20,7 +22,7 @@ export function Toaster() {
   if (toasts.length === 0) return null
 
   return createPortal(
-    <div className="pointer-events-none fixed inset-x-0 bottom-24 z-40 flex flex-col items-center gap-2 px-4 md:bottom-6">
+    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6rem+var(--spacing-safe-bottom))] z-40 flex flex-col items-center gap-2 px-4 md:bottom-[calc(1.5rem+var(--spacing-safe-bottom))]">
       {toasts.map((t) => (
         <Toast
           key={t.id}

@@ -126,7 +126,9 @@ export function BottomSheet({
         tabIndex={-1}
         style={heightPx != null ? { height: heightPx } : undefined}
         className={[
-          'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-sheet bg-surface shadow-modal',
+          // pb-safe-bottom: the sheet sits on the screen's bottom edge, so its last
+          // row (often the confirm button) must clear the gesture bar.
+          'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-sheet bg-surface pb-safe-bottom shadow-modal',
           'motion-safe:transition-transform motion-safe:duration-slow motion-safe:ease-emphasized',
         ].join(' ')}
       >

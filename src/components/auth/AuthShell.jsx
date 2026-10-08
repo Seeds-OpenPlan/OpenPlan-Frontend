@@ -21,7 +21,7 @@ import { BrandMarkIcon } from './authIcons'
 */
 export function AuthShell({ children, footer }) {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-surface-sunken px-4 py-10">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-surface-sunken px-4 py-10 pt-[calc(2.5rem+var(--spacing-safe-top))] pb-[calc(2.5rem+var(--spacing-safe-bottom))]">
       <div className="flex w-full max-w-sm flex-col gap-6 md:rounded-card md:border md:border-border md:bg-surface md:p-8 md:shadow-card">
         <div className="flex flex-col items-center gap-3 text-center">
           <BrandMarkIcon />
