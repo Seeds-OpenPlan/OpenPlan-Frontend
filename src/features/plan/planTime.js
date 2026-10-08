@@ -249,6 +249,31 @@ export function formatDurationKO(totalMinutes) {
   return `${m}분`
 }
 
+/*
+  "HH:mm:ss" ↔ minutes-of-day conversion. 서버는 가용 시간·고정 일정 둘 다
+  시각 문자열("09:00:00")로 주고받는데, 이 화면의 모델은 전부 자정 기준 분
+  (0~1440)이다 — planApi.js(가용 시간)·fixedScheduleApi.js(고정 일정) 양쪽
+  어댑터가 똑같이 이 변환을 쓰므로, 두 모듈이 서로를 가리키는 순환 참조 없이
+  공유할 수 있는 이 순수 함수 전용 모듈에 둔다(원래는 planApi.js에만 있었는데,
+  fixedScheduleApi.js가 그걸 가져다 쓰면서 평범한 단방향 의존으로 보였지만
+  실제로는 양쪽이 서로의 값을 필요로 하는 관계였다 — planApi.js의 normalizeWeek가
+  이제 fixedScheduleShape.js의 normalizeFixedSchedule을 쓰고, 그 함수가 다시
+  이 변환을 쓰기 때문).
+*/
+export function minutesFromTime(value) {
+  if (typeof value !== 'string') return null
+  const [h, m] = value.split(':').map(Number)
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null
+  return h * 60 + m
+}
+
+export function timeFromMinutes(minutes) {
+  const total = Number.isFinite(minutes) ? minutes : 0
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`
+}
+
 /** True when a week-start ISO date is strictly before this week (read-only, AC-5). */
 export function isPastWeek(weekStartISO, weekStartsOn = 1) {
   return weekStartISO < currentWeekStartISO(weekStartsOn)

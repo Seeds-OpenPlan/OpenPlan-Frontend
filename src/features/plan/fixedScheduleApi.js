@@ -4,71 +4,36 @@
   mock-fallback rule as planApi/scheduleApi/taskApi: real path in prod, mock only
   on a genuine network error.
 
-  ASSUMPTION (unconfirmed with BE — flagged in the PR, not decided unilaterally):
-  the 07번 API 명세서's `GET /fixed-schedules` takes only `status` and returns a
-  flat list with no weekly concept, while `activeThisWeek` (api-contracts.md §5-J6)
-  is inherently PER WEEK — a fixed schedule can be deactivated for one week and
-  stay active every other week. Until BE confirms the real shape, this client
-  asks for the CURRENTLY VIEWED week via an extra `weekStartDate` query param and
-  expects the server to fold its week-exception state into an `activeThisWeek`
-  field per schedule. This is the smallest, most reversible guess available (one
-  extra param on an existing GET, not a second endpoint or a client-side merge of
-  two separate lists) — if BE settles on something else (e.g. a dedicated
-  GET .../week-exceptions), only `normalizeFixedSchedule` and `getFixedSchedules`
-  below need to change; every consumer already just reads `activeThisWeek` off
-  the normalized shape.
+  WEEK-SCOPED READ, CORRECTED (BE #90). What used to be an unconfirmed ASSUMPTION
+  here — guessing the server would fold week-exception state into an
+  `activeThisWeek` field if this client asked `GET /fixed-schedules` with an
+  extra, out-of-contract `weekStartDate` param — turned out to be wrong: the real
+  07번 API 명세서's `GET /fixed-schedules` (openapi.yaml `listFixedSchedules`)
+  takes only `status` and has no weekly concept at all, so the server silently
+  ignored that extra param and never sent `activeThisWeek` either — every fixed
+  schedule rendered permanently ACTIVE regardless of a saved week-exception
+  (normalizeFixedSchedule's own default-to-true, below). The CONFIRMED contract
+  (openapi.yaml `WeeklyPlanView.fixedSchedules`, ~2823행; tracked as BE #90) is
+  instead that `GET /weekly-plans?weekStartDate=` itself carries this week's
+  fixed schedules (including `activeThisWeek`) alongside `blocks` — so the plan
+  grid now reads them from THERE (planApi.js's `getWeek`/`normalizeWeek`), not
+  from this file. `getFixedSchedules` below still exists, but demoted to a
+  FALLBACK that `getWeek` calls only if a server hasn't deployed BE #90 yet (the
+  `fixedSchedules` field is missing from its response) — see that function's own
+  header for what it can and cannot restore in that case.
+
+  `normalizeFixedSchedule`/`activeInWeek` moved out to fixedScheduleShape.js —
+  planApi.js's own `normalizeWeek` needs the exact same normalization for the
+  SAME server shape, and importing it from here would cycle back through this
+  file's own `withDevFallback` import below (see that new module's header).
 */
 
 import { apiClient } from '../../api/client'
-import { withDevFallback, minutesFromTime, timeFromMinutes } from './planApi'
-import { addDaysISO } from './planTime'
+import { withDevFallback } from './planApi'
+import { timeFromMinutes } from './planTime'
+import { activeInWeek, normalizeFixedSchedule } from './fixedScheduleShape'
 import { mockBackend } from './planFixtures'
 import { unwrapList } from '../../api/unwrap'
-
-/**
- * Normalize a fixed schedule to the camelCase shape the grid AND the ST-F1-12
- * settings screen both read. version/effectiveFrom/effectiveTo/source/status
- * (ST-B2-12's fixed_schedules columns) are additive — of these, only `version`
- * is actually consumed anywhere in this codebase today (the optimistic-lock
- * check on update). `effectiveFrom`/`effectiveTo`/`source`/`status` are kept
- * normalized here so the shape round-trips cleanly (the mock backend already
- * threads them through create/update), but NO current screen reads or writes
- * them — neither the ST-F1-06 grid nor FixedScheduleForm (ST-F1-12's own CRUD
- * form only edits title/weekday/start/end minutes). They're reserved fields,
- * unused/on hold until a future story actually surfaces them in the UI.
- */
-function normalizeFixedSchedule(f) {
-  return {
-    fixedScheduleId: f.fixedScheduleId ?? f.fixed_schedule_id,
-    title: f.title,
-    weekday: f.weekday,
-    // 🔴 서버는 `startTime`/`endTime`을 시각 문자열("09:00:00")로 보낸다 —
-    //    `startMinutes`라는 이름은 계약에 없다(openapi FixedScheduleInput). 이걸
-    //    변환하지 않아 화면 전체가 undefined를 받았고, 시:분 계산이 `NaN:NaN`으로
-    //    렌더됐다. 가용 시간(normalizeAvailability)이 이미 쓰는 것과 같은 폴백
-    //    사슬을 그대로 따른다 — 목(분 단위)과 실서버(시각 문자열)를 둘 다 받는다.
-    startMinutes: f.startMinutes ?? f.start_minutes ?? minutesFromTime(f.startTime ?? f.start_time),
-    endMinutes: f.endMinutes ?? f.end_minutes ?? minutesFromTime(f.endTime ?? f.end_time),
-    // Defaults to true: a server that doesn't yet understand week exceptions
-    // (or omits the field) should render every fixed schedule as ACTIVE, not
-    // silently ghost all of them — an unrecognized false would be the wrong
-    // failure direction (hiding a real conflict), so only an explicit false wins.
-    activeThisWeek: (f.activeThisWeek ?? f.active_this_week) !== false,
-    // 🔴 서버가 보내는 이름은 `startDate`/`endDate`다. 이름이 어긋나 항상 null이
-    //    됐고, 그래서 **하루짜리 일정이 매주 반복으로 보였다** — 외부 캘린더에서
-    //    반영한 일정(ExternalEventToFixedSchedule이 startDate=endDate=그 날짜로
-    //    하루에 가둔다)이 모든 같은 요일에 뜨던 원인이다.
-    effectiveFrom: f.effectiveFrom ?? f.effective_from ?? f.startDate ?? f.start_date ?? null,
-    effectiveTo: f.effectiveTo ?? f.effective_to ?? f.endDate ?? f.end_date ?? null,
-    source: f.source ?? 'MANUAL',
-    status: f.status ?? 'ACTIVE',
-    version: f.version ?? 1,
-    // Settings-list-only convenience (see planFixtures.getFixedSchedulesAll's
-    // own comment) — undefined on the week-scoped grid read, never a false
-    // "no conflict" claim it can't back up.
-    hasConflict: f.hasConflict ?? undefined,
-  }
-}
 
 /**
  * 화면이 쓰는 분 단위를 계약이 요구하는 시각 문자열로 되돌린다.
@@ -99,43 +64,29 @@ function toServerFixedSchedule(payload) {
 }
 
 /**
- * 이 주에 실제로 나타나야 하는 고정 일정인가.
+ * OP-FIXED-LIST → GET /fixed-schedules?status=ACTIVE (contract-faithful — no
+ * `weekStartDate` param; openapi.yaml `listFixedSchedules` never accepted one,
+ * see this file's own header). FALLBACK ONLY, called by planApi.js's `getWeek`
+ * when `GET /weekly-plans`'s response doesn't carry a `fixedSchedules` field
+ * yet (BE #90 not deployed on that server). Still takes `weekStartISO` as a JS
+ * param — not sent to the server, just used to apply the same `activeInWeek`
+ * date-range filter `normalizeWeek` would have applied.
  *
- * 🔴 고정 일정은 기본적으로 **요일 반복**이지만, 외부 캘린더에서 반영한 일정은
- * `startDate=endDate=그 날짜`로 하루에 갇혀 있다(백엔드 ExternalEventToFixedSchedule).
- * 그 경계를 보지 않으면 하루짜리 약속이 **모든 같은 요일**에 나타난다 — 그 위에
- * 계획을 얹지 못하게 막으므로 조용한 오표시가 아니라 실제 배치 제약이 된다.
- *
- * 경계가 둘 다 없으면 무기한 반복(손으로 만든 고정 일정)이라 항상 보인다.
- * ISO 날짜 문자열(YYYY-MM-DD)은 사전순 비교가 곧 시간순이라 그대로 비교한다.
- */
-function activeInWeek(schedule, weekStartISO) {
-  if (!weekStartISO) return true
-  const { effectiveFrom, effectiveTo } = schedule
-  if (!effectiveFrom && !effectiveTo) return true
-  const weekEndISO = addDaysISO(weekStartISO, 6)
-  if (effectiveFrom && effectiveFrom > weekEndISO) return false
-  if (effectiveTo && effectiveTo < weekStartISO) return false
-  return true
-}
-
-/**
- * OP-FIXED-LIST → GET /fixed-schedules?status=ACTIVE&weekStartDate= (ASSUMPTION
- * above). Returns the week's recurring fixed schedules with `activeThisWeek`.
+ * `activeThisWeek` CANNOT be recovered through this path — this endpoint has
+ * no weekly concept at all, so every schedule normalizes to its
+ * default-active (see normalizeFixedSchedule). That is the accepted, narrower
+ * gap this fallback leaves open (see getWeek's own fallback comment): fixed
+ * schedules stay visible instead of vanishing, but a saved "이번 주만
+ * 비활성화" won't show as a ghost until the server actually deploys #90.
  */
 export function getFixedSchedules(weekStartISO) {
   return withDevFallback(
-    () =>
-      apiClient.get('/fixed-schedules', {
-        params: { status: 'ACTIVE', weekStartDate: weekStartISO },
-      }),
+    () => apiClient.get('/fixed-schedules', { params: { status: 'ACTIVE' } }),
     () => mockBackend.getFixedSchedules(weekStartISO),
     // Real: `data:[FixedSchedule]` (array). Mock: `{ fixedSchedules: [...] }`.
   ).then((r) =>
     unwrapList(r, 'fixedSchedules')
       .map(normalizeFixedSchedule)
-      // 서버가 weekStartDate 를 받고도 날짜 경계로 걸러 주지 않으므로 여기서 건다.
-      // 서버가 나중에 걸러 주게 되면 이 필터는 그냥 통과라 이중으로 걸려도 무해하다.
       .filter((f) => activeInWeek(f, weekStartISO)),
   )
 }

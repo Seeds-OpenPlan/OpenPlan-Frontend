@@ -135,6 +135,13 @@ async function mockPlanBackend(
               totalPlannedMinutes: 0,
             },
             blocks: arr.map((b) => ({ ...b, startAt: b.startAt(weekStartDate), endAt: b.endAt(weekStartDate) })),
+            // BE #90: WeeklyPlanView.fixedSchedules는 `blocks` 옆 봉투 최상위
+            // 필드다(planApi.js normalizeWeek가 여기서 읽는다) — 빈 배열로나마
+            // 명시해 두지 않으면 필드 부재(undefined)로 읽혀 getWeek의
+            // withFixedSchedulesFallback이 별도 GET /fixed-schedules를 추가로
+            // 쏜다(아래 그 라우트도 여전히 빈 배열로 응답하므로 통과는 하지만,
+            // 이 스펙이 재는 레이아웃 불변식과 무관한 요청이 하나 더 생긴다).
+            fixedSchedules: [],
             unassignedCount: 0,
             validationSummary: { blockCount: 0, warningCount: 0 },
           },
