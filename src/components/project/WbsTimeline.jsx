@@ -44,6 +44,23 @@ const COMMIT_DEBOUNCE_MS = 500
   모두 겪는 문제라 한 번만 구현해 공유한다(usePlanDrag는 윈도우 리스너 +
   자체 delta 계산을 갖는 더 큰 구조라 그대로 재사용하지 않고, 여기 맞는
   작은 형태로 따로 둔다).
+
+  AI 리뷰 Blocking (#68, e597ea3 기준): 위 문단은 "해법도 같다"고 적었지만
+  틀렸다 — usePlanDrag.js는 활성화(activate) 뒤에도 non-passive touchmove에서
+  직접 preventDefault하는 `blockScrollWhileDragging`이 있는데, 이 파일엔 그
+  대응물이 없었다(이 파일 전체에 touchmove 리스너가 0건). 롱프레스로
+  "활성화"는 됐지만 각 손잡이 엘리먼트의 CSS `touchAction: 'pan-x pan-y'`는
+  활성화 후에도 그대로 남아 있어(touch-action은 제스처가 이미 시작된 뒤
+  바꿔도 적용되지 않으므로, 평소엔 스크롤을 허용해야 하는 이 요소들이 애초에
+  `pan-x pan-y`로 선언돼 있다), 타임라인이 가로 스크롤(`overflow-x-auto`)인
+  이 화면에서는 드래그 축과 스크롤 축이 겹쳐 손가락을 옆으로 움직이는 순간
+  브라우저가 그대로 가로 패닝으로 해석해 pointercancel을 쏘아 버린다 —
+  활성화된 드래그가 실제로는 단 1px도 못 움직이고 번번이 취소되거나, 반대로
+  타임라인 자체가 스크롤돼 버리는 증상이었다. 아래 `startTouchScrollBlock`/
+  `stopTouchScrollBlock`이 usePlanDrag의 그 패턴을 그대로 가져온다 — 터치
+  드래그가 실제로 활성화되는 시점(startDrag/startDeadlineDrag)에만 등록해,
+  롱프레스 대기 중의 스와이프는 여전히 평소처럼 스크롤되게 둔다(마우스/펜
+  경로는 이 등록 자체를 건너뛴다).
 */
 const LONG_PRESS_MS = 450
 const LONG_PRESS_CANCEL_PX = 10
@@ -94,13 +111,43 @@ function clearActiveDragPointer(pointerId) {
   if (activeDragPointerId === pointerId) activeDragPointerId = null
 }
 
+// AI 리뷰 Blocking (#68): usePlanDrag.js의 `blockScrollWhileDragging`과 같은
+// 패턴 — CSS `touchAction`은 제스처가 이미 시작된 뒤 바꿔도 소용없으므로,
+// 활성화된 터치 드래그 중 브라우저의 가로 스크롤을 막는 유일한 방법은
+// non-passive `touchmove`에서 직접 preventDefault하는 것뿐이다. 호출자
+// (startDrag/startDeadlineDrag)가 실제 활성화 시점에만 등록하므로, 롱프레스
+// 대기 중의 스와이프는 이 블로커가 아직 없어 평소처럼 스크롤된다.
+function startTouchScrollBlock() {
+  const blocker = (ev) => {
+    // 네이티브 TouchEvent에는 pointerId가 없어(touches[].identifier로 다른
+    // 체계) "내 손가락"만 골라낼 수 없다 — usePlanDrag와 같은 방어로, 터치가
+    // 둘 이상이면(두 번째 손가락이 내려와 있으면) 막지 않는다. 그래야 이
+    // 드래그가 진행 중이어도 다른 손가락으로 화면을 두 손가락 조작하려는
+    // 시도까지 가로채지 않는다.
+    if (ev.touches.length <= 1) ev.preventDefault()
+  }
+  window.addEventListener('touchmove', blocker, { passive: false })
+  return blocker
+}
+function stopTouchScrollBlock(blocker) {
+  if (blocker) window.removeEventListener('touchmove', blocker)
+}
+
 // `activate(shim)`을 마우스/펜은 즉시, 터치는 롱프레스 뒤에만 호출하는
 // pointerdown 래퍼. `shim`은 원본 이벤트에서 꺼낸 { clientX, pointerId,
-// currentTarget }뿐이다 — 450ms 뒤에 실행될 수도 있어 리액트 합성 이벤트
-// 객체 자체가 아니라 필요한 값만 복사해 넘긴다.
+// currentTarget, pointerType }뿐이다 — 450ms 뒤에 실행될 수도 있어 리액트
+// 합성 이벤트 객체 자체가 아니라 필요한 값만 복사해 넘긴다. `pointerType`은
+// AI 리뷰 Blocking(#68) 수정분 — startDrag/startDeadlineDrag가 "터치일
+// 때만" 스크롤 차단 리스너를 등록해야 하므로(마우스/펜은 영향 없어야 함)
+// 필요해졌다.
 function withLongPressGate(activate) {
   return (e) => {
-    const shim = { clientX: e.clientX, pointerId: e.pointerId, currentTarget: e.currentTarget }
+    const shim = {
+      clientX: e.clientX,
+      pointerId: e.pointerId,
+      currentTarget: e.currentTarget,
+      pointerType: e.pointerType,
+    }
     if (e.pointerType !== 'touch') {
       activate(shim)
       return
@@ -283,7 +330,14 @@ export function WbsTimeline({
       // 않으면 withLongPressGate가 그 뒤의 모든 새 터치 pointerdown을 영원히
       // 무시해 새로고침 전까지 WBS 터치 드래그 전체가 막힌다. 언마운트 시점에
       // 진행 중인 드래그가 있었다면 여기서 대신 지운다.
-      if (deadlineDragRef.current) clearActiveDragPointer(deadlineDragRef.current.pointerId)
+      //
+      // AI 리뷰 Blocking (#68): 같은 이유로 스크롤 차단 리스너도 먼저
+      // 해제한다 — 안 그러면 이 행이 사라져도 window에 걸린 non-passive
+      // touchmove 리스너가 그대로 남아 타임라인 가로 스크롤을 계속 막는다.
+      if (deadlineDragRef.current) {
+        stopTouchScrollBlock(deadlineDragRef.current.touchScrollBlocker)
+        clearActiveDragPointer(deadlineDragRef.current.pointerId)
+      }
     },
     [],
   )
@@ -379,10 +433,10 @@ export function WbsTimeline({
     }, COMMIT_DEBOUNCE_MS)
   }
 
-  // B2: shim = { clientX, pointerId, currentTarget } — withLongPressGate may
-  // call this well after the original pointerdown event, so it never reads
-  // a raw event here.
-  const startDeadlineDrag = ({ clientX, pointerId, currentTarget }) => {
+  // B2: shim = { clientX, pointerId, currentTarget, pointerType } —
+  // withLongPressGate may call this well after the original pointerdown
+  // event, so it never reads a raw event here.
+  const startDeadlineDrag = ({ clientX, pointerId, currentTarget, pointerType }) => {
     if (disabled) return
     currentTarget.setPointerCapture(pointerId)
     // AI 리뷰 Should-fix (#68): pointerId를 ref에 저장해 둔다 — 아래
@@ -391,7 +445,18 @@ export function WbsTimeline({
     // 이 드래그를 대신 끝내는 사고를 막을 수 있다. 모듈 변수에도 기록해
     // withLongPressGate가 "이미 활성 드래그가 있다"로 보고 다른 대기
     // 롱프레스의 시작을 막는다.
-    deadlineDragRef.current = { originX: clientX, originISO: effectiveDueDateISO, pointerId }
+    //
+    // AI 리뷰 Blocking (#68): 터치로 활성화된 경우에만 스크롤 차단 리스너를
+    // 등록한다(마우스/펜은 애초에 이 핸들을 가로 스크롤과 동시에 움직일 일이
+    // 없고, 요구사항상 마우스 경로에 영향이 없어야 한다). 이 ref 객체 하나에
+    // 묶어 두면 up/cancel/unmount 어느 정리 경로에서도 pointerId와 함께 같은
+    // 자리에서 해제할 수 있다.
+    deadlineDragRef.current = {
+      originX: clientX,
+      originISO: effectiveDueDateISO,
+      pointerId,
+      touchScrollBlocker: pointerType === 'touch' ? startTouchScrollBlock() : null,
+    }
     setActiveDragPointer(pointerId)
     setDeadlineTooltipVisible(true)
   }
@@ -413,6 +478,10 @@ export function WbsTimeline({
   const onDeadlinePointerUp = (e) => {
     if (!deadlineDragRef.current) return
     if (e.pointerId !== deadlineDragRef.current.pointerId) return
+    // AI 리뷰 Blocking (#68): dragRef를 비우기 전에 스크롤 차단 리스너부터
+    // 해제한다 — 안 그러면 드래그가 끝난 뒤에도 타임라인 가로 스크롤이
+    // 계속 막힌 채로 남는다.
+    stopTouchScrollBlock(deadlineDragRef.current.touchScrollBlocker)
     deadlineDragRef.current = null
     clearActiveDragPointer(e.pointerId)
     if (deadlineDrag) commitDeadline(deadlineDrag.previewISO)
@@ -429,6 +498,9 @@ export function WbsTimeline({
   const onDeadlinePointerCancel = (e) => {
     if (!deadlineDragRef.current) return
     if (e.pointerId !== deadlineDragRef.current.pointerId) return
+    // AI 리뷰 Blocking (#68): 같은 이유로, cancel/lostpointercapture 경로도
+    // 비우기 전에 리스너를 해제한다.
+    stopTouchScrollBlock(deadlineDragRef.current.touchScrollBlocker)
     deadlineDragRef.current = null
     clearActiveDragPointer(e.pointerId)
     setDeadlineDrag(null)
@@ -868,7 +940,14 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
     // activeDragPointerId가 영영 남는다 — 위 deadline cleanup과 동일한
     // 구멍. 언마운트 시점에 이 바가 쥐고 있던 드래그가 있었다면 여기서
     // 대신 지운다.
-    if (dragRef.current) clearActiveDragPointer(dragRef.current.pointerId)
+    //
+    // AI 리뷰 Blocking (#68): 같은 이유로 스크롤 차단 리스너도 먼저
+    // 해제한다 — 안 그러면 이 바가 사라져도 window의 non-passive touchmove
+    // 리스너가 남아 타임라인 가로 스크롤을 계속 막는다.
+    if (dragRef.current) {
+      stopTouchScrollBlock(dragRef.current.touchScrollBlocker)
+      clearActiveDragPointer(dragRef.current.pointerId)
+    }
     // `node.taskId` (not `node`): this bar is keyed by taskId in the parent
     // list, so a MOUNTED instance's taskId value never actually changes
     // (only `node`'s own object identity does, on every WBS refetch) —
@@ -910,10 +989,10 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
   // straightforward shape react-hooks/refs expects for "this ref write only
   // ever happens inside an event handler, never during render".
   //
-  // B2: shim = { clientX, pointerId, currentTarget }, same reasoning as
-  // WbsTimeline's own startDeadlineDrag above — withLongPressGate may call
-  // this after the triggering pointerdown event is long gone.
-  const startDrag = (mode, { clientX, pointerId, currentTarget }) => {
+  // B2: shim = { clientX, pointerId, currentTarget, pointerType }, same
+  // reasoning as WbsTimeline's own startDeadlineDrag above — withLongPressGate
+  // may call this after the triggering pointerdown event is long gone.
+  const startDrag = (mode, { clientX, pointerId, currentTarget, pointerType }) => {
     if (disabled) return
     currentTarget.setPointerCapture(pointerId)
     // AI 리뷰 Should-fix (#68): pointerId를 저장해 move/up/cancel이 "이
@@ -923,7 +1002,19 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
     // 커밋해 버렸다(리사이즈 손잡이도 이 함수를 그대로 쓰므로 함께
     // 커버된다). 모듈 변수에도 기록해 withLongPressGate가 다른 바의 새
     // 대기 롱프레스 시작을 막는다.
-    dragRef.current = { mode, originStart: start, originEnd: end, originX: clientX, pointerId }
+    //
+    // AI 리뷰 Blocking (#68): 터치로 활성화된 경우에만 스크롤 차단 리스너를
+    // 등록한다 — 리사이즈 손잡이(span)도 이 함수를 그대로 호출하므로 함께
+    // 커버된다. 마우스/펜 경로는 pointerType이 'touch'가 아니므로 이 등록
+    // 자체를 건너뛰어 영향이 없다.
+    dragRef.current = {
+      mode,
+      originStart: start,
+      originEnd: end,
+      originX: clientX,
+      pointerId,
+      touchScrollBlocker: pointerType === 'touch' ? startTouchScrollBlock() : null,
+    }
     setActiveDragPointer(pointerId)
     setIsDragging(true)
   }
@@ -955,6 +1046,10 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
   const onPointerUp = (e) => {
     if (!dragRef.current) return
     if (e.pointerId !== dragRef.current.pointerId) return
+    // AI 리뷰 Blocking (#68): dragRef를 비우기 전에 스크롤 차단 리스너부터
+    // 해제한다 — 안 그러면 드래그가 끝난 뒤에도 타임라인 가로 스크롤이
+    // 계속 막힌 채로 남는다.
+    stopTouchScrollBlock(dragRef.current.touchScrollBlocker)
     dragRef.current = null
     clearActiveDragPointer(e.pointerId)
     if (preview) commit(preview.start, preview.end)
@@ -974,6 +1069,9 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
   const onPointerCancel = (e) => {
     if (!dragRef.current) return
     if (e.pointerId !== dragRef.current.pointerId) return
+    // AI 리뷰 Blocking (#68): 같은 이유로, cancel/lostpointercapture 경로도
+    // 비우기 전에 리스너를 해제한다.
+    stopTouchScrollBlock(dragRef.current.touchScrollBlocker)
     dragRef.current = null
     clearActiveDragPointer(e.pointerId)
     setPreview(null)
