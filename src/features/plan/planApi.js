@@ -264,13 +264,31 @@ function isEmptyWeekView(raw) {
  * `activeThisWeek`는 여전히 항상 true로 보인다. 즉 "이번 주만 비활성화"가
  * 반영 안 되는 이 기능의 원래 버그는 이 전환 창 동안 그대로 남지만, 적어도
  * 고정 일정 자체가 화면에서 통째로 사라지는(더 나쁜) 회귀는 막는다.
+ *
+ * 이 폴백 GET 자체가 실패할 수도 있다(#70 리뷰 Should-fix) — 네트워크 오류나
+ * E-COM-004는 withDevFallback이 DEV에서만 흡수하고, prod에서 만나는 5xx 등은
+ * 그대로 reject된다. 그걸 그대로 흘려보내면 getWeek 전체가 reject되어
+ * useWeekPlan의 isError가 true가 되고 WeeklyPage.jsx의 ErrorState가 뜬다 —
+ * **이미 200으로 받은 plan·blocks까지** 화면에서 통째로 사라진다. "순서 사고가
+ * 나도 고정 일정이 사라지지 않는다"던 이 함수의 원래 취지가 바로 이 경로에서
+ * 깨지는 셈이라, 빈 배열로 흡수하고 화면은 유지한다. 조용히 숨기지는 않는다 —
+ * `console.error`로 loud하게 남긴다(이 파일의 다른 부분적 실패 처리와 같은
+ * 관례: paging.js의 "Loud, not silent" 페이지 상한 경고 참조). 여기서 저장하는
+ * 상태는 없으므로 다음 refetch(수동 새로고침·staleTime 만료·다른 뮤테이션의
+ * invalidate)가 이 함수를 처음부터 다시 돌려 자연히 회복을 재시도한다.
  */
 function withFixedSchedulesFallback(normalized, weekStartDate) {
   if (normalized.fixedSchedules !== undefined) return normalized
-  return getFixedSchedules(weekStartDate).then((fixedSchedules) => ({
-    ...normalized,
-    fixedSchedules,
-  }))
+  return getFixedSchedules(weekStartDate)
+    .then((fixedSchedules) => ({ ...normalized, fixedSchedules }))
+    .catch((error) => {
+      console.error(
+        `[plan] getFixedSchedules fallback failed for week=${weekStartDate}: ` +
+          `${error?.code ?? error?.message ?? error}; degrading to an empty ` +
+          'fixedSchedules list instead of failing the whole week.',
+      )
+      return { ...normalized, fixedSchedules: [] }
+    })
 }
 
 export function getWeek(weekStartDate) {
