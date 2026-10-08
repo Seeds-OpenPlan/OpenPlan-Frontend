@@ -23,6 +23,13 @@
   `notification/service/NotificationRoutes.java` — DEADLINE_SOON은
   `/weekly?task=`, TODAY_TASKS/PLAN_UNSAVED는 `/weekly`, RETROSPECT는
   `/statistics`, SUPPORT_ANSWERED는 `/help/{id}`)로 맞췄다.
+
+  PR #69 AI 리뷰 Should-fix: `body` 필드를 삭제했다. 계약 `NotificationResponse`
+  (BE 확인)엔 notificationId/notificationType/title/routePath/readAt/
+  createdAt 여섯 개뿐 — body는 이 mock이 "캡션 한 줄 더"를 보여주려고 임의로
+  얹었던 필드라, 실서버로 전환하면 항상 undefined가 된다. mock도 그 격차를
+  감추지 않도록 아예 없앤다(NotificationPanel.jsx가 body 유무로 캡션 줄 렌더
+  여부를 분기하므로, 여기서 빼 두면 dev 화면도 실서버와 같은 모양으로 보인다).
 */
 
 const MOCK_LATENCY_MS = 70
@@ -36,7 +43,6 @@ let notifications = [
     notificationId: 'noti-1',
     notificationType: 'SUPPORT_ANSWERED',
     title: '"주차 이동 시 가용 시간이 초기화돼요" 문의에 답변이 등록되었습니다',
-    body: '"주차 이동 시 가용 시간이 초기화돼요" 문의에 답변이 달렸습니다',
     routePath: '/help/ticket-1',
     readAt: null,
     createdAt: '2026-07-24T09:10:00.000Z',
@@ -45,7 +51,6 @@ let notifications = [
     notificationId: 'noti-2',
     notificationType: 'TODAY_TASKS',
     title: '오늘 할 일 3건이 있습니다',
-    body: '오늘 예정된 태스크 3건을 확인해 보세요',
     routePath: '/weekly',
     readAt: null,
     createdAt: '2026-07-24T07:30:00.000Z',
@@ -54,7 +59,6 @@ let notifications = [
     notificationId: 'noti-3',
     notificationType: 'DEADLINE_SOON',
     title: "'발표 자료 초안' 마감이 7/24로 임박했습니다",
-    body: '"발표 자료 초안" 태스크의 마감이 내일입니다',
     routePath: '/weekly?task=task-1',
     readAt: null,
     createdAt: '2026-07-23T22:00:00.000Z',
@@ -63,7 +67,6 @@ let notifications = [
     notificationId: 'noti-4',
     notificationType: 'RETROSPECT',
     title: '지난주 수행 기록이 5건 있습니다',
-    body: '지난주 수행 기록을 이번 주 계획에 참고해 보세요',
     routePath: '/statistics',
     readAt: '2026-07-22T08:00:00.000Z',
     createdAt: '2026-07-22T06:30:00.000Z',
@@ -72,7 +75,6 @@ let notifications = [
     notificationId: 'noti-5',
     notificationType: 'PLAN_UNSAVED',
     title: '이번 주 계획이 저장되지 않았습니다',
-    body: '주간 계획을 세우고 한 주를 시작해 보세요',
     routePath: '/weekly',
     readAt: '2026-07-21T09:00:00.000Z',
     createdAt: '2026-07-21T07:45:00.000Z',
