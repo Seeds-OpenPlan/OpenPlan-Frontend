@@ -121,10 +121,19 @@ function normalizeBlock(b) {
  * map+필터한다 — 배열이 아니면(아직 이 필드를 안 주는 서버) `undefined`를 그대로
  * 둬서, 호출부(getWeek)가 "필드가 없다"와 "고정 일정이 0개다"(빈 배열, 정상)를
  * 구별해 전자에서만 폴백하게 한다.
+ *
+ * `requestedWeekStartDate` (Thomas SHOULD-FIX) — `plan`이 null인 응답에는
+ * `weekStartDate`가 어디에도 없다(WeeklyPlanView 최상위 스키마에 그런 필드가
+ * 없고, `plan` 밑에서도 읽을 수 없다 — plan 자체가 null이므로). 그 경우
+ * `plan.weekStartDate ?? plan.week_start_date`가 둘 다 undefined로 떨어져
+ * 아래 `activeInWeek` 날짜 필터가 `!weekStartISO` 분기를 타 사실상 꺼져
+ * 버렸다 — getWeek가 이미 알고 있는, 이 응답을 요청할 때 쓴 `weekStartDate`로
+ * 폴백한다(실제로 이 함수가 plan:null인 `w`로 불리는 경로는 getWeek의 get-or-
+ * create 레이스 노트 참조 — 드물지만 존재한다).
  */
-function normalizeWeek(w) {
+function normalizeWeek(w, requestedWeekStartDate) {
   const plan = w.plan ?? w
-  const weekStartDate = plan.weekStartDate ?? plan.week_start_date
+  const weekStartDate = plan.weekStartDate ?? plan.week_start_date ?? requestedWeekStartDate
   return {
     weeklyPlanId: plan.weeklyPlanId ?? plan.weekly_plan_id,
     weekStartDate,
@@ -273,7 +282,7 @@ export function getWeek(weekStartDate) {
 
   // raw → normalizeWeek(raw) → (필요하면) 폴백 GET으로 fixedSchedules 보강,
   // 이 순서 그대로를 두 반환 경로(빈 주/채워진 주) 모두가 거친다.
-  const finalize = (raw) => withFixedSchedulesFallback(normalizeWeek(raw), weekStartDate)
+  const finalize = (raw) => withFixedSchedulesFallback(normalizeWeek(raw, weekStartDate), weekStartDate)
 
   return fetchWeekView().then((raw) => {
     if (!isEmptyWeekView(raw)) return finalize(raw)

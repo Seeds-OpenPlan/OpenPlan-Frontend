@@ -262,6 +262,26 @@ function seedFixedSchedules() {
       status: 'ACTIVE',
       version: 1,
     },
+    // Thomas BLOCKER repro (status=INACTIVE) — 외부 캘린더 연동이 꺼져 서버가
+    // 미러링한 상태(FIX-16)를 dev에서도 재현한다. 계약과 mock이 어긋나 이런
+    // 버그가 dev에서 안 잡힌 전례(이번 BE #90 전환 자체가 그 사례)가 있어, 실제
+    // 수요일 20시로 수요일 오전 블록들과 안 겹치게 둬 다른 데모(V2 위반 등)를
+    // 건드리지 않는다. activeThisWeek는 isFixedActiveForWeek가 status부터
+    // 본다(이 주의 week-exception 여부와 무관하게 항상 false) — WeeklyPage의
+    // 메뉴·FixedScheduleBlock의 칩/aria-label이 이걸 "이번 주 제외"가 아니라
+    // "연동 꺼짐"으로 보여줘야 한다.
+    {
+      fixedScheduleId: nextId('fixed'),
+      title: '해외 동료 화상 미팅',
+      weekday: 'WED',
+      startMinutes: 20 * 60,
+      endMinutes: 21 * 60,
+      effectiveFrom: null,
+      effectiveTo: null,
+      source: 'EXTERNAL',
+      status: 'INACTIVE',
+      version: 1,
+    },
   ]
 }
 
@@ -275,10 +295,18 @@ const fixedSchedules = seedFixedSchedules()
 // week, which is the whole point of PLAN-33/34 (never a global on/off).
 const weekExceptionsByFixedId = new Map()
 
-// True unless THIS week has an exception recorded for THIS fixed schedule. Read
-// by both the V2 rule (a deactivated fixed schedule stops blocking) and
-// getFixedSchedules (the `activeThisWeek` the ghost display keys off).
+// False for EITHER of two reasons (Thomas BLOCKER, dev-mock parity with BE #90):
+// a week-exception recorded for THIS week, OR the schedule's own `status`
+// being INACTIVE (외부 캘린더 연동이 꺼져 FIX-16로 미러링된 상태— unlike a week
+// exception, this is NOT per-week and has no week-exception row to toggle; the
+// real server's `activeThisWeek` collapses both causes into the same boolean,
+// which is exactly the ambiguity WeeklyPage.jsx's menuItemsFor/FixedScheduleBlock
+// now resolve by reading `status` separately). Read by the V2 rule (a
+// deactivated-for-either-reason fixed schedule stops blocking), the visible-range
+// span calc, and getWeek/getFixedSchedules (the `activeThisWeek` the ghost
+// display keys off).
 function isFixedActiveForWeek(fixed, weekStartISO) {
+  if (fixed.status === 'INACTIVE') return false
   return !weekExceptionsByFixedId.get(fixed.fixedScheduleId)?.has(weekStartISO)
 }
 

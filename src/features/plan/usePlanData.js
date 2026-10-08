@@ -746,10 +746,18 @@ export function useFixedSchedules(weekStartISO) {
  * lives. Same invalidate-on-success pattern `useCreateScheduleBlock`/
  * `useUpdateSchedule`/`useSaveWeek` already use for this exact key — a
  * background refetch, not a synchronous wipe, so an in-flight block drag's own
- * optimistic write (also against this key) is not clobbered by this call;
- * it would only ever race the SAME way those other mutations already do, a
- * risk this codebase already accepts for this key (see useMoveBlock's header
- * for the general stale-refetch mitigation that applies here too).
+ * optimistic write (also against this key) is not clobbered by this call.
+ *
+ * ACCEPTED RISK (Thomas review): if this invalidate's background refetch lands
+ * WHILE a block drag's own optimistic write is still in flight for the SAME
+ * week, the two can race the same way useMoveBlock's own header already
+ * documents for every other mutation sharing this key — worst case a block
+ * flashes back to its pre-drag position for one refetch, then the drag's own
+ * later write/invalidate lands and corrects it. This is self-healing (not a
+ * stuck or lost state) and is the SAME trade-off `useSaveWeek`/
+ * `useCreateScheduleBlock`/`useUpdateSchedule` already make for this exact
+ * key — not a new risk this hook introduces, so it is left as a plain
+ * invalidate rather than adding `cancelQueries`/snapshot machinery here too.
  */
 export function useToggleFixedException() {
   const queryClient = useQueryClient()
