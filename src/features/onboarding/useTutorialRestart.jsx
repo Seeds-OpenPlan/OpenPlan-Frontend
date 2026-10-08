@@ -41,16 +41,42 @@ export function useTutorialRestart() {
   // 이미 정정되어 있다(onboardingCopy.js 자신의 주석 참고).
   const confirmRestart = () => {
     setConfirmOpen(false)
-    // The FE-only step cursor (tutorialProgressStore.js) is reset directly —
-    // it is NOT part of the server patch below (the contract has no field for
-    // it; see that store's own header for the production bug this split
-    // avoids). Resetting it here, not inside TutorialOverlay, matters because
-    // THIS hook's instance (Settings/FAQ) is a different component from the
-    // one actually rendering the Coachmark (AppLayout) — the shared
-    // module-level store is what makes the reset visible there too, on the
-    // very next render, with no remount required.
-    resetTutorialStep(sessionQuery.data?.userId)
-    updateOnboardingProgress.mutate({ tutorialCompleted: false }, { onSuccess: () => navigate('/') })
+    /*
+      The FE-only step cursor (tutorialProgressStore.js) is reset in onSuccess,
+      AFTER the server PATCH confirms `tutorialCompleted:false` — not before,
+      and not unconditionally. Two reasons, one load-bearing and one just for
+      symmetry/safety with TutorialOverlay's own `finish` (Thomas code review
+      BLOCKER fixed there; this hook got the analogous question asked of it):
+
+      1. Unlike `finish`'s bug, resetting early here was never actually
+         VISIBLE: TutorialOverlay's `running` gate requires tutorialCompleted
+         to already be false, which it still isn't during this PATCH's flight
+         (old value `true` persists in the cache until onSuccess) — so a
+         stale step=0 sitting around while running stays false renders
+         nothing regardless of order.
+      2. It still matters on FAILURE: resetting unconditionally used to throw
+         away the step cursor even when the server rejected the restart,
+         leaving a "reset but not actually restarted" local state with no
+         real consequence today, but no reason to keep it either. Only
+         resetting on success keeps this hook correct by the same rule as
+         `finish` — the local cursor only ever moves once the server has
+         confirmed the state it's being reset FOR.
+
+      Resetting here (not inside TutorialOverlay) rather than there matters
+      regardless of ordering: THIS hook's instance (Settings/FAQ) is a
+      different component from the one actually rendering the Coachmark
+      (AppLayout) — the shared module-level store is what makes the reset
+      visible there too, on the very next render, with no remount required.
+    */
+    updateOnboardingProgress.mutate(
+      { tutorialCompleted: false },
+      {
+        onSuccess: () => {
+          resetTutorialStep(sessionQuery.data?.userId)
+          navigate('/')
+        },
+      },
+    )
   }
 
   const dialogBody = (

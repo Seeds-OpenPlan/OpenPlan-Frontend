@@ -84,14 +84,37 @@ export function TutorialOverlay() {
   }, [activeStep])
 
   // Completion and skip both PATCH the one server field the contract has
-  // (`tutorialDone`) and reset the LOCAL step cursor in the same click — a
-  // refresh must never resume a run that already ended either way.
+  // (`tutorialDone`). The LOCAL step cursor is reset ONLY in onSuccess, never
+  // before the mutate call (Thomas code review BLOCKER, fixed 2026-10): an
+  // earlier version reset it FIRST, synchronously. Between that reset and the
+  // PATCH actually resolving, `progress.tutorialCompleted` in the cache was
+  // still the OLD (false) value, so `running` stayed true while `tutorialStep`
+  // was already 0 — the render in that gap fell through to the kickoff
+  // dialog branch below, flashing "시작하기" again on every completion/skip,
+  // 100% reproducible. Resetting only after the PATCH succeeds means the two
+  // state changes that must be seen together (`tutorialCompleted:true` landing
+  // in the query cache, and the step cursor going back to 0) land in the SAME
+  // batched re-render — `running` flips false and `tutorialStep` resets at
+  // once, so this component short-circuits straight past the kickoff branch
+  // to `return null` with no visible step in between. If the PATCH fails, the
+  // step cursor is left untouched (onError below just toasts) — the user sees
+  // whatever step/kickoff they were already on and can press the same button
+  // again, rather than being silently reset to a kickoff state the server
+  // never actually confirmed.
   const finish = () => {
-    resetTutorialStep()
-    updateProgress.mutate({ tutorialCompleted: true })
+    updateProgress.mutate({ tutorialCompleted: true }, { onSuccess: () => resetTutorialStep() })
   }
 
   if (!progress || !running) return null
+
+  // While the completion/skip PATCH above is in flight, render NOTHING —
+  // not the current step (which is about to be torn down) and not a
+  // re-derived kickoff (tutorialStep hasn't been reset yet, so this branch
+  // wouldn't even trigger that, but see this file's own note above for why
+  // the ordering matters regardless). A split second of nothing reads far
+  // better than any flash of stale UI while a real network round-trip is
+  // pending.
+  if (updateProgress.isPending) return null
 
   // tutorialStep 0 — TUT-01 kickoff.
   if (!activeStep) {
@@ -141,9 +164,18 @@ export function TutorialOverlay() {
         if (isLast) {
           // TUT-08 "완료 상태와 다음 이동 화면을 확인한다" — land on the
           // dashboard once the last step's own [완료] click commits the one
-          // server field this run actually changes.
-          resetTutorialStep()
-          updateProgress.mutate({ tutorialCompleted: true }, { onSuccess: () => navigate('/') })
+          // server field this run actually changes. Step reset happens in
+          // onSuccess, same ordering (and same reason) as `finish` above —
+          // see that function's own comment.
+          updateProgress.mutate(
+            { tutorialCompleted: true },
+            {
+              onSuccess: () => {
+                resetTutorialStep()
+                navigate('/')
+              },
+            },
+          )
         } else {
           setTutorialStep(stepIndex + 2)
         }
