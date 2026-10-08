@@ -15,7 +15,17 @@ import { navItems } from './navItems'
 // icon/label content.
 function BottomTabBar() {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-10 h-bar border-t border-border bg-surface md:hidden">
+    // C3: Android의 edge-to-edge 제스처 바가 WebView 위로 겹치는 기기에서,
+    // 탭 아이콘이 그 바 밑에 깔리지 않도록 바 자체를 그만큼 더 키운다(없는
+    // 기기는 env()가 0이라 h-bar와 동일). `pb-[...]`가 아니라 `height`에
+    // 얹는 이유 — 이 요소는 border-box라 padding을 더하면 안쪽 아이콘·라벨
+    // 영역이 그만큼 줄어들 뿐 바 전체는 안 커진다; height를 늘리면 늘어난
+    // 몫이 아이콘 아래 빈 공간(제스처 영역)이 되고 아이콘 위치는 그대로다.
+    // 이 바의 "진짜 위쪽 경계"가 그만큼 위로 올라오므로, 이걸 가리지 않으려고
+    // 재는 다른 세 지점(AppLayout의 pb-24, Toaster의 bottom-24, WeeklyPage
+    // 플로팅 컨트롤의 bottom-18/bottom-36)도 같은 env()만큼 함께 올려야
+    // 한다 — 그쪽 각자의 C3 주석 참고.
+    <nav className="fixed inset-x-0 bottom-0 z-10 h-[calc(var(--spacing-bar)+env(safe-area-inset-bottom))] border-t border-border bg-surface md:hidden">
       <ul className="flex">
         {navItems.map(({ to, label, Icon, end }) => (
           <li key={to} className="flex-1">

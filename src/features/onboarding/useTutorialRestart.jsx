@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Dialog } from '../../components/common/Dialog'
 import { BottomSheet } from '../../components/common/BottomSheet'
 import { Button } from '../../components/common/Button'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useUpdateOnboardingProgress } from './useOnboarding'
 import { onboardingCopy } from './onboardingCopy'
 
@@ -22,8 +22,10 @@ const TITLE_ID = 'tutorial-restart-title'
 */
 export function useTutorialRestart() {
   const navigate = useNavigate()
-  const isDesktop = useIsDesktop()
   const [confirmOpen, setConfirmOpen] = useState(false)
+  // D1: 다이얼로그는 `confirmOpen`으로 토글된다 — 열려 있는 동안 셸이 안
+  // 바뀌게 열리는 시점에 고정한다.
+  const isDesktop = useLockedIsDesktop(confirmOpen)
   const confirmBtnRef = useRef(null)
   const updateOnboardingProgress = useUpdateOnboardingProgress()
 

@@ -3,7 +3,7 @@ import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { compareBySeverity, severityLabels, violationCopy } from '../../features/plan/violationMessages'
 
 /*
@@ -182,7 +182,8 @@ export function ReviewPanel({
   onClose,
   onOpenReplan,
 }) {
-  const isDesktop = useIsDesktop()
+  // D1: open prop으로 상시 마운트된 채 토글됨 — 열리는 시점에 셸을 고정한다.
+  const isDesktop = useLockedIsDesktop(open)
   const titleId = useId()
   const closeRef = useRef(null)
 

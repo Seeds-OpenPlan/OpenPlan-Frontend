@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { BellIcon, SettingsIcon } from './icons'
 import { NotificationPanel } from './NotificationPanel'
 import { BottomSheet } from '../common/BottomSheet'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import {
   useNotifications,
   useUnreadNotificationCount,
@@ -54,7 +54,10 @@ function PanelHeader({ onOpenSettings }) {
 */
 export function NotificationBell() {
   const [open, setOpen] = useState(false)
-  const isDesktop = useIsDesktop()
+  // D1: 상시 마운트된 채 로컬 `open`으로 토글됨 — 패널이 열려 있는 동안
+  // 폴드 펼침/접힘으로 데스크톱 드롭다운↔모바일 시트가 바뀌지 않게 열리는
+  // 시점에 고정한다(바깥 클릭 판정에 쓰는 아래 effect도 같은 값을 본다).
+  const isDesktop = useLockedIsDesktop(open)
   const navigate = useNavigate()
   const wrapperRef = useRef(null)
   const bellBtnRef = useRef(null)

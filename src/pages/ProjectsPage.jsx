@@ -349,7 +349,10 @@ function ProjectsPage() {
     <div className="flex flex-col gap-4 pb-16 md:pb-0">
       <PageHeader onCreate={() => setOverlay({ type: 'create' })} canWrite={canWrite} offlineReason={offlineReason} />
 
-      <div className="flex gap-2">
+      {/* B4: 필터 pill 3개가 줄바꿈 없이 한 줄을 고집해, 좁은 화면에서는 긴
+          라벨(진행 중/일시중지/종료 + 개수)이 서로 밀며 넘쳤다. flex-wrap로
+          안 맞으면 둘째 줄로 내려가게 한다. */}
+      <div className="flex flex-wrap gap-2">
         <FilterPill
           active={tab === 'IN_PROGRESS'}
           label={`${PROJECT_STATUS_LABELS.IN_PROGRESS} ${inProgress.length}`}

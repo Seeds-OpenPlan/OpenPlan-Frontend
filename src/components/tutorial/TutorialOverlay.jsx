@@ -4,7 +4,7 @@ import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { Coachmark } from './Coachmark'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useOnboardingProgress, useUpdateOnboardingProgress } from '../../features/onboarding/useOnboarding'
 import { TUTORIAL_STEPS } from '../../features/tutorial/tutorialSteps'
 import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
@@ -35,7 +35,6 @@ const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
   flagged rather than silently simplified.
 */
 export function TutorialOverlay() {
-  const isDesktop = useIsDesktop()
   const navigate = useNavigate()
   const location = useLocation()
   const progressQuery = useOnboardingProgress()
@@ -47,6 +46,10 @@ export function TutorialOverlay() {
   const running = Boolean(
     progress?.onboardingCompleted && !progress.tutorialCompleted && !progress.tutorialSkipped,
   )
+  // D1: `running`이 이 오버레이의 "open" 신호다 — 킥오프부터 각 코치마크
+  // 단계까지 전부 이 한 셸 선택을 공유하므로, 튜토리얼이 진행되는 동안
+  // 폴드 펼침/접힘으로 중간에 셸이 바뀌지 않게 시작 시점에 고정한다.
+  const isDesktop = useLockedIsDesktop(running)
   const stepIndex = (progress?.tutorialStep ?? 0) - 1 // -1 while still at kickoff (tutorialStep 0)
   const activeStep = running && stepIndex >= 0 ? TUTORIAL_STEPS[stepIndex] : null
 

@@ -211,48 +211,48 @@ export function TaskEditPreview({
           </p>
         ) : (
           <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-control border border-border">
-            {/* The header row lives INSIDE the same scroll container as the body
-                and is pinned with `sticky` — so both share one width and the
-                scrollbar can't offset the 7 header columns from the 7 body
-                columns (previously the header sat outside the scroll box and drifted
-                by the scrollbar's width). `min-h-0 flex-1 overflow-y-auto`
-                (not a fixed `maxHeight` px cap, as before the GRID SIZING
-                follow-up) — this region now stretches to fill whatever
-                height flex-[3] above actually allocated it, and scrolls
-                internally for however much of the visible-hours range
-                still doesn't fit in that (now much larger) space. */}
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="sticky top-0 z-20 grid grid-cols-7 border-b border-border bg-surface-sunken text-center text-caption text-text-muted">
-                {WEEKDAY_LABELS_KO.map((label) => (
-                  <span key={label} className="border-l border-border py-1 first:border-l-0">
-                    {label}
-                  </span>
-                ))}
-              </div>
-              <div className="relative grid grid-cols-7" style={{ height: rangeHeightPx(range) }}>
-                {ticks.map((h) => (
-                  <div
-                    key={h}
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-x-0 border-t border-border/60"
-                    style={{ top: (h * 60 - range.startMinutes) * PX_PER_MIN }}
-                  />
-                ))}
-                {days.map((dayISO) => (
-                  <div key={dayISO} className="relative border-l border-border first:border-l-0">
-                    {blocks
-                      .filter((b) => dateOf(b.startAt) === dayISO)
-                      .map((b) => (
-                        <MiniBlock
-                          key={b.planBlockId}
-                          block={b}
-                          range={range}
-                          isVirtual={b.planBlockId === virtualBlock?.planBlockId}
-                          violation={violationFor(issues, b.planBlockId)}
-                        />
-                      ))}
-                  </div>
-                ))}
+            {/* A8: 7개 요일 칸이 min-w 없이 그리드 폭을 그대로 나눠 가져서,
+                모바일 폭(예: 360px)에서는 칸이 ~44px 밑으로 눌려 날짜/블록
+                글자가 겹쳤다(CalendarGrid.jsx가 이미 똑같은 문제를 overflow-
+                x-auto + min-w로 푼 바로 그 방식). 가로 스크롤을 추가하고,
+                세로 스크롤(기존 overflow-y-auto)은 그 **안쪽**에 둔다 —
+                CalendarGrid와 같은 중첩 순서라야 세로 스크롤바가 생겨도
+                헤더 7칸과 본문 7칸이 서로 밀리지 않는다(그 파일 헤더·바로
+                아래 div의 주석 참고). */}
+            <div className="min-h-0 flex-1 overflow-x-auto">
+              <div className="h-full min-w-[420px] overflow-y-auto">
+                <div className="sticky top-0 z-20 grid grid-cols-7 border-b border-border bg-surface-sunken text-center text-caption text-text-muted">
+                  {WEEKDAY_LABELS_KO.map((label) => (
+                    <span key={label} className="border-l border-border py-1 first:border-l-0">
+                      {label}
+                    </span>
+                  ))}
+                </div>
+                <div className="relative grid grid-cols-7" style={{ height: rangeHeightPx(range) }}>
+                  {ticks.map((h) => (
+                    <div
+                      key={h}
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-0 border-t border-border/60"
+                      style={{ top: (h * 60 - range.startMinutes) * PX_PER_MIN }}
+                    />
+                  ))}
+                  {days.map((dayISO) => (
+                    <div key={dayISO} className="relative border-l border-border first:border-l-0">
+                      {blocks
+                        .filter((b) => dateOf(b.startAt) === dayISO)
+                        .map((b) => (
+                          <MiniBlock
+                            key={b.planBlockId}
+                            block={b}
+                            range={range}
+                            isVirtual={b.planBlockId === virtualBlock?.planBlockId}
+                            violation={violationFor(issues, b.planBlockId)}
+                          />
+                        ))}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>

@@ -126,7 +126,12 @@ export function BottomSheet({
         tabIndex={-1}
         style={heightPx != null ? { height: heightPx } : undefined}
         className={[
-          'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-sheet bg-surface shadow-modal',
+          // D2: 폴드를 펼친 폭(~670-900px, 아직 모바일 셸을 쓰는 768 미만
+          // 구간 포함)에서 `w-full`이 시트를 그 폭까지 그대로 늘렸다 — 진짜
+          // 휴대폰 폭(360~430px대)에는 영향이 없는 `max-w-lg`(512px)로
+          // 상한을 두고, 부모가 이미 `justify-center`이므로 가운데 정렬도
+          // 그대로 따라온다(mx-auto 불필요).
+          'relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-t-sheet bg-surface shadow-modal',
           'motion-safe:transition-transform motion-safe:duration-slow motion-safe:ease-emphasized',
         ].join(' ')}
       >

@@ -21,7 +21,11 @@ import { BrandMarkIcon } from './authIcons'
 */
 export function AuthShell({ children, footer }) {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-surface-sunken px-4 py-10">
+    // Thomas 리뷰 HIGH: 이 셸은 세로 중앙 정렬이라 py-10(위아래 2.5rem)
+    // 여유가 대부분의 상태 바 인셋을 이미 흡수하지만, 화면이 짧으면서
+    // 인셋이 큰 기기에서는 카드가 상태 바 밑에서 시작할 수 있다 — 위쪽만
+    // env(safe-area-inset-top)을 더해 안전하게 둔다.
+    <div className="flex min-h-screen flex-col items-center justify-center bg-surface-sunken px-4 pb-10 pt-[calc(2.5rem+env(safe-area-inset-top))]">
       <div className="flex w-full max-w-sm flex-col gap-6 md:rounded-card md:border md:border-border md:bg-surface md:p-8 md:shadow-card">
         <div className="flex flex-col items-center gap-3 text-center">
           <BrandMarkIcon />

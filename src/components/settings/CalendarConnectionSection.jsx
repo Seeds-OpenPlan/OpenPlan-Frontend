@@ -7,7 +7,7 @@ import { LoadingSkeleton } from '../common/LoadingSkeleton'
 import { ErrorState } from '../common/ErrorState'
 import { GoogleGIcon, AppleGlyphIcon } from './settingsIcons'
 import { AppleConnectDialog } from './AppleConnectDialog'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { isAndroidAppShell } from '../../utils/appShell'
 import {
   useConnections,
@@ -55,7 +55,8 @@ function visibleProviders() {
 }
 
 function CalendarSelectDialog({ connection, onClose, onSubmit, submitting }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const firstCheckboxRef = useRef(null)
   // W6: 선택 가능한 캘린더는 connections 응답에 얹혀 오지 않는다 — 다이얼로그가
@@ -166,7 +167,8 @@ function CalendarSelectDialog({ connection, onClose, onSubmit, submitting }) {
   호출하므로 설정 화면을 여는 것만으로 두 번 부르게 만들지 않는다.
 */
 function WriteCalendarDialog({ connection, onClose, onSubmit, submitting }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const firstOptionRef = useRef(null)
   const calendarsQuery = useAvailableCalendars(connection.connectionId)
@@ -243,7 +245,8 @@ function WriteCalendarDialog({ connection, onClose, onSubmit, submitting }) {
 }
 
 function DisconnectConfirmDialog({ connection, onClose, onConfirm, submitting }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const confirmRef = useRef(null)
 

@@ -25,9 +25,9 @@ const LEGEND = [
   { label: '고정', dot: 'bg-neutral-100 border-neutral-400' },
 ]
 
-function BlockLegend() {
+function BlockLegend({ className = '' }) {
   return (
-    <ul className="hidden items-center gap-2.5 text-caption text-text-muted md:flex">
+    <ul className={`flex items-center gap-2.5 text-caption text-text-muted ${className}`}>
       {LEGEND.map((item) => (
         <li key={item.label} className="flex items-center gap-1">
           <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-sm border ${item.dot}`} />
@@ -99,6 +99,24 @@ export function SummaryBar({
           <ModeToggle mode={mode} onChange={onModeChange} />
         </div>
       </div>
+
+      {/*
+        A7: 데스크톱의 BlockLegend는 위에서 `hidden md:flex`로 늘 보이지만,
+        모바일은 그냥 숨기면 색만으로 태스크/일정/고정을 구분해야 하는
+        상태가 된다(각 블록의 aria-label엔 종류가 실려 있지만 — PlanBlock
+        헤더 참고 — 그건 스크린리더에게만 들린다; 색을 못 보는데 스크린리더도
+        안 쓰는 저시력 사용자에겐 아무것도 없다, NFR-017). 그렇다고 상시
+        노출하면 "화면이 좁은데 범례가 한 줄을 더 먹는다"는 처음 숨긴 이유가
+        그대로 되살아난다 — 그래서 접는다: 네이티브 <details>라 별도 상태·
+        ARIA 없이 키보드·SR 모두 동작하고, 접혀 있을 때는 트리거 한 줄만큼만
+        차지한다.
+      */}
+      <details className="mt-1.5 md:hidden">
+        <summary className="inline cursor-pointer list-none rounded-sm text-caption text-text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
+          색 안내
+        </summary>
+        <BlockLegend className="mt-1.5 flex-wrap" />
+      </details>
 
       <div
         className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-200"

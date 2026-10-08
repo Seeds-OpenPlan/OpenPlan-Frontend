@@ -4,7 +4,7 @@ import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { ErrorState } from '../common/ErrorState'
 import { ConflictOverlay } from '../common/ConflictOverlay'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { PROJECT_STATUS_OPTIONS } from '../../features/project/projectLabels'
 import { formatISODate } from '../../features/plan/planTime'
 
@@ -40,7 +40,8 @@ export function ProjectManageForm({
   onConflictAccept,
   onConflictRetry,
 }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const nameRef = useRef(null)
 
   const [name, setName] = useState(project.name)

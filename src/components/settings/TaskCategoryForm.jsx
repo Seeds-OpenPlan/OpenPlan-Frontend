@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 
 const FIELD =
   'w-full rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring'
@@ -23,7 +23,8 @@ const TITLE_ID = 'task-category-form-title'
   needs) a home in systemMessages.js's shared surface catalog.
 */
 export function TaskCategoryForm({ onClose, onSubmit, submitting = false, submitError }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const nameRef = useRef(null)
   const [name, setName] = useState('')
 
