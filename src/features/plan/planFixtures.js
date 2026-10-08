@@ -1290,6 +1290,18 @@ export const mockBackend = {
       blocks: derived.blocks,
       unplacedCount: derived.unplacedCount,
       validation: derived.validation,
+      // BE #90 — WeeklyPlanView.fixedSchedules: `blocks`처럼 `plan` 밑이 아니라
+      // 봉투 최상위에 있고, `activeThisWeek`를 이미 포함한다(이 모의가 흉내 내는
+      // 예전 가정과 달리, 이걸 받으려고 서버에 weekStartDate를 따로 물어볼 필요가
+      // 없다 — planApi.js의 normalizeWeek가 바로 여기서 읽는다). 이 모의의
+      // ensureWeek는 항상 plan을 만들어 주므로 plan=null인 주는 실제로 재현되지
+      // 않지만(그 자체는 이 변경과 무관한 기존 설계, planApi.js getWeek 헤더 참고),
+      // 계약은 그런 주에도 이 필드를 채운다 — 그래서 여기서도 plan 유무와 무관하게
+      // 항상 내려준다.
+      fixedSchedules: fixedSchedules.map((f) => ({
+        ...f,
+        activeThisWeek: isFixedActiveForWeek(f, derived.weekStartDate),
+      })),
     }
   },
 
@@ -1298,11 +1310,16 @@ export const mockBackend = {
     return availability
   },
 
-  // GET /fixed-schedules?status=ACTIVE — ST-F1-06. `weekStartISO` is a mock-only
-  // extra argument (see fixedScheduleApi.js's ASSUMPTION note): the real 07번
-  // 명세서 GET has no weekly concept at all, so this is where that gap is
-  // papered over — `activeThisWeek` is computed fresh per call from the week
-  // exception store rather than stored on the schedule itself.
+  // GET /fixed-schedules?status=ACTIVE — FALLBACK ONLY (BE #90; see
+  // fixedScheduleApi.js's own header). `getWeek` above already attaches
+  // `fixedSchedules` with a real `activeThisWeek` directly, so this branch of
+  // the mock is normally unreached — kept so `getWeek`'s own
+  // withFixedSchedulesFallback path still resolves to something sane in DEV
+  // if it ever runs (e.g. a future fixture that omits the field). `weekStartISO`
+  // is accepted but, matching the now-contract-faithful real endpoint, NOT
+  // what makes `activeThisWeek` correct here — this mock still computes it
+  // from the week-exception store for convenience, even though the real
+  // fallback can't (fixedScheduleApi.js's getFixedSchedules's own header).
   async getFixedSchedules(weekStartISO) {
     await delay(60)
     return {

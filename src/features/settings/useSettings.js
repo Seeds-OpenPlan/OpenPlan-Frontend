@@ -75,7 +75,8 @@ export function useUpdateWeeklyAvailableMinutes() {
 export const fixedSchedulesAllKey = () => ['fixedSchedulesAll']
 
 /** Week-agnostic list for the settings screen (distinct from the plan-grid's
- * week-scoped `fixedSchedulesKey` in usePlanData.js). */
+ * week-scoped read, which — BE #90 — now lives on `weekPlanKey` in
+ * usePlanData.js, not a dedicated key of its own). */
 export function useAllFixedSchedules() {
   return useQuery({
     queryKey: fixedSchedulesAllKey(),
@@ -85,13 +86,15 @@ export function useAllFixedSchedules() {
 
 // Both keys below are invalidated together on every mutation: `fixedSchedulesAllKey`
 // (['fixedSchedulesAll']) is this settings screen's own week-agnostic list, while
-// `['fixedSchedules']` is a PREFIX match on the plan-grid's per-week query key
-// (usePlanData.js's `fixedSchedulesKey`, `['fixedSchedules', weekStartISO]`).
+// `['weekPlan']` is a PREFIX match on the plan-grid's per-week query key
+// (usePlanData.js's `weekPlanKey`, `['weekPlan', weekStartISO]` — BE #90: the
+// grid now reads fixed schedules off THIS key, not a dedicated one of its own,
+// since `GET /weekly-plans` carries them alongside `blocks`).
 // TanStack Query's default `invalidateQueries` matching is prefix-based, so this
 // one call marks every cached week stale regardless of which week is open — a
 // CRUD here used to only invalidate the settings-list key, leaving the grid
 // showing a stale fixed schedule for up to its own 5-minute staleTime.
-const gridFixedSchedulesKeyPrefix = () => ['fixedSchedules']
+const gridWeekPlanKeyPrefix = () => ['weekPlan']
 
 export function useCreateFixedSchedule() {
   const queryClient = useQueryClient()
@@ -99,7 +102,7 @@ export function useCreateFixedSchedule() {
     mutationFn: createFixedSchedule,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
-      queryClient.invalidateQueries({ queryKey: gridFixedSchedulesKeyPrefix() })
+      queryClient.invalidateQueries({ queryKey: gridWeekPlanKeyPrefix() })
       toast({ tone: 'success', message: '고정 일정을 추가했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
@@ -112,7 +115,7 @@ export function useUpdateFixedSchedule() {
     mutationFn: ({ fixedScheduleId, patch }) => updateFixedSchedule(fixedScheduleId, patch),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
-      queryClient.invalidateQueries({ queryKey: gridFixedSchedulesKeyPrefix() })
+      queryClient.invalidateQueries({ queryKey: gridWeekPlanKeyPrefix() })
       toast({ tone: 'success', message: '저장했습니다' })
     },
     // NOTE: E-COM-006 (version conflict) is surfaced to the caller via the
@@ -132,7 +135,7 @@ export function useDeleteFixedSchedule() {
     mutationFn: (fixedScheduleId) => deleteFixedSchedule(fixedScheduleId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
-      queryClient.invalidateQueries({ queryKey: gridFixedSchedulesKeyPrefix() })
+      queryClient.invalidateQueries({ queryKey: gridWeekPlanKeyPrefix() })
       toast({ tone: 'success', message: '고정 일정을 삭제했습니다' })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
@@ -317,9 +320,9 @@ export function useApplyCandidateEvents() {
       return { fetched: events.length, applied, already, failed }
     },
     onSuccess: ({ fetched, applied, already, failed }) => {
-      // 고정 일정이 새로 생겼다 — 주간 계획·고정 일정 화면이 모두 그것을 읽는다.
-      // 주차별로 키가 갈리므로 접두사로 한 번에 무효화한다.
-      queryClient.invalidateQueries({ queryKey: ['fixedSchedules'] })
+      // 고정 일정이 새로 생겼다 — 주간 계획 화면(BE #90: weekPlan 캐시에서 함께
+      // 읽는다, 더 이상 별도 fixedSchedules 캐시가 없다)·설정 목록이 모두 그것을
+      // 읽는다. weekPlan은 주차별로 키가 갈리므로 접두사로 한 번에 무효화한다.
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
       queryClient.invalidateQueries({ queryKey: ['weekPlan'] })
 

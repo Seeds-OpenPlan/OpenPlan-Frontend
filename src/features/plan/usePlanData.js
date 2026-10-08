@@ -36,7 +36,7 @@ import {
   postExecutionRecord,
 } from './taskApi'
 import { patchSchedule, postScheduleBlock } from './scheduleApi'
-import { addFixedException, getFixedSchedules, removeFixedException } from './fixedScheduleApi'
+import { addFixedException, removeFixedException } from './fixedScheduleApi'
 import { generateReplanOptions, selectReplanOption } from './replanApi'
 import { GENERATED_STRATEGY_TYPES } from './replanStrategies'
 import { addWeeksISO } from './planTime'
@@ -47,7 +47,9 @@ import { systemMessages } from '../../constants/systemMessages'
 export const weekPlanKey = (weekStartISO) => ['weekPlan', weekStartISO]
 export const availabilityKey = () => ['availability']
 export const unplacedTasksKey = (projectId = null) => ['unplacedTasks', projectId]
-export const fixedSchedulesKey = (weekStartISO) => ['fixedSchedules', weekStartISO]
+// NOTE: fixed schedules no longer have their OWN query key (BE #90 retired the
+// separate ['fixedSchedules', weekStartISO] cache entry) — useFixedSchedules
+// below reads off weekPlanKey instead, see its own header.
 
 const WEEK_STALE_MS = 60 * 1000
 
@@ -697,18 +699,26 @@ export function useUpdateSchedule() {
 // --- ST-F1-06: fixed schedule blocks · week exceptions -----------------------
 
 /**
- * GET /fixed-schedules — recurring, immovable schedules plus this week's
- * `activeThisWeek` (PLAN-33/34). A generous staleTime: a fixed schedule's own
- * weekday/time rarely changes (그 편집은 ST-F1-12 소관, out of scope here) and its
- * per-week exception only changes through `useToggleFixedException` below, which
- * invalidates this exact key on success — so there is nothing for a short
- * staleTime to catch that the mutation doesn't already refresh.
+ * Recurring, immovable schedules plus this week's `activeThisWeek` (PLAN-33/34).
+ *
+ * BE #90: these no longer come from their own endpoint — `GET /weekly-plans`
+ * carries them alongside `blocks` now (planApi.js's `getWeek`/`normalizeWeek`
+ * attaches `fixedSchedules`, with the undefined-field fallback documented
+ * there). So this is NOT a second network request: it points at the exact
+ * SAME `queryKey`/`queryFn` as `useWeekPlan` above, which TanStack Query
+ * dedupes by key alone (not by queryFn identity) — both hooks share one
+ * cache entry, one in-flight fetch, one `keepPreviousData` placeholder across
+ * week navigation. `select` is what lets THIS hook narrow the shared result
+ * down to just the field it needs, independent of `useWeekPlan`'s own
+ * observer, which still sees the whole week object.
  */
 export function useFixedSchedules(weekStartISO) {
   return useQuery({
-    queryKey: fixedSchedulesKey(weekStartISO),
-    queryFn: () => getFixedSchedules(weekStartISO),
-    staleTime: 5 * 60 * 1000,
+    queryKey: weekPlanKey(weekStartISO),
+    queryFn: () => getWeek(weekStartISO),
+    placeholderData: keepPreviousData,
+    staleTime: WEEK_STALE_MS,
+    select: (week) => week?.fixedSchedules ?? [],
   })
 }
 
@@ -729,6 +739,17 @@ export function useFixedSchedules(weekStartISO) {
  * the CURRENT block set as its argument — threading that through this generic
  * hook would couple it to a caller-specific concern it has no other reason to
  * know about.
+ *
+ * BE #90: invalidates `weekPlanKey` (not a dedicated fixed-schedules key —
+ * there isn't one anymore, see `useFixedSchedules` above) so the toggle's
+ * ghost/restore actually shows up: this key is where `fixedSchedules` now
+ * lives. Same invalidate-on-success pattern `useCreateScheduleBlock`/
+ * `useUpdateSchedule`/`useSaveWeek` already use for this exact key — a
+ * background refetch, not a synchronous wipe, so an in-flight block drag's own
+ * optimistic write (also against this key) is not clobbered by this call;
+ * it would only ever race the SAME way those other mutations already do, a
+ * risk this codebase already accepts for this key (see useMoveBlock's header
+ * for the general stale-refetch mitigation that applies here too).
  */
 export function useToggleFixedException() {
   const queryClient = useQueryClient()
@@ -738,7 +759,7 @@ export function useToggleFixedException() {
         ? removeFixedException(fixedScheduleId, weekStartISO)
         : addFixedException(fixedScheduleId, weekStartISO),
     onSuccess: (_data, { weekStartISO, activate }) => {
-      queryClient.invalidateQueries({ queryKey: fixedSchedulesKey(weekStartISO) })
+      queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       toast({
         tone: 'success',
         message: activate ? '고정 일정을 다시 활성화했습니다' : '이번 주만 비활성화했습니다',
