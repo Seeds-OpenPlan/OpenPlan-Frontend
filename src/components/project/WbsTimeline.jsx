@@ -276,6 +276,14 @@ export function WbsTimeline({
           .current(iso)
           .catch(() => toast({ tone: 'error', message: systemMessages.error.writeTitle }))
       }
+      // 리드 셀프리뷰 지적: 터치 드래그 도중 이 컴포넌트가 언마운트되면(행
+      // 접기/다른 행 펼치기/탭 전환/드로어 닫기/리페치로 인한 키 변경)
+      // onDeadlinePointerUp·onDeadlinePointerCancel은 더 이상 오지 않는다 —
+      // 그 둘이 유일하게 activeDragPointerId를 지우는 자리였으므로, 지우지
+      // 않으면 withLongPressGate가 그 뒤의 모든 새 터치 pointerdown을 영원히
+      // 무시해 새로고침 전까지 WBS 터치 드래그 전체가 막힌다. 언마운트 시점에
+      // 진행 중인 드래그가 있었다면 여기서 대신 지운다.
+      if (deadlineDragRef.current) clearActiveDragPointer(deadlineDragRef.current.pointerId)
     },
     [],
   )
@@ -683,6 +691,12 @@ export function WbsTimeline({
                   onPointerMove={onDeadlinePointerMove}
                   onPointerUp={onDeadlinePointerUp}
                   onPointerCancel={onDeadlinePointerCancel}
+                  // 리드 셀프리뷰 지적: setPointerCapture로 잡은 캡처를
+                  // 브라우저가 중간에 뺏어가도(다른 요소가 가로채거나, 포인터
+                  // 자체가 비정상 종료되는 경우) pointerup/pointercancel 중
+                  // 어느 쪽도 안 올 수 있다 — 그러면 activeDragPointerId가
+                  // 똑같이 영영 남는다. cancel과 같은 정리 경로로 묶어 둔다.
+                  onLostPointerCapture={onDeadlinePointerCancel}
                   // 리드 셀프리뷰 후속: 이 손잡이엔 데스크톱 우클릭 메뉴가
                   // 원래 없지만(그래서 기존엔 onContextMenu 자체가 없었다),
                   // 터치 롱프레스가 네이티브 contextmenu를 띄우면 드래그가
@@ -849,6 +863,12 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       pendingCommitRef.current = null
       onCommitRef.current(node.taskId, patch)
     }
+    // 리드 셀프리뷰 지적: 같은 이유로, 터치 드래그 도중 이 바 자신이
+    // 언마운트되면 onPointerUp/onPointerCancel이 다시는 오지 않아
+    // activeDragPointerId가 영영 남는다 — 위 deadline cleanup과 동일한
+    // 구멍. 언마운트 시점에 이 바가 쥐고 있던 드래그가 있었다면 여기서
+    // 대신 지운다.
+    if (dragRef.current) clearActiveDragPointer(dragRef.current.pointerId)
     // `node.taskId` (not `node`): this bar is keyed by taskId in the parent
     // list, so a MOUNTED instance's taskId value never actually changes
     // (only `node`'s own object identity does, on every WBS refetch) —
@@ -994,6 +1014,10 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      // 리드 셀프리뷰 지적: deadline 손잡이와 같은 이유로 — 캡처를 중간에
+      // 뺏기면 pointerup/cancel 없이 드래그가 끊겨 activeDragPointerId가
+      // 남는다. cancel과 같은 경로로 정리한다.
+      onLostPointerCapture={onPointerCancel}
       // 리드 셀프리뷰 후속: WBS 바에는 원래 우클릭 메뉴가 없다 — 그래도 터치
       // 롱프레스가 일으키는 네이티브 contextmenu(시스템 공유/복사 팝업)는
       // 막아 둔다. 그대로 두면 드래그가 막 활성화된 순간 화면을 덮는다.
