@@ -57,7 +57,12 @@ export function NotificationPanel({ notifications, isLoading, isError, onRetry, 
                   {unread && <span className="sr-only">(읽지 않음) </span>}
                   {n.title}
                 </span>
-                <span className="truncate text-caption text-text-muted">{n.body}</span>
+                {/* PR #69 AI 리뷰 Should-fix: 계약 Notification엔 body가 없다
+                    — 항상 undefined일 필드를 그려 실서버에서 빈 캡션 줄이
+                    남는 사고를 막기 위해 값이 있을 때만 렌더한다(지금은
+                    normalizeNotification이 애초에 이 필드를 안 주므로 항상
+                    생략되지만, 방어적으로 조건을 남긴다). */}
+                {n.body && <span className="truncate text-caption text-text-muted">{n.body}</span>}
                 <span className="text-caption text-text-disabled">{formatDateTimeKO(n.createdAt)}</span>
               </span>
             </button>

@@ -1,15 +1,17 @@
 /*
   DEV-ONLY in-memory mock backend for the settings screens. 기본값
-  (preferences)·제안(suggestions)·계정(account)·알림(notification-settings)은
-  07 API 명세서에 없는 [가정-확장]이다 — settingsApi.js's own header for the
-  one rule this whole module follows (isolate the guess so only the
-  normalize/base-URL layer changes once BE settles on a real shape). **연동
-  (connections)은 W6부터 예외** — external-calendar-connections 계약이 확정돼
-  이 mock도 그 모양(connectionId·status)을 그대로 흉내낸다(그 섹션 자신의
-  헤더 코멘트 참조). withDevFallback이 여전히 이 mock으로 폴백시켜 주는 것은
-  "계약이 정해졌다"는 것과 "실서버가 이 사이클에 붙어 있다"는 것이 별개이기
-  때문 — 애플 경로는 BE PR #33이 아직 로컬에 없어 dev에서 이 mock 없이는
-  전혀 시연할 수 없다.
+  (preferences)·제안(suggestions)·계정(account)은 07 API 명세서에 없는
+  [가정-확장]이다 — settingsApi.js's own header for the one rule this whole
+  module follows (isolate the guess so only the normalize/base-URL layer
+  changes once BE settles on a real shape). **연동(connections)·알림
+  (notification-settings)은 예외** — external-calendar-connections 계약은
+  W6부터, 알림 계약은 2026-10-08 대조부터 확정돼 이 mock도 그 실제 모양을
+  그대로 흉내낸다(각 섹션 자신의 헤더 코멘트 참조 — 알림은 배열 조회 +
+  `{notificationType, isEnabled}` 행, 과거엔 단일 객체 + 임의 키 이름으로
+  계약과 전혀 다른 모양을 흉내내고 있었다). withDevFallback이 여전히 이 mock
+  으로 폴백시켜 주는 것은 "계약이 정해졌다"는 것과 "실서버가 이 사이클에
+  붙어 있다"는 것이 별개이기 때문 — 애플 경로는 BE PR #33이 아직 로컬에
+  없어 dev에서 이 mock 없이는 전혀 시연할 수 없다.
 
   가용 시간 범위(요일별 창)·고정 일정·주차 예외 have a REAL contract already and
   are served by planApi.js/fixedScheduleApi.js's own mocks (planFixtures.js) —
@@ -127,21 +129,22 @@ let account = {
   reactivationDeadlineDays: 30,
 }
 
-// --- 알림 (NOTI-01): 5종 즉시저장 토글 --------------------------------------------
-// masterEnabled (ST-F1-15 오너 피드백 #5 — 전체 알림 켜기/끄기): 개별 5종과
-// 같은 오브젝트의 필드 하나일 뿐이라 patchNotificationSetting('masterEnabled',
-// …)이 그대로 재사용된다 — 이 마스터 스위치 하나 때문에 별도 엔드포인트/모양을
-// 만들지 않는다. 5종의 실제 값에서 "전부 켜짐"을 매번 계산해 마스터 상태로
-// 쓰지 않고 독립 필드로 저장하는 이유는 SettingsNotificationsPage.jsx 자신의
-// 헤더 주석 참고 — 계산값으로 두면 개별 토글 하나만 꺼도 마스터가 즉시
-// "꺼짐"으로 튀어 나머지 개별 토글까지 갑자기 비활성화되는 함정이 있다.
+// --- 알림 (NOTI-01, 확정 계약): 5종 즉시저장 토글 ----------------------------------
+// 2026-10-08 계약 대조 수정 — 과거 masterEnabled는 "전체 알림"을 서버에 독립
+// 필드로 저장한다고 가정했지만 실제 계약(NotificationSetting 스키마)엔 그런
+// 필드가 없다. 서버에 없는 값을 저장하면 안 되므로 마스터 토글은 이제 화면
+// 전용 파생값이다(SettingsNotificationsPage.jsx 헤더 참고) — 이 mock은 5종
+// 실제 값만 들고, masterEnabled 필드 자체를 아예 두지 않는다. 키 이름도
+// 전부 계약 enum(NotificationType)으로 바꿨다 — dueSoonTasks/planRisk/
+// inquiryReply/announcement/weeklyReminder는 전부 임의로 지어낸 이름이라
+// 계약과 전혀 달랐다(공지사항=announcement에 대응하는 유형 자체가 계약에
+// 없다 — 그 토글은 통째로 삭제됐다).
 let notificationSettings = {
-  masterEnabled: true,
-  dueSoonTasks: true, // 마감 임박 태스크
-  planRisk: true, // 계획 위험(과부하) 경고
-  inquiryReply: true, // 문의 답변
-  announcement: false, // 공지사항
-  weeklyReminder: true, // 주간 계획 작성 리마인더
+  DEADLINE_SOON: true, // 마감 임박
+  TODAY_TASKS: true, // 오늘 할 일
+  PLAN_UNSAVED: true, // 계획 미저장
+  RETROSPECT: true, // 회고 알림
+  SUPPORT_ANSWERED: true, // 문의 답변 등록
 }
 
 export const mockBackend = {
@@ -387,16 +390,34 @@ export const mockBackend = {
     return { ...account }
   },
 
+  // GET 계약 모양 그대로 — bare array가 아니라 `{settings:[...]}`로 감싸는
+  // 이유는 unwrapList의 설계 의도(이 파일 자신의 "mock backend" 헤더가 참조하는
+  // src/api/unwrap.js 헤더) 그대로다: 실서버는 배열을 바로 주지만 이 mock은
+  // 리소스 이름으로 감싸 두고 unwrapList가 양쪽 모양을 다 흡수하게 한다.
   async getNotificationSettings() {
     await delay(60)
-    return { ...notificationSettings }
+    return {
+      settings: Object.entries(notificationSettings).map(([notificationType, isEnabled]) => ({
+        notificationType,
+        isEnabled,
+      })),
+    }
   },
 
   // 즉시 저장 — 토글 하나마다 별도 호출(NOTI-01 AC "5종 토글 즉시 저장").
-  async patchNotificationSetting(key, enabled) {
+  // 서버의 부분 저장 동작(SaveNotificationSettingsRequest — "보낸 유형만
+  // 반영")을 그대로 흉내낸다: `changes`에 없는 유형은 건드리지 않는다.
+  async saveNotificationSettings(changes) {
     await delay()
-    notificationSettings = { ...notificationSettings, [key]: enabled }
-    return { ...notificationSettings }
+    for (const { type, enabled } of changes) {
+      notificationSettings[type] = enabled
+    }
+    return {
+      settings: Object.entries(notificationSettings).map(([notificationType, isEnabled]) => ({
+        notificationType,
+        isEnabled,
+      })),
+    }
   },
 }
 
