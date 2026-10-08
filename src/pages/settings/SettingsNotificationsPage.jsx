@@ -33,7 +33,7 @@ const NOTIFICATION_ITEMS = [
   row (the one screen in this codebase that turns it on — see Toggle.jsx's
   own header for why it defaults off everywhere else).
 
-  확정 계약(NOTI-01, openapi.yaml:876/2614) — more 가정-확장 아님. GET이
+  확정 계약(NOTI-01, openapi.yaml:876/2614) — 더 이상 가정-확장 아님. GET이
   5종 배열을 돌려주고 PUT이 부분 저장을 받는다(settingsApi.js 헤더 참고).
   「공지사항」 토글은 계약에 대응하는 유형이 없어 제거했다 — 서버가 모르는
   유형을 PUT에 실으면 422 E-COM-009로 거절된다(NotificationSettingService.
@@ -49,13 +49,24 @@ const NOTIFICATION_ITEMS = [
     (별도 필드 없음 — 서버에 없는 값을 보내지 않기 위한 필연적 선택).
   - 켜기/끄기 시 5종 전부를 한 번의 PUT(`useSaveNotificationSettings`가
     받는 `changes` 배열에 5개를 담아 호출)으로 실제로 켜거나 끈다 — 더 이상
-    "게이트"가 아니라 "일괄 적용"이다. 그래서 개별 행도 더는 `disabled`로
-    잠그지 않는다: 다섯 값 전부가 실제로 바뀌므로 잠글 "숨은 저장값"이
-    남지 않는다.
+    "게이트"가 아니라 "일괄 적용"이다. 그래서 개별 행을 "마스터가 꺼졌으니
+    잠근다"는 이유로는 더 이상 `disabled` 처리하지 않는다: 다섯 값 전부가
+    실제로 바뀌므로 잠글 "숨은 저장값"이 남지 않는다.
   - 부작용: 마스터를 OFF→ON으로 되돌리면 꺼두었던 개별 항목도 함께
     켜진다(이전의 "개별값 보존" 특성은 사라짐) — 서버에 없는 필드로
     개별값을 따로 기억해 둘 수 없다는 계약상 제약의 직접적 결과라
     §SET.6에도, 백엔드 계약에도 이 손실을 피할 다른 방법이 없다.
+
+  PENDING 중 전체 잠금 (Thomas PR 리뷰 SHOULD-FIX #2). 마스터 일괄 PUT(5종)과
+  개별 PUT(1종)은 같은 유형 키를 공유할 수 있다 — 저장이 진행 중인 동안 다른
+  토글을 또 누르면 두 요청이 겹쳐 날아가고, 응답이 보낸 순서와 다르게
+  도착하면(useSettings.js의 requestId 가드가 캐시 쪽은 막아 주지만) 화면과
+  서버 실제 값이 어긋나는 순간이 생길 수 있다. 가장 단순하고 확실한 차단은
+  "저장 중엔 아무 토글도 새로 못 누르게" 직렬화하는 것이다 — `save.isPending`
+  동안 6개 토글(마스터 포함) 전부를 `disabled`로 막는다. 응답이 보통
+  수십~수백ms 안에 오므로(mock 70ms, 실서버도 단순 upsert) 깜빡임이 거슬릴
+  정도로 길게 잠기지는 않는다 — 다른 설정 화면들(SettingsDefaultsPage 등)도
+  이미 `mutation.isPending` 동안 저장 버튼을 잠그는 같은 관례를 쓴다.
 */
 function SettingsNotificationsPage() {
   const query = useNotificationSettings()
@@ -65,15 +76,27 @@ function SettingsNotificationsPage() {
   if (query.isError) return <ErrorState variant="section" onAction={() => query.refetch()} />
 
   const settings = query.data ?? {}
+  // allOn과 개별 행이 같은 "값이 없을 때 뭘로 읽을지" 규칙을 쓰도록 한 헬퍼로
+  // 묶는다(Thomas PR 리뷰 NIT #3 — 전엔 allOn은 `!== false`, 개별 행은
+  // `Boolean(...)`로 서로 다르게 처리해 `undefined`가 섞이면 두 표시가
+  // 어긋날 수 있었다). 기본을 "켜짐"으로 두는 이유는 서버의 시드 기본값
+  // (최초 조회 시 기본 켜짐)과 같은 방향이라서다.
+  const isOn = (type) => settings[type] !== false
+
   // 서버 필드가 아니라 화면 파생값 — 5종이 전부 true일 때만 "전체 켜짐"으로
   // 보인다. 하나라도 꺼져 있으면 마스터도 꺼짐으로 보여, 사용자가 "전체
   // 알림이 켜져 있다"는 문구를 보고도 실제로는 일부가 꺼져 있는 불일치를
   // 피한다.
-  const allOn = NOTIFICATION_TYPES.every((type) => settings[type] !== false)
+  const allOn = NOTIFICATION_TYPES.every(isOn)
 
   const handleMasterToggle = (next) => {
     save.mutate(NOTIFICATION_TYPES.map((type) => ({ type, enabled: next })))
   }
+
+  // 저장 중엔 전체(마스터 포함) 잠금 — 위 파일 헤더 "PENDING 중 전체 잠금"
+  // 참고. sr-only 문구(Toggle.jsx가 disabledReason을 시각적으로는 숨기고
+  // 스크린리더에만 읽어준다)라 평상시엔 화면에 아무 것도 추가되지 않는다.
+  const savingReason = save.isPending ? '저장 중입니다' : undefined
 
   return (
     <div className="flex flex-col gap-4">
@@ -88,16 +111,20 @@ function SettingsNotificationsPage() {
             label="전체 알림"
             description="끄면 아래 5종 알림이 모두 꺼집니다"
             showStateText
+            disabled={save.isPending}
+            disabledReason={savingReason}
           />
         </li>
         {NOTIFICATION_ITEMS.map((item) => (
           <li key={item.type} className="border-b border-border px-4 py-3 last:border-b-0">
             <Toggle
-              checked={Boolean(settings[item.type])}
+              checked={isOn(item.type)}
               onChange={(next) => save.mutate([{ type: item.type, enabled: next }])}
               label={item.label}
               description={item.description}
               showStateText
+              disabled={save.isPending}
+              disabledReason={savingReason}
             />
           </li>
         ))}

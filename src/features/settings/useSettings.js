@@ -9,6 +9,7 @@
   title/time before it is submitted) stay in the page's own useState, same
   split every other feature in this codebase follows (design-handoff §3).
 */
+import { useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   getAllFixedSchedules,
@@ -425,12 +426,28 @@ export function useNotificationSettings() {
  * 들어와도(토글 연타, 또는 마스터+개별 동시) 먼저 성공한 호출의 결과를 나중
  * 실패한 호출의 롤백이 덮어쓰는 사고를 막는다 — 각 호출은 자기가 만진 키만
  * 책임진다.
+ *
+ * Thomas PR 리뷰 SHOULD-FIX #1 (onSuccess 누락): PUT 응답은 서버가 부분
+ * 저장을 적용한 뒤 돌려주는 5종 전체 최신값이다(saveNotificationSettings가
+ * 이미 normalizeNotificationSettings를 거쳐 둠) — 그런데 onSuccess가 없어서
+ * 그 값을 그냥 버리고 있었다. 지금은 캐시에 반영한다. `requestId` 순번
+ * 가드를 같이 두는 이유: SettingsNotificationsPage가 `save.isPending` 동안
+ * 토글 전체를 disabled로 막아 겹쳐 보내는 경로 자체를 없앴지만(SHOULD-FIX
+ * #2), 그 disabled 반영은 React 상태 갱신을 한 번 거쳐야 DOM에 닿는다 — 같은
+ * 틱에서 더블클릭처럼 `onMutate`가 두 번 연속 돈 뒤에야 `isPending`이
+ * true로 보이는 극히 짧은 틈이 이론상 남는다. 그 틈에 먼저 보낸 요청의
+ * 응답이 나중에 보낸 요청보다 늦게 도착하면, 가드 없이는 "가장 최근에
+ * 보낸" 낙관적 상태를 "더 오래된" 서버 응답이 덮어써 화면이 거꾸로 간다.
+ * `latestRequestId`와 다르면 onSuccess가 그 응답을 조용히 버려 항상 "가장
+ * 마지막으로 보낸 요청"만 캐시에 반영되게 한다.
  */
 export function useSaveNotificationSettings() {
   const queryClient = useQueryClient()
+  const latestRequestId = useRef(0)
   return useMutation({
     mutationFn: (changes) => saveNotificationSettings(changes),
     onMutate: (changes) => {
+      const requestId = ++latestRequestId.current
       const prev = queryClient.getQueryData(notificationSettingsKey())
       const prevEntries = changes.map(({ type }) => [type, prev?.[type]])
       queryClient.setQueryData(notificationSettingsKey(), (curr) => {
@@ -438,7 +455,13 @@ export function useSaveNotificationSettings() {
         for (const { type, enabled } of changes) next[type] = enabled
         return next
       })
-      return { prevEntries }
+      return { prevEntries, requestId }
+    },
+    onSuccess: (data, _vars, context) => {
+      // 더 최근 요청이 이미 나갔다면 이 응답(더 오래된 요청의 응답)은 버린다
+      // — 위 헤더 주석의 순번 가드.
+      if (context?.requestId !== latestRequestId.current) return
+      queryClient.setQueryData(notificationSettingsKey(), data)
     },
     onError: (_err, _vars, context) => {
       if (context) {
