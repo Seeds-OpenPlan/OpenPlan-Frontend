@@ -27,6 +27,11 @@ import { TutorialOverlay } from '../components/tutorial/TutorialOverlay'
   by breakpoint, because that difference is real: BottomTabBar exists below
   md, not above it.
 
+  Edge-to-edge (Android 15+ TWA): the bar itself grows by the gesture-bar
+  inset, so the same 96px/40px literals now ride on calc(<literal> +
+  var(--spacing-safe-bottom)). The literal part is unchanged; the inset is 0
+  wherever there is no system bar to clear (desktop, older browsers).
+
   This shell hosts the app-wide common-state surfaces once each:
   - OfflineBanner sits directly under the header and pushes content down (not an
     overlay), so the offline warning is visible on every page (SYS-07).
@@ -52,7 +57,7 @@ function AppLayout() {
       <MobileTopBar />
       <OfflineBanner />
 
-      <main className="mx-auto max-w-page px-page-x py-6 pb-24 md:pb-10">
+      <main className="mx-auto max-w-page px-page-x py-6 pb-[calc(6rem+var(--spacing-safe-bottom))] md:pb-[calc(2.5rem+var(--spacing-safe-bottom))]">
         <Outlet />
       </main>
 

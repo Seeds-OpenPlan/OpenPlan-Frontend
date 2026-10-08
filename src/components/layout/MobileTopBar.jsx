@@ -6,7 +6,7 @@ import { BrandLogo } from '../common/BrandLogo'
 // 모바일 공통 상단 헤더 (로고 + 알림 + 프로필). md 이상에서는 숨김.
 function MobileTopBar() {
   return (
-    <header className="border-b border-border bg-surface md:hidden">
+    <header className="border-b border-border bg-surface pt-safe-top md:hidden">
       <div className="flex h-bar items-center justify-between px-page-x">
         {/* 로고 클릭 시 대시보드로 이동 (데스크톱 TopNav와 동일). */}
         <BrandLogo to="/" />

@@ -30,7 +30,9 @@ export function Banner({
       className={[
         'flex w-full items-center gap-2 border-b px-4 py-2 text-label',
         'motion-safe:animate-[banner-slide-down_var(--duration-base)_var(--ease-standard)]',
-        sticky ? 'sticky top-0 z-20' : '',
+        // top-safe-top: stuck to the viewport top it must sit below the status bar
+        // (edge-to-edge), not under it. 0 everywhere without an inset.
+        sticky ? 'sticky top-safe-top z-20' : '',
         TONE_CLASSES[tone],
       ].join(' ')}
     >

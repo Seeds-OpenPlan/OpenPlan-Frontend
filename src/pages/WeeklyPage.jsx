@@ -1693,7 +1693,7 @@ function WeeklyPage() {
         {autoDraft && (
           <div
             role="status"
-            className="pointer-events-none fixed bottom-36 left-4 right-4 z-30 md:absolute md:bottom-24 md:left-6 md:right-auto md:max-w-sm"
+            className="pointer-events-none fixed bottom-[calc(9rem+var(--spacing-safe-bottom))] left-4 right-4 z-30 md:absolute md:bottom-24 md:left-6 md:right-auto md:max-w-sm"
           >
             <div className="pointer-events-auto rounded-card shadow-modal">
               <AutoPlaceBar
@@ -1734,7 +1734,7 @@ function WeeklyPage() {
             the grid they act on. */}
         <div
           ref={floatingControlsRef}
-          className="pointer-events-none fixed inset-x-4 bottom-18 z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6"
+          className="pointer-events-none fixed inset-x-4 bottom-[calc(4.5rem+var(--spacing-safe-bottom))] z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6"
         >
           <div className="pointer-events-auto">
             {/* fix G: an undo/redo IS a block move, so it's gated the same as

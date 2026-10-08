@@ -7,7 +7,7 @@ import { BrandLogo } from '../common/BrandLogo'
 // 데스크톱 공통 상단 헤더 + 상단 내비게이션. md 미만에서는 숨김.
 function TopNav() {
   return (
-    <header className="hidden border-b border-border bg-surface md:block">
+    <header className="hidden border-b border-border bg-surface pt-safe-top md:block">
       <div className="mx-auto flex h-bar max-w-page items-center justify-between px-page-x">
         {/* 로고 클릭 시 대시보드로 이동. 메뉴는 가운데 정렬(justify-between). */}
         <BrandLogo to="/" />

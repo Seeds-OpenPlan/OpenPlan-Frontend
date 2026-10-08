@@ -411,7 +411,7 @@ function ProjectsPage() {
       {/* Mobile floating create button — fixed above BottomTabBar, same
           bottom-18/md:absolute split WeeklyPage's own floating controls use
           (see that file's comment for the exact 72px-clearance math). */}
-      <div className="pointer-events-none fixed inset-x-4 bottom-18 z-30 flex justify-end md:hidden">
+      <div className="pointer-events-none fixed inset-x-4 bottom-[calc(4.5rem+var(--spacing-safe-bottom))] z-30 flex justify-end md:hidden">
         <div className="pointer-events-auto">
           {/* Same de-duplication as the desktop header button above — this
               was a second hand-rolled copy of Button's primary/lg styling.

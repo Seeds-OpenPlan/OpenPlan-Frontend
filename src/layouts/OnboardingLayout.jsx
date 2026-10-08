@@ -20,7 +20,7 @@ import { Toaster } from '../components/common/Toaster'
 function OnboardingLayout() {
   return (
     <div className="min-h-screen bg-surface-sunken text-text">
-      <header className="border-b border-border bg-surface px-4 py-3">
+      <header className="border-b border-border bg-surface px-4 py-3 pt-[calc(0.75rem+var(--spacing-safe-top))]">
         <BrandLogo size="title" />
       </header>
       <main className="mx-auto flex max-w-2xl flex-col px-4 py-8 md:py-12">
