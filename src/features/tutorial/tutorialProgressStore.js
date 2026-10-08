@@ -21,21 +21,33 @@ import { useCallback, useSyncExternalStore } from 'react'
   server — masked in dev because the mock backend (onboardingFixtures.js)
   used to persist `tutorialStep` itself, a shape the real server never had.
 
-  A plain module-level variable (not React state) + a tiny pub/sub, mirroring
-  utils/overlayStack.js's own shape — because TWO separate components need to
-  read/write the SAME cursor with no shared parent to lift state into:
-  TutorialOverlay (mounted once in AppLayout, drives the coachmark) and
-  useTutorialRestart (SettingsLayout/FaqBrowser, TUT-09 "다시 하기") both have
-  to agree on it reactively. A restart triggered from Settings must be
-  visible to the Coachmark mounted elsewhere in the tree on the very next
-  render, not just after some unrelated remount — a plain useState in each
-  component separately couldn't do that.
+  A tiny pub/sub, mirroring utils/overlayStack.js's own shape — because TWO
+  separate components need to read/write the SAME cursor with no shared
+  parent to lift state into: TutorialOverlay (mounted once in AppLayout,
+  drives the coachmark) and useTutorialRestart (SettingsLayout/FaqBrowser,
+  TUT-09 "다시 하기") both have to agree on it reactively. A restart
+  triggered from Settings must be visible to the Coachmark mounted elsewhere
+  in the tree on the very next render, not just after some unrelated remount
+  — a plain useState in each component separately couldn't do that.
+
+  NO MODULE-LEVEL CACHE (Thomas code review NIT, fixed 2026-10): an earlier
+  version kept a `cachedUserId`/`step` pair and refreshed it from localStorage
+  inside `getTutorialStep`, which is the function passed to
+  `useSyncExternalStore` as `getSnapshot`. That function MUTATED module state
+  as a side effect of being called — a `getSnapshot` contract violation (React
+  may call it speculatively/multiple times per render, including during
+  concurrent rendering, and must never see it change anything). Fixed by
+  dropping the cache entirely: `getTutorialStep` now reads straight through to
+  localStorage every call — a synchronous `getItem` + `parseInt` is cheap
+  enough that memoizing it was never worth the correctness risk. Only the
+  WRITE path (`setTutorialStep`/`resetTutorialStep`, called from event
+  handlers, never from getSnapshot) touches localStorage and notifies
+  listeners — exactly the producer/consumer split overlayStack.js already
+  uses (`pushOverlay`/`popOverlay` vs. `getOverlayStackSnapshot`).
 */
 
 const STORAGE_PREFIX = 'openplan.tutorial.step'
 
-let cachedUserId = null
-let step = 0
 const listeners = new Set()
 
 function notify() {
@@ -65,7 +77,9 @@ function writeStored(userId, value) {
     window.localStorage.setItem(storageKey(userId), String(value))
   } catch {
     // Best-effort — a failed write just means this step won't survive a
-    // refresh; the in-memory cursor above still drives the current session.
+    // refresh; the caller's own re-render still reflects the new value for
+    // the rest of this session (every reader goes through this same module,
+    // not a stale local copy).
   }
 }
 
@@ -77,25 +91,17 @@ function clearStored(userId) {
   }
 }
 
-// Re-reads from storage only when the SCOPING user actually changes (a
-// login/logout swap, or the session query resolving after this module's
-// first call with `userId` still undefined) — every other call is a cheap
-// read of the in-memory value, not a localStorage round-trip per render.
-function syncUser(userId) {
-  if (userId === cachedUserId) return
-  cachedUserId = userId
-  step = userId ? readStored(userId) : 0
-}
-
-/** 0 = not started (TUT-01 kickoff); 1..N = the Nth Coachmark step. */
+/**
+ * 0 = not started (TUT-01 kickoff); 1..N = the Nth Coachmark step. Pure
+ * read-through to localStorage — safe to use as `useSyncExternalStore`'s
+ * `getSnapshot` (see this file's own header on why that matters).
+ */
 export function getTutorialStep(userId) {
-  syncUser(userId)
-  return step
+  if (!userId) return 0
+  return readStored(userId)
 }
 
 export function setTutorialStep(userId, next) {
-  syncUser(userId)
-  step = next
   if (userId) writeStored(userId, next)
   notify()
 }
@@ -104,8 +110,6 @@ export function setTutorialStep(userId, next) {
  * cursor back to kickoff; only what they PATCH to the server differs
  * (see TutorialOverlay.jsx / useTutorialRestart.jsx). */
 export function resetTutorialStep(userId) {
-  syncUser(userId)
-  step = 0
   if (userId) clearStored(userId)
   notify()
 }
