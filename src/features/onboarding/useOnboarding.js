@@ -22,10 +22,19 @@ export function useOnboardingProgress() {
 }
 
 /**
- * Every step-advance/profile-save/tutorial-progress write goes through this
- * one mutation. `onSuccess` writes the server's own returned document back
- * into the cache (never a locally-guessed merge) — the source of truth for
+ * Every step-advance/profile-save/tutorial-DONE write goes through this one
+ * mutation. `onSuccess` writes the server's own returned document back into
+ * the cache (never a locally-guessed merge) — the source of truth for
  * "where was the user" (AC2) must always be what the server just confirmed.
+ *
+ * The tutorial's own step-within-the-run cursor (`tutorialStep`, TUT-03~08)
+ * is deliberately NOT part of this cache entry at all — it has no column on
+ * the server (onboardingApi.js's own header) and lives in
+ * features/tutorial/tutorialProgressStore.js (localStorage) instead, so this
+ * mutation's onSuccess overwrite can never clobber it. An earlier version
+ * kept the step inside this same object; the overwrite above reset it to 0
+ * on every single write, which is the production bug that store's header
+ * documents in full.
  */
 export function useUpdateOnboardingProgress() {
   const queryClient = useQueryClient()

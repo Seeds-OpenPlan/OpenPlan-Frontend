@@ -4,7 +4,9 @@ import { Dialog } from '../../components/common/Dialog'
 import { BottomSheet } from '../../components/common/BottomSheet'
 import { Button } from '../../components/common/Button'
 import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useSession } from '../auth/useAuth'
 import { useUpdateOnboardingProgress } from './useOnboarding'
+import { resetTutorialStep } from '../tutorial/tutorialProgressStore'
 import { onboardingCopy } from './onboardingCopy'
 
 const TITLE_ID = 'tutorial-restart-title'
@@ -25,6 +27,7 @@ export function useTutorialRestart() {
   const isDesktop = useIsDesktop()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const confirmBtnRef = useRef(null)
+  const sessionQuery = useSession()
   const updateOnboardingProgress = useUpdateOnboardingProgress()
 
   // 확인 후 progress를 kickoff 상태로 되돌리고 대시보드로 이동하면, 거기
@@ -38,10 +41,16 @@ export function useTutorialRestart() {
   // 이미 정정되어 있다(onboardingCopy.js 자신의 주석 참고).
   const confirmRestart = () => {
     setConfirmOpen(false)
-    updateOnboardingProgress.mutate(
-      { tutorialCompleted: false, tutorialSkipped: false, tutorialStep: 0 },
-      { onSuccess: () => navigate('/') },
-    )
+    // The FE-only step cursor (tutorialProgressStore.js) is reset directly —
+    // it is NOT part of the server patch below (the contract has no field for
+    // it; see that store's own header for the production bug this split
+    // avoids). Resetting it here, not inside TutorialOverlay, matters because
+    // THIS hook's instance (Settings/FAQ) is a different component from the
+    // one actually rendering the Coachmark (AppLayout) — the shared
+    // module-level store is what makes the reset visible there too, on the
+    // very next render, with no remount required.
+    resetTutorialStep(sessionQuery.data?.userId)
+    updateOnboardingProgress.mutate({ tutorialCompleted: false }, { onSuccess: () => navigate('/') })
   }
 
   const dialogBody = (
