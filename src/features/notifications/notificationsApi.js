@@ -28,13 +28,23 @@ async function loadNotificationsMock() {
 
 /** Tolerates snake_case (server) or camelCase (mock) — same reasoning
  * planApi.js's normalizeBlock gives for why this one adapter absorbs the
- * casing question instead of every consumer guessing at both. */
+ * casing question instead of every consumer guessing at both.
+ *
+ * Thomas PR 리뷰 지시(2026-10-08, notification-settings 계약 대조와 같은
+ * 세션): 계약(Notification 스키마, openapi.yaml)의 필드명은
+ * `notificationType`이다. `n.type`만 읽던 전 버전은 실서버 응답에 그런 키가
+ * 없어 항상 undefined로 떨어졌다 — mock(notificationsFixtures.js)이 우연히
+ * `type`이라는 옛 이름을 썼던 탓에 dev에서는 안 걸렸다. `n.type`은 그 mock과의
+ * 하위 호환으로만 남긴다. `body`는 계약에 없는 필드다 — mock에만 있고 실서버는
+ * 안 주는데, 화면 쪽에 이 값을 읽는 소비처가 없어(그렙 확인) 지금 당장 깨지는
+ * 곳은 없지만 실서버 전환 시 항상 undefined가 될 값이라는 점을 적어 둔다.
+ */
 function normalizeNotification(n) {
   return {
     notificationId: n.notificationId ?? n.notification_id,
-    type: n.type,
+    type: n.notificationType ?? n.notification_type ?? n.type,
     title: n.title,
-    body: n.body,
+    body: n.body, // [계약에 없음] 실서버엔 이 필드가 없다 — 소비처 없어 당장 영향 없음
     routePath: n.routePath ?? n.route_path,
     readAt: n.readAt ?? n.read_at ?? null,
     createdAt: n.createdAt ?? n.created_at,

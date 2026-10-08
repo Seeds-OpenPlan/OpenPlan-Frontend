@@ -5,16 +5,24 @@
 
   [가정-신규] request/response shapes: ux-flow-map.md §5 names the two real OPs
   this screen consumes (OP-NOTI-LIST/READ) but this checkout has no Swagger
-  page for them yet, so the field names below (routePath, readAt) are this
-  PR's own best guess, taken straight from service-stories.md §SS14's "소유
-  상태" line (`notification.read_at`·`route_path`). Only this file + the
-  normalize step in notificationsApi.js need to change once the real shape
-  lands.
+  page for them yet, so the envelope shape (routePath, readAt) is this PR's
+  own best guess, taken straight from service-stories.md §SS14's "소유 상태"
+  line (`notification.read_at`·`route_path`). Only this file + the normalize
+  step in notificationsApi.js need to change once the real shape lands.
 
-  `type` mirrors the 5 keys ST-F1-12's alarm settings already defined
-  (settingsFixtures.js NOTIFICATION_ITEMS) so a future "이 유형 알림 끄기" link
-  from a notification item straight to its own settings toggle is a straight
-  key lookup, not a translation table.
+  Thomas PR 리뷰 지시(2026-10-08, notification-settings 계약 대조와 같은
+  세션)로 `type` 필드명·값을 정정했다. 이전엔 ST-F1-12 알림 설정 화면의
+  (그 자체로 틀렸던, 계약과 무관한) 5개 이름을 그대로 빌려 썼다 — 실제 계약
+  필드명은 `notificationType`이고 값은 `NotificationType` enum 5종
+  (DEADLINE_SOON/TODAY_TASKS/PLAN_UNSAVED/RETROSPECT/SUPPORT_ANSWERED,
+  backend `notification/domain/NotificationType.java`)뿐이다 — "계획 위험
+  경고(planRisk)"·"공지사항(announcement)"처럼 그 5종에 없는 유형은 서버가
+  보낼 수 없으므로 이 mock에서도 삭제하고, 남은 두 자리를 아직 안 쓰던
+  TODAY_TASKS·RETROSPECT로 채웠다(5종을 하나씩 보여주는 데모 구성 유지).
+  routePath도 함께 실제 라우팅 관례(backend
+  `notification/service/NotificationRoutes.java` — DEADLINE_SOON은
+  `/weekly?task=`, TODAY_TASKS/PLAN_UNSAVED는 `/weekly`, RETROSPECT는
+  `/statistics`, SUPPORT_ANSWERED는 `/help/{id}`)로 맞췄다.
 */
 
 const MOCK_LATENCY_MS = 70
@@ -26,8 +34,8 @@ const delay = (ms = MOCK_LATENCY_MS) => new Promise((resolve) => setTimeout(reso
 let notifications = [
   {
     notificationId: 'noti-1',
-    type: 'inquiryReply',
-    title: '문의하신 내용에 답변이 등록되었습니다',
+    notificationType: 'SUPPORT_ANSWERED',
+    title: '"주차 이동 시 가용 시간이 초기화돼요" 문의에 답변이 등록되었습니다',
     body: '"주차 이동 시 가용 시간이 초기화돼요" 문의에 답변이 달렸습니다',
     routePath: '/help/ticket-1',
     readAt: null,
@@ -35,35 +43,35 @@ let notifications = [
   },
   {
     notificationId: 'noti-2',
-    type: 'planRisk',
-    title: '이번 주 계획이 과부하 상태입니다',
-    body: '이번 주 화·수요일에 가용 시간을 초과하는 블록이 있습니다',
+    notificationType: 'TODAY_TASKS',
+    title: '오늘 할 일 3건이 있습니다',
+    body: '오늘 예정된 태스크 3건을 확인해 보세요',
     routePath: '/weekly',
     readAt: null,
     createdAt: '2026-07-24T07:30:00.000Z',
   },
   {
     notificationId: 'noti-3',
-    type: 'dueSoonTasks',
-    title: '마감이 임박한 태스크가 있습니다',
+    notificationType: 'DEADLINE_SOON',
+    title: "'발표 자료 초안' 마감이 7/24로 임박했습니다",
     body: '"발표 자료 초안" 태스크의 마감이 내일입니다',
-    routePath: '/projects?expanded=proj-1',
+    routePath: '/weekly?task=task-1',
     readAt: null,
     createdAt: '2026-07-23T22:00:00.000Z',
   },
   {
     notificationId: 'noti-4',
-    type: 'announcement',
-    title: '새 공지가 등록되었습니다',
-    body: '"7월 정기 점검 안내"를 확인해 주세요',
-    routePath: '/notices/notice-1',
+    notificationType: 'RETROSPECT',
+    title: '지난주 수행 기록이 5건 있습니다',
+    body: '지난주 수행 기록을 이번 주 계획에 참고해 보세요',
+    routePath: '/statistics',
     readAt: '2026-07-22T08:00:00.000Z',
     createdAt: '2026-07-22T06:30:00.000Z',
   },
   {
     notificationId: 'noti-5',
-    type: 'weeklyReminder',
-    title: '아직 이번 주 계획을 세우지 않았습니다',
+    notificationType: 'PLAN_UNSAVED',
+    title: '이번 주 계획이 저장되지 않았습니다',
     body: '주간 계획을 세우고 한 주를 시작해 보세요',
     routePath: '/weekly',
     readAt: '2026-07-21T09:00:00.000Z',

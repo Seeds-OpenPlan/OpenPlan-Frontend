@@ -44,7 +44,9 @@ test.describe('PNL-NOTI — 알림 센터', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.getByRole('button', { name: /알림 \(미확인 3건\)/ }).click()
     const panel = page.getByRole('region', { name: '알림' })
-    const firstUnread = panel.getByRole('button').filter({ hasText: '이번 주 계획이 과부하 상태입니다' })
+    // noti-2(미확인) 제목 — Thomas PR 리뷰로 notificationsFixtures.js 값이
+    // 계약 enum(TODAY_TASKS)에 맞게 바뀌어 문구도 함께 갱신(2026-10-08).
+    const firstUnread = panel.getByRole('button').filter({ hasText: '오늘 할 일 3건이 있습니다' })
     await firstUnread.click()
     // routePath: /weekly 로 이동했을 것 — 별도 탭/네비게이션이라 뒤로 와서 배지 확인
     await page.goBack()
@@ -54,7 +56,9 @@ test.describe('PNL-NOTI — 알림 센터', () => {
   test('T7: NOTI-04 — 알림 항목 routePath 클릭 시 해당 화면으로 이동', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.getByRole('button', { name: /알림/ }).click()
-    await page.getByRole('button', { name: /문의하신 내용에 답변이 등록되었습니다/ }).click()
+    // noti-1 제목 전문이 아니라 고정 접미사만 매칭 — 제목 앞부분(인용된 문의
+    // 제목)은 fixture 변경에 더 취약한 부분이라 피한다.
+    await page.getByRole('button', { name: /문의에 답변이 등록되었습니다/ }).click()
     await expect(page).toHaveURL(/\/help\/ticket-1$/)
   })
 
