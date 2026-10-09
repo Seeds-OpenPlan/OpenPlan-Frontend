@@ -1,15 +1,16 @@
 #!/usr/bin/env node
-// ⚠️ 임시 플레이스홀더 아이콘 생성 스크립트.
+// 확정 디자인 A 앱 아이콘 생성 스크립트.
 //
 // TWA(Trusted Web Activity)로 구글 플레이에 출시하려면 Bubblewrap이 매니페스트의
-// 아이콘 PNG를 그대로 앱 아이콘/스플래시로 패키징한다. 하지만 지금은 확정된
-// 로고 에셋이 없고(BrandLogo.jsx는 "OpenPlan" 텍스트 워드마크뿐, 이미지 로고
-// 없음) 아이콘 생성기에 npm 패키지(sharp/canvas 등)를 새로 추가하는 것도
-// 범위 밖이라, Node 내장 zlib만으로 PNG를 직접 인코딩한다.
+// 아이콘 PNG를 그대로 앱 아이콘/스플래시로 패키징한다. 아이콘 생성기에 npm
+// 패키지(sharp/canvas 등)를 새로 추가하는 것은 범위 밖이라, Node 내장 zlib만
+// 으로 PNG를 직접 인코딩한다.
 //
-// 디자인은 브랜드 파랑(#2563eb, src/index.css --color-brand-600) 배경 위에
-// 흰색 고리("O") 마크 — "최종 아이콘이 나올 때까지 자리만 채우는" 용도다.
-// 아이콘을 교체하려면 이 스크립트를 수정(또는 PNG를 통째로 교체)한 뒤
+// 디자인 정본은 `Github/docs/플레이 출시 작업내용/스토어 그래픽/openplan-icon.svg`
+// (오너 확정, "디자인 A") — 브랜드 파랑(#2563eb) 배경 위에 흰색 고리(중심 반지름
+// 148, 두께 44)와 흰색 체크(두께 40, 둥근 끝·둥근 꺾임)를 얹은 모양이다. 이
+// 스크립트는 그 SVG의 512 기준 좌표를 각 출력 크기로 비례 축소해 그린다.
+// 아이콘(또는 이름)을 다시 바꾸려면 위 SVG와 이 스크립트를 함께 수정한 뒤
 // `public/icons/*`, `public/favicon.png`, `public/apple-touch-icon.png`를
 // 다시 생성해야 하고, 플레이스토어에는 **새 AAB를 다시 업로드**해야 한다 —
 // 아이콘만 바꿔서는 이미 배포된 APK/AAB가 자동으로 갱신되지 않는다.
@@ -129,9 +130,42 @@ function annulusSD(x, y, cx, cy, outerRadius, innerRadius) {
   return Math.abs(dist - mid) - halfWidth
 }
 
+// 캡슐(둥근 끝 선분) SDF: 점 (x,y)에서 선분 (ax,ay)-(bx,by)까지의 최단 거리에서
+// 반지름(= 선 굵기의 절반)을 뺀다 — 음수면 선 안쪽, 0이면 경계. 체크마크는
+// stroke-linecap/linejoin이 "round"이므로 선분 2개의 캡슐을 그대로 합치면
+// (끝점이 항상 반원으로 마감되므로) 이음매도 둥글게 떨어져 SVG와 동일해진다.
+function capsuleSD(x, y, ax, ay, bx, by, radius) {
+  const abx = bx - ax
+  const aby = by - ay
+  const lengthSq = abx * abx + aby * aby
+  // lengthSq가 0이면(퇴화 선분) 그냥 점으로 취급 — 이 아이콘에서는 발생하지
+  // 않지만 0 나눗셈을 막기 위한 방어 코드.
+  const t = lengthSq > 0 ? clamp01(((x - ax) * abx + (y - ay) * aby) / lengthSq) : 0
+  const closestX = ax + t * abx
+  const closestY = ay + t * aby
+  const dx = x - closestX
+  const dy = y - closestY
+  return Math.sqrt(dx * dx + dy * dy) - radius
+}
+
 function lerp(a, b, t) {
   return a + (b - a) * t
 }
+
+// 디자인 A의 512 기준 좌표(openplan-icon.svg 그대로). 모든 출력 크기는 이
+// 좌표를 scale = size/512 로 비례 축소해서 그린다 — 512 기준 그대로도
+// 512*0.5 = 256 = size/2 이므로 cx/cy 계산과도 어긋나지 않는다.
+const DESIGN_SIZE = 512
+const RING_CENTER_RADIUS = 148
+const RING_STROKE_WIDTH = 44
+const CHECK_STROKE_WIDTH = 40
+// 체크마크 꺾은선의 세 점(M/L/L) — [190,262] → [238,310] → [324,218].
+// 두 선분 (0,1), (1,2) 각각을 캡슐로 그린다.
+const CHECK_POINTS = [
+  [190, 262],
+  [238, 310],
+  [324, 218],
+]
 
 /**
  * size x size RGBA 버퍼를 만든다.
@@ -141,29 +175,60 @@ function lerp(a, b, t) {
  *                      모서리를 만들면 오히려 OS 마스크와 이중으로 겹쳐 보인다.
  * - fullBleed=false : 둥근 사각형 바깥은 완전 투명(알파 0) — "any" 목적
  *                      아이콘용. 플랫폼이 마스킹하지 않을 때도 사각 배경이
- *                      아니라 둥근 배지처럼 보이게 한다.
+ *                      아니라 둥근 배지처럼 보이게 한다. PWA의 "any" 아이콘은
+ *                      (adaptive icon처럼 강제 마스킹되는 환경이 아니면) 투명
+ *                      모서리 배지가 관례이므로 기존 동작을 유지한다.
+ * - strokeBoost     : 선 굵기에 곱하는 배율(기본 1). 파비콘(48px)처럼 아주
+ *                      작은 크기에서는 그대로 축소하면 고리/체크 선이 가늘어
+ *                      안티앨리어싱에 묻히므로, 아주 살짝만 굵게 보정한다.
  *
- * 고리 마크의 바깥 반지름은 항상 size*0.33으로 고정한다 — maskable 아이콘의
- * "안전 영역"(중앙 지름 80%, 반지름 40%) 안에 여유 있게 들어가도록.
+ * 고리 바깥 반지름(= (148+22)/512 = size*0.3633)은 maskable 아이콘의
+ * "안전 영역"(중앙 지름 80%, 반지름 40% = size*0.4) 안에 여유 있게 들어간다.
  */
-function renderMark(size, { fullBleed }) {
+function renderMark(size, { fullBleed, strokeBoost = 1 }) {
   const rgba = Buffer.alloc(size * size * 4)
+  const scale = size / DESIGN_SIZE
   const cx = size / 2
   const cy = size / 2
   const cornerRadius = size * 0.18
-  const outerRadius = size * 0.33
-  const innerRadius = size * 0.18
+
+  const ringCenterRadius = RING_CENTER_RADIUS * scale
+  const ringHalfStroke = (RING_STROKE_WIDTH * scale * strokeBoost) / 2
+  const ringOuterRadius = ringCenterRadius + ringHalfStroke
+  const ringInnerRadius = ringCenterRadius - ringHalfStroke
+
+  const checkRadius = (CHECK_STROKE_WIDTH * scale * strokeBoost) / 2
+  // 체크마크 좌표도 동일한 scale로 축소한다(디자인 원점이 뷰박스 (0,0)-(512,512)
+  // 라서 cx/cy와 별개로 x,y를 그대로 scale만 곱하면 된다).
+  const checkSegments = [
+    [CHECK_POINTS[0], CHECK_POINTS[1]],
+    [CHECK_POINTS[1], CHECK_POINTS[2]],
+  ].map(([[ax, ay], [bx, by]]) => [ax * scale, ay * scale, bx * scale, by * scale])
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
+      const px = x + 0.5
+      const py = y + 0.5
+
       const bgCoverage = fullBleed
         ? 1
-        : clamp01(0.5 - roundedRectSD(x + 0.5, y + 0.5, cx, cy, size / 2, cornerRadius))
-      const ringCoverage = clamp01(0.5 - annulusSD(x + 0.5, y + 0.5, cx, cy, outerRadius, innerRadius))
+        : clamp01(0.5 - roundedRectSD(px, py, cx, cy, size / 2, cornerRadius))
+      const ringCoverage = clamp01(0.5 - annulusSD(px, py, cx, cy, ringOuterRadius, ringInnerRadius))
 
-      const r = lerp(BRAND[0], WHITE[0], ringCoverage)
-      const g = lerp(BRAND[1], WHITE[1], ringCoverage)
-      const b = lerp(BRAND[2], WHITE[2], ringCoverage)
+      // 두 체크 선분 중 더 가까운(= coverage가 더 큰) 쪽을 취해 합집합으로 만든다.
+      let checkCoverage = 0
+      for (const [ax, ay, bx, by] of checkSegments) {
+        const coverage = clamp01(0.5 - capsuleSD(px, py, ax, ay, bx, by, checkRadius))
+        if (coverage > checkCoverage) checkCoverage = coverage
+      }
+
+      // 고리와 체크 중 더 많이 덮는 쪽으로 흰색을 섞는다(두 마크는 겹치지
+      // 않는 디자인이라 단순 max로 충분하다).
+      const markCoverage = Math.max(ringCoverage, checkCoverage)
+
+      const r = lerp(BRAND[0], WHITE[0], markCoverage)
+      const g = lerp(BRAND[1], WHITE[1], markCoverage)
+      const b = lerp(BRAND[2], WHITE[2], markCoverage)
       const a = Math.round(bgCoverage * 255)
 
       const i = (y * size + x) * 4
@@ -186,7 +251,7 @@ function writeIcon(path, size, options) {
 
 mkdirSync(ICONS_DIR, { recursive: true })
 
-console.log('Generating placeholder PWA icons...')
+console.log('Generating PWA icons (design A: ring + check)...')
 // manifest "any" 아이콘: 둥근 배지 + 투명 모서리.
 writeIcon(join(ICONS_DIR, 'icon-192.png'), 192, { fullBleed: false })
 writeIcon(join(ICONS_DIR, 'icon-512.png'), 512, { fullBleed: false })
@@ -194,7 +259,10 @@ writeIcon(join(ICONS_DIR, 'icon-512.png'), 512, { fullBleed: false })
 writeIcon(join(ICONS_DIR, 'icon-maskable-512.png'), 512, { fullBleed: true })
 // iOS 홈 화면 아이콘: iOS가 자체적으로 모서리를 둥글리므로 전면 배경으로.
 writeIcon(join(PUBLIC_DIR, 'apple-touch-icon.png'), 180, { fullBleed: true })
-// 파비콘.
-writeIcon(join(PUBLIC_DIR, 'favicon.png'), 48, { fullBleed: true })
+// 파비콘: 48px까지 축소하면 원래 두께(고리 44 / 체크 40 @512)가 각각 4.1px /
+// 3.75px로 가늘어져 안티앨리어싱에 묻히기 쉽다. strokeBoost로 선만 1.35배
+// 굵게 보정해 탭바/브라우저 탭 크기에서도 고리·체크 형태가 또렷하게 보이도록
+// 했다 — 위치·비율은 그대로 두고 두께만 키운다.
+writeIcon(join(PUBLIC_DIR, 'favicon.png'), 48, { fullBleed: true, strokeBoost: 1.35 })
 
 console.log('Done.')
