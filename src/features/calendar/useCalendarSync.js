@@ -27,6 +27,17 @@ import { useSessionStore } from '../auth/sessionStore'
   두 트리거 모두 같은 runSync()를 부르므로 동시성 가드(in-flight + trailing)가
   하나로 공유된다 — 디바운스가 끝나는 순간과 탭 재진입이 겹쳐도 GET이 두 벌
   나가지 않는다.
+
+  마지막 실행 시각(lastSyncAt)은 탭 간에 localStorage로도 공유한다(Thomas
+  리뷰 SHOULD-FIX, 2026-10-11) — 모듈 스코프 변수만으로는 탭마다 따로 메모리를
+  가져서, 여러 탭을 열어 두면 진입·복귀 트리거가 탭 수만큼 중복으로 나간다.
+  키를 사용자별로 두는 이유는 로그아웃 뒤 다른 계정으로 들어와도 그 계정 몫의
+  슬롯이 따로 있어 서로 침범하지 않기 때문이고, `resetCalendarSyncState()`가
+  그래도 그 슬롯을 명시적으로 지우는 이유는 "같은 계정으로 5분 안에 다시
+  로그인"하는 경우까지 커버하기 위해서다(아래 그 함수 헤더 참조) — 사용자별
+  키만으로는 이 경우를 막지 못한다. 변경 후 트리거(디바운스)는 탭 로컬
+  그대로 둔다 — 실제로 쓰기가 일어난 탭만 부르므로 공유할 "마지막 쓰기 시각"이
+  의미가 없다(어느 탭의 디바운스든 그 탭에서의 마지막 쓰기로부터 3초면 된다).
 */
 
 // 3초 — 변경 직후 트리거(연타·드래그 연속 이동을 한 번으로 묶는다).
@@ -41,7 +52,51 @@ const THROTTLE_MS = 5 * 60 * 1000
 let debounceTimer = null
 let inFlight = null
 let trailingRequested = false
+// localStorage가 막혀 있을 때(프라이빗 모드 등)의 폴백이자, 이 탭 안에서 가장
+// 최근에 실제로 확인한 값의 캐시 — getLastSyncAt/setLastSyncAt이 항상 이
+// 값도 함께 갱신한다.
 let lastSyncAt = 0
+
+/**
+ * 탭 간 공유 슬롯의 키. 세션 캐시(['auth','session'])에서 읽은 userId로 가른다
+ * — sessionGuardLoader(router.js)가 AppLayout을 그리기 전에 그 쿼리를
+ * ensureQueryData로 이미 채워 두므로, 이 모듈이 마운트/가시성 트리거를 쏠
+ * 시점엔 항상 값이 있다. 세션 캐시가 비어 있는 극히 짧은 틈(로그아웃 직후
+ * clear()와 다음 로그인 사이)엔 공용 'anonymous' 슬롯으로 떨어지는데, 그
+ * 슬롯도 로그인 성공 시 resetCalendarSyncState()가 지우므로 다음 세션에
+ * 새것으로 다시 쓰여 해롭지 않다.
+ */
+function storageKey() {
+  const userId = queryClient.getQueryData(['auth', 'session'])?.userId ?? 'anonymous'
+  return `openplan.calendarSync.lastSyncAt.${userId}`
+}
+
+/** 탭 간 공유 값을 읽는다. 실패(프라이빗 모드, 저장소 비활성화 등)하면 이
+ * 탭의 메모리 값으로 조용히 대체한다 — 공유만 못 할 뿐 스로틀 자체는
+ * 계속 동작한다. */
+function getLastSyncAt() {
+  try {
+    const raw = window.localStorage.getItem(storageKey())
+    const parsed = raw == null ? NaN : Number(raw)
+    if (Number.isFinite(parsed)) return parsed
+  } catch {
+    // 아래 폴백으로 떨어진다.
+  }
+  return lastSyncAt
+}
+
+/** 탭 간 공유 값을 쓴다. 메모리 값은 항상 갱신하고(이 탭의 폴백), localStorage
+ * 쓰기는 실패해도 무시한다 — 어차피 메모리 값이 이 탭 자신의 다음 판단에는
+ * 쓰인다. */
+function setLastSyncAt(value) {
+  lastSyncAt = value
+  try {
+    window.localStorage.setItem(storageKey(), String(value))
+  } catch {
+    // 쓰기 실패 — 이 탭 안에서는 메모리 값으로 계속 동작하되, 다른 탭과는
+    // 더는 공유되지 않는다(허용 가능한 성능 저하일 뿐 정확성 문제는 아니다).
+  }
+}
 
 /**
  * 실제 푸시. ACTIVE(API 어휘로는 CONNECTED — ConnectionStatus.java 참조, DB의
@@ -65,8 +120,9 @@ async function runSync() {
       const connections = await getConnections()
       // 시도 자체를 "동기화"로 셈는다 — 연동이 없는 사용자가 탭을 들락거릴
       // 때마다 getConnections만 계속 불리는 것도 막는다(활성 연동이 있는지는
-      // 어차피 그 호출 없이는 알 수 없다).
-      lastSyncAt = Date.now()
+      // 어차피 그 호출 없이는 알 수 없다). localStorage에도 같이 써서 다른
+      // 탭의 스로틀도 같이 늦춘다.
+      setLastSyncAt(Date.now())
 
       const active = connections.filter((c) => c.status === CONNECTION_STATUS.CONNECTED)
       if (active.length === 0) return // 연동이 없거나 전부 비활성 — 할 일이 없다.
@@ -129,9 +185,13 @@ export function useCalendarSyncOnActive() {
 
   useEffect(() => {
     if (expired) return undefined
+    // 저장소 관례(src/api/client.js의 `typeof window !== 'undefined'` 가드 등) —
+    // 이 모듈은 항상 브라우저에서만 쓰이지만, document가 없는 런타임에서도
+    // 조용히 아무 일도 안 하게 방어한다.
+    if (typeof document === 'undefined') return undefined
 
     const maybeSync = () => {
-      if (Date.now() - lastSyncAt >= THROTTLE_MS) runSync()
+      if (Date.now() - getLastSyncAt() >= THROTTLE_MS) runSync()
     }
 
     maybeSync() // 마운트(최초 로드·재로그인 직후 재마운트) 트리거
@@ -142,4 +202,36 @@ export function useCalendarSyncOnActive() {
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [expired])
+}
+
+/**
+ * 로그아웃 시작(useLogout의 onMutate)과 로그인 성공(useLogin의 onSuccess) 양쪽
+ * 모두에서 호출한다(Thomas 리뷰 SHOULD-FIX, 2026-10-11).
+ *
+ * 문제: lastSyncAt이 메모리/localStorage 어디에도 리셋되는 자리가 없으면,
+ * 로그아웃 직후 5분 안에 (같은 계정이든 다른 계정이든) 다시 로그인했을 때
+ * 진입 트리거가 "최근에 돈 적 있다"로 읽혀 스킵된다 — 그 계정의 큐는 로그아웃과
+ * 무관하게 서버에 그대로 남아 있으므로, 로그인 직후 한 번은 반드시 돌아야 한다.
+ *
+ * 대기 중인 디바운스 타이머만 취소한다 — 이미 날아간 GET(inFlight)은 그대로
+ * 끝까지 간다(응답은 버려지고 캐시 invalidate만 일어날 뿐, 다음 계정에
+ * 해를 주지 않는다. queryClient.clear()가 useLogout의 onSettled에서 그 뒤에
+ * 캐시를 통째로 비우기도 한다).
+ */
+export function resetCalendarSyncState() {
+  clearTimeout(debounceTimer)
+  debounceTimer = null
+  trailingRequested = false
+  lastSyncAt = 0
+  try {
+    // 지금 세션 캐시가 가리키는 사용자 슬롯을 지운다 — 로그아웃 onMutate
+    // 시점엔 아직 이전 사용자, 로그인 onSuccess 시점엔 비어 있거나(→
+    // 'anonymous') 막 invalidate된 새 사용자일 수 있다. 어느 쪽이든 "지금
+    // 확인되는 슬롯을 0으로 되돌린다"는 목적엔 맞다 — 같은 계정이 5분 안에
+    // 다시 로그인해도 그 슬롯이 남아 있지 않아 진입 트리거가 스킵되지 않는다.
+    window.localStorage.removeItem(storageKey())
+  } catch {
+    // 메모리 값(lastSyncAt=0)만으로도 이 탭의 다음 진입 트리거는 즉시 동기화를
+    // 실행한다 — localStorage가 막혀 있어도 정확성에 문제는 없다.
+  }
 }
