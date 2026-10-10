@@ -43,6 +43,7 @@ import { addWeeksISO } from './planTime'
 import { dashboardKey } from '../dashboard/useDashboard'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
+import { scheduleCalendarSync } from '../calendar/useCalendarSync'
 
 export const weekPlanKey = (weekStartISO) => ['weekPlan', weekStartISO]
 export const availabilityKey = () => ['availability']
@@ -176,6 +177,17 @@ export function useMoveBlock() {
 
       // Background PATCH; writes are never auto-retried (the user retries).
       patchBlock(planBlockId, { startAt, endAt, __targetWeek: targetWeek })
+        .then(() => {
+          // 성공한 뒤에만 예약한다 — 실패한 PATCH는 대기열에 아무것도 남기지
+          // 않는다. blockType을 가리지 않고 매번 거는 이유: 이 훅은 undo/redo
+          // replay(handleUndo/handleRedo)까지 같은 경로를 타는데 그 재생 경로는
+          // blockType을 들고 있지 않다 — useResizeBlock처럼 호출부가 공짜로
+          // 쥐고 있는 값이 아니라서, 여기서만 가리려면 usePlanHistory의 엔트리
+          // 모양에 필드를 추가해야 한다. TASK 블록 이동은 백엔드가 대기열에
+          // 아무것도 안 적으므로 이 트리거는 그 경우 그냥 빈 GET 한 번일 뿐이고,
+          // 3초 디바운스가 바로 뒤이은 SCHEDULE 이동과도 한 번으로 묶어 준다.
+          scheduleCalendarSync()
+        })
         .catch(() => {
           queryClient.setQueryData(weekPlanKey(sourceWeek), prevSource)
           if (targetWeek !== sourceWeek) {
@@ -432,6 +444,9 @@ export function useApplyAutoPlace() {
     onSuccess: (_data, { weekStartISO }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
+      // 일괄 배치는 SCHEDULE 블록도 섞일 수 있다(자동 배치가 항상 TASK만
+      // 배치한다는 보장이 이 계층에 없다) — 가리지 않고 매번 건다.
+      scheduleCalendarSync()
     },
     onError: () => {
       toast({ tone: 'error', message: systemMessages.error.writeTitle })
@@ -505,6 +520,13 @@ export function useResizeBlock() {
           : wk,
       )
       patchBlock(planBlockId, { startAt, endAt })
+        .then(() => {
+          // blockType은 이미 호출부(handleResizeCommit)가 쥐고 있으므로 공짜로
+          // 가릴 수 있다 — TASK 블록 리사이즈는 백엔드가 대기열에 아무것도
+          // 적지 않으므로(PlanBlockService.moveBlock의 SCHEDULE 가드 참조)
+          // 트리거할 이유가 없다.
+          if (blockType === 'SCHEDULE') scheduleCalendarSync()
+        })
         .catch(() => {
           queryClient.setQueryData(weekKey, prevWeek)
           toast({ tone: 'error', message: systemMessages.error.writeTitle })
@@ -578,6 +600,15 @@ export function useRemoveBlockWithUndo() {
             : wk,
         )
         deleteBlock(current.planBlockId)
+          .then(() => {
+            // `isUnplace`가 이미 TASK/SCHEDULE을 정확히 가른다 — 'unplace'는
+            // 메뉴·패널 드롭 양쪽 모두 TASK 블록에서만 쓰이고(handleBlockDropOutside가
+            // `blockType !== 'TASK'`면 그 자리에서 거른다), 'delete'는 SCHEDULE
+            // 블록 메뉴에만 있다(menuItemsFor). TASK 배치 해제는 백엔드가
+            // 대기열에 아무것도 적지 않으므로(PlanBlockService.deleteBlock의
+            // SCHEDULE 분기 참조) 그 경로는 그냥 건너뛴다.
+            if (!isUnplace) scheduleCalendarSync()
+          })
           .catch(() => {
             queryClient.setQueryData(weekKey, prevWeek)
             toast({ tone: 'error', message: systemMessages.error.writeTitle })
@@ -611,6 +642,9 @@ export function useRemoveBlockWithUndo() {
         recreate
           .then((result) => {
             if (result?.planBlockId) current = { ...current, planBlockId: result.planBlockId }
+            // 되살린 것이 SCHEDULE이면(위 postScheduleBlock 분기) 새 일정이
+            // 다시 대기열에 적힌다 — 같은 reasoning, runRemove 쪽 주석 참조.
+            if (!isUnplace) scheduleCalendarSync()
           })
           .catch(() => toast({ tone: 'error', message: systemMessages.error.writeTitle }))
           .finally(invalidate)
@@ -676,6 +710,8 @@ export function useCreateScheduleBlock() {
     onSuccess: (_data, { weekStartISO }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       toast({ tone: 'success', message: '일정을 추가했습니다' })
+      // SCHEDULE 블록 생성 — PlanBlockService.createBlock이 항상 대기열에 적는다.
+      scheduleCalendarSync()
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
@@ -689,6 +725,9 @@ export function useUpdateSchedule() {
     onSuccess: (_data, { weekStartISO }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       toast({ tone: 'success', message: '일정을 수정했습니다' })
+      // ScheduleService.update가 항상 대기열에 적는다(시각 변경 여부와
+      // 무관하게 — title/memo 등도 구글 쪽 이벤트 내용이다).
+      scheduleCalendarSync()
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
@@ -743,6 +782,12 @@ export function useToggleFixedException() {
         tone: 'success',
         message: activate ? '고정 일정을 다시 활성화했습니다' : '이번 주만 비활성화했습니다',
       })
+      // FixedOccurrenceReconciler는 훅을 따로 두지 않고 다음 동기화(GET
+      // .../events) 때 "있어야 할 회차"를 다시 계산해 차이만 내보낸다(그 파일
+      // 자신의 헤더) — 즉 이 토글이 큐에 직접 뭘 적는 건 아니지만, 다음
+      // 동기화가 더 빨리 오게 해야 "이번 주만 비활성화"가 구글에서도 빨리
+      // 사라진다. 그래서 여기도 건다.
+      scheduleCalendarSync()
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
@@ -1107,6 +1152,9 @@ export function useApplyReplanOption() {
     mutationFn: ({ replanOptionId }) => selectReplanOption(replanOptionId),
     onSuccess: (_data, { weekStartISO }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
+      // 재계획 적용은 여러 블록의 시각을 한 번에 바꾼다 — SCHEDULE 블록이
+      // 섞여 있으면 전부 대기열에 다시 적힌다(moveBlock과 같은 백엔드 경로).
+      scheduleCalendarSync()
     },
   })
 }
