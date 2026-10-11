@@ -1169,6 +1169,29 @@ function WeeklyPage() {
       // A weekly exception is a plan change, and FIXED has no 완료/기록
       // equivalent — nothing is exempt here.
       if (planLocked) return []
+      // INACTIVE(외부 캘린더 연동이 꺼져 FIX-16로 서버가 미러링한 상태)는
+      // week-exception 유무와 무관하게 우선한다 (Thomas BLOCKER, BE #90 전환으로
+      // 처음 노출됨). `activeThisWeek=false`는 "주차 예외"와 "INACTIVE" 두
+      // 원인을 응답만으로 구분 못 하는데(BE 스키마 설명: "주차 예외 PLAN-33 또는
+      // INACTIVE"), 이전엔 GET /fixed-schedules?status=ACTIVE가 INACTIVE를 아예
+      // 걸러서 이 구분이 필요 없었다. INACTIVE에 "다시 활성화"(week-exception
+      // DELETE)를 띄우면 서버가 멱등 204를 돌려줘 성공 토스트까지 뜨지만 실제로는
+      // 아무 효과가 없다 — 연동 자체가 꺼져 있어 DELETE할 예외가 있든 없든
+      // 무관하기 때문. 그래서 이 상태에선 토글 자체를 숨기고 원인·조치만 안내한다.
+      if (block.status === 'INACTIVE') {
+        return [
+          {
+            key: 'inactive-info',
+            type: 'info',
+            label: '캘린더 연동이 꺼져 있어 쉬고 있는 일정입니다',
+          },
+          {
+            key: 'go-calendar-settings',
+            label: '설정에서 캘린더 연동 다시 켜기',
+            onSelect: () => navigate('/settings/calendar'),
+          },
+        ]
+      }
       const active = block.activeThisWeek !== false
       return [
         {

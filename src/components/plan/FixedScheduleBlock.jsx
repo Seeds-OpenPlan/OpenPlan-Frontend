@@ -20,14 +20,28 @@ import { LockIcon } from '../common/statusIcons'
   delete menu that isn't there.
 */
 
-// A week exception (activeThisWeek=false) reads as a GHOST: translucent + a
-// dashed border (never color alone — the "이번 주 제외" chip below carries the
-// actual meaning, per NFR-017).
+// A week exception OR a disconnected calendar sync (activeThisWeek=false, for
+// either reason — see below) reads as a GHOST: translucent + a dashed border
+// (never color alone — the chip below carries the actual meaning, per
+// NFR-017).
 const GHOST_CLASS = 'border-dashed opacity-55'
 
 export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMenu }) {
   const timeLabel = `${formatMinutesLabel(schedule.startMinutes)} - ${formatMinutesLabel(schedule.endMinutes)}`
-  const inactive = schedule.activeThisWeek === false
+  // 두 가지 서로 다른 이유로 `activeThisWeek`가 false일 수 있다 (Thomas BLOCKER,
+  // BE #90 전환으로 처음 노출 — 예전엔 GET /fixed-schedules?status=ACTIVE가
+  // INACTIVE를 걸러 이 구분이 필요 없었다):
+  //   1. `status === 'INACTIVE'` — 외부 캘린더 연동이 꺼져 서버가 미러링한
+  //      상태(FIX-16). 사용자가 "다시 활성화"할 수 있는 주차 예외가 아니라,
+  //      설정에서 연동을 다시 켜야 풀린다 — 그래서 색만이 아니라 칩 문구·
+  //      aria-label도 "이번 주 제외"와 다르게 읽혀야 한다(NFR-017, 혼동 방지).
+  //   2. 그 외의 `activeThisWeek === false` — PLAN-33 주차 한정 비활성화.
+  // 서버 응답만으로는 "INACTIVE이면서 이 주 예외도 있다"를 구분할 수 없다 —
+  // 그런 경우 INACTIVE를 우선 표시한다(연동을 켜지 않는 한 예외 여부가 사용자
+  // 입장에서 의미가 없으므로, 더 구체적이고 조치 가능한 원인을 보여 준다).
+  const syncOff = schedule.status === 'INACTIVE'
+  const weekExcluded = !syncOff && schedule.activeThisWeek === false
+  const inactive = syncOff || weekExcluded
 
   const openMenuFromEvent = (e) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -38,7 +52,7 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
     <div
       role="button"
       tabIndex={disabled ? -1 : 0}
-      aria-label={`${schedule.title}, ${timeLabel}, 고정 일정${inactive ? ', 이번 주 제외' : ''}${disabled ? ', 읽기 전용' : ''}`}
+      aria-label={`${schedule.title}, ${timeLabel}, 고정 일정${syncOff ? ', 연동 꺼짐' : weekExcluded ? ', 이번 주 제외' : ''}${disabled ? ', 읽기 전용' : ''}`}
       aria-disabled={disabled || undefined}
       style={style}
       onContextMenu={(e) => {
@@ -69,7 +83,12 @@ export function FixedScheduleBlock({ schedule, style, disabled = false, onOpenMe
       <span className="mt-0.5 font-medium leading-tight">
         <span className="line-clamp-2">{schedule.title}</span>
       </span>
-      {inactive && (
+      {syncOff && (
+        <span className="mt-1 inline-flex items-center rounded-chip bg-neutral-300 px-1.5 py-px text-[0.6rem] font-bold text-neutral-700">
+          연동 꺼짐
+        </span>
+      )}
+      {weekExcluded && (
         <span className="mt-1 inline-flex items-center rounded-chip bg-neutral-300 px-1.5 py-px text-[0.6rem] font-bold text-neutral-700">
           이번 주 제외
         </span>
