@@ -145,13 +145,14 @@ let notificationSettings = {
 }
 
 // --- 푸시 (ADR-0015, dev mock) ----------------------------------------------------
-// ADR 결정 ⑥ 기본값 그대로 — 셋 다 꺼짐으로 시작한다. 이 mock은 BE 발송기
+// 서버 기본값 그대로 — 셋 다 켜짐 · 10분 전으로 시작한다(2026-10-11 사용자 결정). 이 mock은 BE 발송기
 // 자체를 흉내내지 않는다(그건 서버 몫) — FE가 왕복하는 세 호출(설정 조회/저장·
 // 구독 생성)만 흉내낸다.
 let pushSettings = {
-  taskEnabled: false,
-  fixedScheduleEnabled: false,
-  scheduleEnabled: false,
+  taskEnabled: true,
+  fixedScheduleEnabled: true,
+  scheduleEnabled: true,
+  leadMinutes: 10,
 }
 
 // dev에서 VAPID 키가 항상 "준비됨"으로 보이게 하는 더미 값 — 실제 서명에는
@@ -424,7 +425,7 @@ export const mockBackend = {
     return { ...pushSettings }
   },
 
-  // PUT 전체 교체 — settingsApi.updatePushSettings가 항상 세 필드를 다 실어
+  // PUT 전체 교체 — settingsApi.updatePushSettings가 항상 네 필드를 다 실어
   // 보내므로(read-modify-write는 호출부가 아니라 settingsApi 쪽에서 하지 않고,
   // PushNotificationSection이 현재 캐시값 위에 바뀐 키만 얹어 보낸다) mock도
   // 받은 그대로 갈아 끼운다.

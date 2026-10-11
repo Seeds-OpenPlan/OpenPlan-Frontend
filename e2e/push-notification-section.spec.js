@@ -41,14 +41,23 @@ async function mockPushEndpoints(page) {
       },
     }),
   )
-  await page.route('**/users/me/push-settings', (route) =>
-    route.fulfill({
-      json: { data: { taskEnabled: false, fixedScheduleEnabled: false, scheduleEnabled: false } },
-    }),
-  )
+  // 서버 기본값(설정 행 없음) — 전부 켜짐 · 10분 전(2026-10-11 사용자 결정).
+  // PUT 은 받은 본문을 그대로 돌려준다(서버도 저장한 값을 그대로 응답한다).
+  const putBodies = []
+  await page.route('**/users/me/push-settings', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON()
+      putBodies.push(body)
+      return route.fulfill({ json: { data: body } })
+    }
+    return route.fulfill({
+      json: { data: { taskEnabled: true, fixedScheduleEnabled: true, scheduleEnabled: true, leadMinutes: 10 } },
+    })
+  })
   await page.route('**/push/vapid-public-key', (route) =>
     route.fulfill({ json: { data: { publicKey: PUBLIC_KEY } } }),
   )
+  return { putBodies }
 }
 
 test.describe('SettingsNotificationsPage — 푸시 알림 섹션 (ADR-0015)', () => {
@@ -69,12 +78,19 @@ test.describe('SettingsNotificationsPage — 푸시 알림 섹션 (ADR-0015)', (
     await expect(page.getByRole('switch', { name: /^일정\s/ })).toHaveCount(0)
   })
 
-  test('?platform=android(안드로이드 앱)에서는 푸시 섹션과 3개 토글이 보인다', async ({ page }) => {
+  test('?platform=android(안드로이드 앱)에서는 푸시 섹션·알림 시간·3개 토글이 보인다', async ({ page }) => {
     await mockPushEndpoints(page)
     await page.goto('/settings/notifications?platform=android')
 
     await expect(page.getByRole('heading', { name: '푸시 알림' })).toBeVisible()
-    await expect(page.getByText('시작 10분 전에 기기로 알려드립니다')).toBeVisible()
+
+    // 알림 시간 — 보기 6개, 기본 10분 전(2026-10-11 사용자 결정).
+    const lead = page.getByRole('combobox', { name: '알림 시간' })
+    await expect(lead).toHaveValue('10')
+    await expect(lead.locator('option')).toHaveText(['정각', '5분 전', '10분 전', '15분 전', '30분 전', '1시간 전'])
+
+    // 이 기기에는 아직 구독이 없다 — 토글이 켜져 보여도 알림이 오지 않으니 따로 안내한다.
+    await expect(page.getByRole('button', { name: '이 기기에서 알림 받기' })).toBeVisible()
 
     const task = page.getByRole('switch', { name: /^태스크\s/ })
     const fixedSchedule = page.getByRole('switch', { name: /^고정 일정\s/ })
@@ -83,9 +99,26 @@ test.describe('SettingsNotificationsPage — 푸시 알림 섹션 (ADR-0015)', (
     await expect(fixedSchedule).toBeVisible()
     await expect(schedule).toBeVisible()
 
-    // 기본값 전부 꺼짐(ADR 결정 ⑥) — mock GET이 돌려준 세 false가 그대로 반영됐는지.
-    expect(await task.getAttribute('aria-checked')).toBe('false')
-    expect(await fixedSchedule.getAttribute('aria-checked')).toBe('false')
-    expect(await schedule.getAttribute('aria-checked')).toBe('false')
+    // 기본값 전부 켜짐 — mock GET이 돌려준 세 true가 그대로 반영됐는지.
+    expect(await task.getAttribute('aria-checked')).toBe('true')
+    expect(await fixedSchedule.getAttribute('aria-checked')).toBe('true')
+    expect(await schedule.getAttribute('aria-checked')).toBe('true')
+  })
+
+  test('알림 시간을 바꾸면 네 필드를 통째로 PUT 하고, 고른 값이 남는다', async ({ page }) => {
+    const { putBodies } = await mockPushEndpoints(page)
+    await page.goto('/settings/notifications?platform=android')
+
+    const lead = page.getByRole('combobox', { name: '알림 시간' })
+    await lead.selectOption('30')
+
+    await expect.poll(() => putBodies.length).toBe(1)
+    expect(putBodies[0]).toEqual({
+      taskEnabled: true,
+      fixedScheduleEnabled: true,
+      scheduleEnabled: true,
+      leadMinutes: 30,
+    })
+    await expect(lead).toHaveValue('30')
   })
 })

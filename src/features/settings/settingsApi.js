@@ -529,9 +529,9 @@ export function patchNotificationSetting(key, enabled) {
 // 때만 이 함수들을 부른다 — 서버도 구독 생성 시 `platform` 값을 보지만, 완전한
 // 차단은 FE 쪽 책임이다(ADR 결정 ④ 끝 문단).
 
-/** GET /users/me/push-settings → `{ taskEnabled, fixedScheduleEnabled, scheduleEnabled }`.
- * 행이 없는 사용자(아직 한 번도 설정한 적 없음)는 서버가 셋 다 false로 돌려준다
- * (ADR 결정 ⑥ "행이 없으면 전부 꺼짐"). */
+/** GET /users/me/push-settings → `{ taskEnabled, fixedScheduleEnabled, scheduleEnabled, leadMinutes }`.
+ * 행이 없는 사용자(아직 한 번도 설정한 적 없음)는 서버가 셋 다 true · leadMinutes 10 으로
+ * 돌려준다(2026-10-11 사용자 결정). leadMinutes 는 0·5·10·15·30·60 중 하나. */
 export function getPushSettings() {
   return withDevFallback(
     () => apiClient.get('/users/me/push-settings'),
@@ -539,8 +539,8 @@ export function getPushSettings() {
   )
 }
 
-/** PUT /users/me/push-settings — 세 필드 전체 교체. 호출부가 항상 현재 캐시
- * 값에 바뀐 한 키만 얹어 세 필드를 다 실어 보낸다(위 preferences의
+/** PUT /users/me/push-settings — 네 필드 전체 교체. 호출부가 항상 현재 캐시
+ * 값에 바뀐 한 키만 얹어 네 필드를 다 실어 보낸다(위 preferences의
  * read-modify-write와 같은 이유 — PUT은 빠진 필드를 지운다). */
 export function updatePushSettings(settings) {
   return withDevFallback(

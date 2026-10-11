@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Toggle } from '../common/Toggle'
+import { Button } from '../common/Button'
 import { LoadingSkeleton } from '../common/LoadingSkeleton'
 import { ErrorState } from '../common/ErrorState'
 import { isAndroidAppShell } from '../../utils/appShell'
@@ -8,14 +9,36 @@ import { createPushSubscription } from '../../features/settings/settingsApi'
 import { usePushSettings, useUpdatePushSettings, useVapidPublicKey } from '../../features/settings/useSettings'
 
 // 용어집 그대로 — 태스크 / 고정 일정 / 일정(ADR-0015 사용자 결정 "대상 3가지").
-// `description`은 10분이라는 숫자를 반복하지 않는다 — 그 설명은 섹션 상단
-// 안내문 한 곳에만 두고, 여기서는 "무엇을" 보낼지만 말한다(ADR 결정 ② 대상
+// `description`은 알림 시간을 반복하지 않는다 — 시간은 위의 「알림 시간」
+// 선택 한 곳에만 두고, 여기서는 "무엇을" 보낼지만 말한다(ADR 결정 ② 대상
 // 조건의 사용자용 요약).
 const PUSH_ITEMS = [
   { key: 'taskEnabled', label: '태스크', description: '저장(확정)한 주간 계획의 태스크' },
   { key: 'fixedScheduleEnabled', label: '고정 일정', description: '반복 설정한 고정 일정' },
   { key: 'scheduleEnabled', label: '일정', description: '주간 계획에 배치된 일정' },
 ]
+
+// 알림 시간 보기 — 서버 PushLeadTime.ALLOWED_MINUTES · DB CHECK 와 1:1(2026-10-11
+// 사용자 결정: 정해진 보기 중 하나, 켠 항목 전부에 공통). 보기 밖 값은 서버가 422.
+const LEAD_OPTIONS = [
+  { value: 0, label: '정각' },
+  { value: 5, label: '5분 전' },
+  { value: 10, label: '10분 전' },
+  { value: 15, label: '15분 전' },
+  { value: 30, label: '30분 전' },
+  { value: 60, label: '1시간 전' },
+]
+
+// 서버가 설정 행이 없는 사용자에게 돌려주는 값과 같다(전부 켜짐 · 10분 전).
+const DEFAULT_SETTINGS = {
+  taskEnabled: true,
+  fixedScheduleEnabled: true,
+  scheduleEnabled: true,
+  leadMinutes: 10,
+}
+
+const FIELD =
+  'rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50'
 
 /*
   PushNotificationSection — ADR-0015 FE. 실제 구현은 PushNotificationSectionApp
@@ -50,6 +73,11 @@ function PushNotificationSectionApp() {
   // 세 토글을 똑같이 잠가야 한다(아래 disableAll이 둘을 OR로 합친다).
   const [subscribing, setSubscribing] = useState(false)
   const [subscribeError, setSubscribeError] = useState(false)
+  // 이 기기에 구독이 있는가 — null은 아직 모름. 기본값이 「전부 켜짐」이라
+  // 토글이 처음부터 켜져 보이는데, 권한·구독은 기기마다 따로 받아야 한다.
+  // 그래서 토글만으로는 "켜져 있는데 안 온다"를 알 수 없다 — 구독이 없으면
+  // 아래에 「이 기기에서 알림 받기」를 따로 보여준다.
+  const [deviceSubscribed, setDeviceSubscribed] = useState(null)
 
   const publicKey = vapidQuery.data?.publicKey ?? null
   // 조회 실패(vapidQuery.isError)와 "서버가 아직 키를 안 올렸다"(publicKey:
@@ -70,10 +98,14 @@ function PushNotificationSectionApp() {
     let cancelled = false
     getExistingPushSubscription()
       .then((sub) => {
-        if (!sub || cancelled) return null
+        if (cancelled) return null
+        setDeviceSubscribed(Boolean(sub))
+        if (!sub) return null
         return createPushSubscription(subscriptionToPayload(sub))
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setDeviceSubscribed(false)
+      })
     return () => {
       cancelled = true
     }
@@ -90,57 +122,74 @@ function PushNotificationSectionApp() {
     )
   }
 
-  const settings = settingsQuery.data ?? {
-    taskEnabled: false,
-    fixedScheduleEnabled: false,
-    scheduleEnabled: false,
-  }
+  const settings = { ...DEFAULT_SETTINGS, ...settingsQuery.data }
 
   /*
-    토글 하나의 "켜기"는 기기에 구독이 없을 때만 선행 단계(권한 요청 →
-    PushManager.subscribe → POST)를 밟는다 — 있으면 곧바로 PUT만 보낸다.
-    `Notification.requestPermission()`은 반드시 **이 클릭 핸들러 안에서**
+    기기 구독 만들기 — 기기에 구독이 없을 때만 선행 단계(권한 요청 →
+    PushManager.subscribe → POST)를 밟는다. 있으면 곧바로 true.
+    `Notification.requestPermission()`은 반드시 **클릭 핸들러 안에서**
     불러야 한다(사용자 제스처 요구사항, ADR 작업 지시서 명시) — await를
     먼저 거친 뒤 호출해도 같은 동기 호출 체인(마이크로태스크) 안이라 크롬
     기준 유효하지만, 타이머·네트워크 왕복처럼 매크로태스크를 먼저 거치면
     제스처가 끊겨 브라우저가 프롬프트를 띄우지 않고 조용히 거부로 처리한다
     — 그래서 이 함수 전체가 짧은 프라미스 체인(serviceWorker.ready 등) 하나로
-    끝나도록 유지한다.
-
-    "끄기"(next === false)는 구독을 전혀 건드리지 않는다 — 컴포넌트 헤더의
-    "완전한 구독 해제" 설명 참조.
+    끝나도록 유지한다. 부르는 곳은 「이 기기에서 알림 받기」 버튼과 토글
+    켜기 두 곳뿐이고, 둘 다 클릭 핸들러다.
   */
-  async function handleToggle(key, next) {
+  async function ensureDeviceSubscription() {
     setSubscribeError(false)
-    if (next) {
-      const existing = await getExistingPushSubscription().catch(() => null)
-      if (!existing) {
-        if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
-          setPermissionBlocked(true)
-          return
-        }
-        setSubscribing(true)
-        try {
-          const permission = await Notification.requestPermission()
-          if (permission !== 'granted') {
-            setPermissionBlocked(true)
-            return
-          }
-          setPermissionBlocked(false)
-          const subscription = await subscribeToPush(publicKey)
-          await createPushSubscription(subscriptionToPayload(subscription))
-        } catch {
-          setSubscribeError(true)
-          return
-        } finally {
-          setSubscribing(false)
-        }
-      }
+    const existing = await getExistingPushSubscription().catch(() => null)
+    if (existing) {
+      setDeviceSubscribed(true)
+      return true
     }
+    if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+      setPermissionBlocked(true)
+      return false
+    }
+    setSubscribing(true)
+    try {
+      const permission = await Notification.requestPermission()
+      if (permission !== 'granted') {
+        setPermissionBlocked(true)
+        return false
+      }
+      setPermissionBlocked(false)
+      const subscription = await subscribeToPush(publicKey)
+      await createPushSubscription(subscriptionToPayload(subscription))
+      setDeviceSubscribed(true)
+      return true
+    } catch {
+      setSubscribeError(true)
+      return false
+    } finally {
+      setSubscribing(false)
+    }
+  }
+
+  // "끄기"(next === false)는 구독을 전혀 건드리지 않는다 — 컴포넌트 헤더의
+  // "완전한 구독 해제" 설명 참조.
+  async function handleToggle(key, next) {
+    if (next && !(await ensureDeviceSubscription())) return
     updateSettings.mutate({ ...settings, [key]: next })
   }
 
+  // 알림 시간은 구독과 무관하다 — 바꿔 두면 구독을 만든 뒤부터 그 시간으로 온다.
+  function handleLeadChange(leadMinutes) {
+    updateSettings.mutate({ ...settings, leadMinutes })
+  }
+
   const disableAll = subscribing || updateSettings.isPending
+  // 권한이 없으면 구독도 없다 — 이 경우는 렌더 중에 바로 안다(effect 에서
+  // setState 하지 않는다). 권한이 있으면 effect 가 기기 구독을 확인한 결과를 쓴다.
+  const permissionGranted = typeof Notification !== 'undefined' && Notification.permission === 'granted'
+  const showDeviceSetup = !permissionGranted || deviceSubscribed === false
+  // 저장 중에는 방금 고른 값을 보여준다 — select 는 제어 컴포넌트라 캐시값만
+  // 쓰면 저장이 끝날 때까지 옛 값으로 튕겼다가 돌아온다(optimistic 업데이트는
+  // 하지 않는다 — useUpdatePushSettings 헤더 참조).
+  const shownLeadMinutes = updateSettings.isPending
+    ? (updateSettings.variables?.leadMinutes ?? settings.leadMinutes)
+    : settings.leadMinutes
 
   // 저장 중·오류 안내를 한 자리에 고정한다(항상 렌더링하고 텍스트만 바꿔치기) —
   // 조건부로 블록 자체를 넣고 빼면 그 높이만큼 아래 내용이 밀렸다가 복귀하는
@@ -159,8 +208,37 @@ function PushNotificationSectionApp() {
     <div className="flex flex-col gap-3">
       <div>
         <h3 className="text-label font-semibold text-text">푸시 알림</h3>
-        <p className="text-caption text-text-muted">시작 10분 전에 기기로 알려드립니다. 시각은 고정이며 고를 수 없습니다.</p>
+        <p className="text-caption text-text-muted">켠 항목이 시작하기 전에 기기로 알려드립니다.</p>
       </div>
+      {showDeviceSetup && (
+        <div className="flex flex-col gap-2 rounded-control bg-surface-sunken p-3">
+          <p className="text-caption text-text-muted">이 기기에서는 아직 푸시 알림을 받지 않습니다.</p>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="self-start"
+            loading={subscribing}
+            onClick={() => ensureDeviceSubscription()}
+          >
+            이 기기에서 알림 받기
+          </Button>
+        </div>
+      )}
+      <label className="flex items-center justify-between gap-3">
+        <span className="text-label text-text">알림 시간</span>
+        <select
+          value={shownLeadMinutes}
+          onChange={(e) => handleLeadChange(Number(e.target.value))}
+          disabled={disableAll}
+          className={FIELD}
+        >
+          {LEAD_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </label>
       <ul className="overflow-hidden rounded-card border border-border">
         {PUSH_ITEMS.map((item) => (
           <li key={item.key} className="border-b border-border px-4 py-3 last:border-b-0">

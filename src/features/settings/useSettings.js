@@ -467,7 +467,7 @@ export function useVapidPublicKey() {
 }
 
 /**
- * PUT 전체 교체 — 토글 하나를 누르면 호출부가 캐시의 현재 세 필드 위에 그 키만
+ * PUT 전체 교체 — 토글 하나를 누르면 호출부가 캐시의 현재 네 필드 위에 그 키만
  * 바꿔 통째로 보낸다. 위 알림(usePatchNotificationSetting)과 달리 **optimistic
  * 업데이트를 하지 않는다**(팀장 지시, ADR-0015 작업 지시서의 명시 요구): 토글을
  * 켤 때는 구독 생성(권한 요청 → PushManager.subscribe → POST)이 먼저 끝나야
