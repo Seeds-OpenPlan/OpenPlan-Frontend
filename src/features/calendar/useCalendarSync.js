@@ -164,8 +164,14 @@ async function runSync() {
       // 쓰기 직전에 거는 cancelQueries가 그 시점의 모든 in-flight 요청(이 호출이
       // 띄운 것 포함)을 먼저 끊어 둔다 — usePlanData.js useMoveBlock의 헤더가
       // 설명하는 그 경합 방지 관례를 그대로 올라탄다.
+      //
+      // `['fixedSchedules']`는 더 없다(main #70 BE-90 머지 — PR #76 재리뷰
+      // Should-fix, 2026-10-11) — 고정 일정은 이제 주간 계획 응답(`weekPlan`)에
+      // 함께 실려 오고, 그 전용 쿼리 키 자체가 사라졌다(usePlanData.js의
+      // `useFixedSchedules`가 `weekPlanKey`를 `select`로 좁혀 읽는 것을 참조).
+      // 그래서 그 키를 invalidate하던 줄은 더는 아무 쿼리와도 매칭되지 않는
+      // no-op이라 지웠다 — `['weekPlan']`이 이미 그 데이터를 포함한다.
       queryClient.invalidateQueries({ queryKey: ['weekPlan'] })
-      queryClient.invalidateQueries({ queryKey: ['fixedSchedules'] })
       queryClient.invalidateQueries({ queryKey: ['fixedSchedulesAll'] })
     } catch (error) {
       console.warn('[calendar-sync] 동기화 실패', error)
