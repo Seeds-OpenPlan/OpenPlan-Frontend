@@ -32,12 +32,13 @@ import { useSessionStore } from '../auth/sessionStore'
   리뷰 SHOULD-FIX, 2026-10-11) — 모듈 스코프 변수만으로는 탭마다 따로 메모리를
   가져서, 여러 탭을 열어 두면 진입·복귀 트리거가 탭 수만큼 중복으로 나간다.
   키를 사용자별로 두는 이유는 로그아웃 뒤 다른 계정으로 들어와도 그 계정 몫의
-  슬롯이 따로 있어 서로 침범하지 않기 때문이고, `resetCalendarSyncState()`가
-  그래도 그 슬롯을 명시적으로 지우는 이유는 "같은 계정으로 5분 안에 다시
-  로그인"하는 경우까지 커버하기 위해서다(아래 그 함수 헤더 참조) — 사용자별
-  키만으로는 이 경우를 막지 못한다. 변경 후 트리거(디바운스)는 탭 로컬
-  그대로 둔다 — 실제로 쓰기가 일어난 탭만 부르므로 공유할 "마지막 쓰기 시각"이
-  의미가 없다(어느 탭의 디바운스든 그 탭에서의 마지막 쓰기로부터 3초면 된다).
+  슬롯이 따로 있어 서로 침범하지 않기 때문이다. `resetCalendarSyncState()`는
+  그 사용자별 키를 고르지 않고 접두사로 모든 슬롯을 지운다(PR #76 AI 리뷰
+  Should-fix, 2026-10-11 — 아래 그 함수 헤더 참조: 로그인 onSuccess 시점엔
+  세션 캐시가 아직 로그인 이전 값이라 "지금 사용자의 슬롯"을 세션에서 정확히
+  골라낼 수 없다). 변경 후 트리거(디바운스)는 탭 로컬 그대로 둔다 — 실제로
+  쓰기가 일어난 탭만 부르므로 공유할 "마지막 쓰기 시각"이 의미가 없다(어느
+  탭의 디바운스든 그 탭에서의 마지막 쓰기로부터 3초면 된다).
 */
 
 // 3초 — 변경 직후 트리거(연타·드래그 연속 이동을 한 번으로 묶는다).
@@ -57,18 +58,28 @@ let trailingRequested = false
 // 값도 함께 갱신한다.
 let lastSyncAt = 0
 
+// 탭 간 공유 슬롯 키의 접두사. storageKey()가 사용자별 키를 만들 때,
+// resetCalendarSyncState()가 "지금 사용자가 누구든" 전부 지울 때 둘 다
+// 이 하나의 상수를 기준으로 삼는다(두 값이 따로 하드코딩돼 있다가 한쪽만
+// 바뀌는 사고를 막는다).
+const STORAGE_KEY_PREFIX = 'openplan.calendarSync.lastSyncAt.'
+
 /**
  * 탭 간 공유 슬롯의 키. 세션 캐시(['auth','session'])에서 읽은 userId로 가른다
  * — sessionGuardLoader(router.js)가 AppLayout을 그리기 전에 그 쿼리를
- * ensureQueryData로 이미 채워 두므로, 이 모듈이 마운트/가시성 트리거를 쏠
- * 시점엔 항상 값이 있다. 세션 캐시가 비어 있는 극히 짧은 틈(로그아웃 직후
- * clear()와 다음 로그인 사이)엔 공용 'anonymous' 슬롯으로 떨어지는데, 그
- * 슬롯도 로그인 성공 시 resetCalendarSyncState()가 지우므로 다음 세션에
- * 새것으로 다시 쓰여 해롭지 않다.
+ * ensureQueryData로 이미 채워 두므로, 마운트/가시성 트리거(useCalendarSyncOnActive)
+ * 가 이 키를 쓸 시점엔 항상 값이 있다.
+ *
+ * 🔴 `resetCalendarSyncState()`는 이 함수를 쓰지 않는다(PR #76 AI 리뷰 Should-fix,
+ * 2026-10-11) — useLogin의 onSuccess에서는 바로 앞의 `invalidateQueries`가
+ * 비동기라, 이 함수가 읽는 세션 캐시가 아직 로그인 이전 값(대개 없음 →
+ * 'anonymous')이다. 그 한 슬롯만 지우면 방금 로그인한 사용자의 실제 슬롯은
+ * 그대로 남아 로그인 직후의 진입 동기화가 스킵된다. reset은 그 함수 자신의
+ * 헤더가 설명하듯 세션 캐시에 의존하지 않고 접두사로 전부 지운다.
  */
 function storageKey() {
   const userId = queryClient.getQueryData(['auth', 'session'])?.userId ?? 'anonymous'
-  return `openplan.calendarSync.lastSyncAt.${userId}`
+  return `${STORAGE_KEY_PREFIX}${userId}`
 }
 
 /** 탭 간 공유 값을 읽는다. 실패(프라이빗 모드, 저장소 비활성화 등)하면 이
@@ -206,12 +217,30 @@ export function useCalendarSyncOnActive() {
 
 /**
  * 로그아웃 시작(useLogout의 onMutate)과 로그인 성공(useLogin의 onSuccess) 양쪽
- * 모두에서 호출한다(Thomas 리뷰 SHOULD-FIX, 2026-10-11).
+ * 모두에서 호출한다(Thomas 리뷰 SHOULD-FIX, 2026-10-11 / PR #76 AI 리뷰
+ * Should-fix, 2026-10-11 두 차례 수정됨).
  *
  * 문제: lastSyncAt이 메모리/localStorage 어디에도 리셋되는 자리가 없으면,
  * 로그아웃 직후 5분 안에 (같은 계정이든 다른 계정이든) 다시 로그인했을 때
  * 진입 트리거가 "최근에 돈 적 있다"로 읽혀 스킵된다 — 그 계정의 큐는 로그아웃과
  * 무관하게 서버에 그대로 남아 있으므로, 로그인 직후 한 번은 반드시 돌아야 한다.
+ *
+ * 🔴 세션 캐시로 "지금 지울 슬롯"을 고르지 않는다(PR #76 수정) — 처음엔
+ * `storageKey()`(세션 캐시의 userId 기반)로 딱 한 슬롯만 지웠는데,
+ * useLogin의 onSuccess에서는 바로 앞 줄의 `invalidateQueries(['auth',
+ * 'session'])`가 비동기라 이 함수가 실행되는 시점에 그 캐시가 아직 로그인
+ * **이전** 값이다(새 탭·재인증 경로에서는 `undefined` → 'anonymous'로
+ * 떨어진다). 그러면 방금 로그인한 사용자의 실제 슬롯(`...lastSyncAt.<그
+ * 사용자의 userId>`)은 전혀 건드리지 못하고 엉뚱한 슬롯만 지워, 로그인 직후
+ * 진입 동기화가 조용히 스킵됐다.
+ *
+ * 대안으로 로그인 응답의 userId를 인자로 받는 방법도 검토했으나(②), 로그인
+ * 쪽만 그 인자가 생기고 로그아웃 쪽(이미 세션이 있던 사용자)은 여전히 세션
+ * 캐시를 읽어야 해 호출부 두 곳의 모양이 비대칭으로 갈린다. 대신(①) "이
+ * 접두사로 시작하는 슬롯을 전부 지운다"로 단순화했다 — 이 브라우저에 남아
+ * 있는 다른 사용자의 슬롯까지 함께 지워져도 무해하다(그 사용자가 다음에
+ * 로그인하면 자기 슬롯을 처음부터 다시 쓴다), 그리고 로그인·로그아웃
+ * 호출부 양쪽이 세션 캐시 상태와 무관하게 항상 정확하다.
  *
  * 대기 중인 디바운스 타이머만 취소한다 — 이미 날아간 GET(inFlight)은 그대로
  * 끝까지 간다(응답은 버려지고 캐시 invalidate만 일어날 뿐, 다음 계정에
@@ -224,12 +253,12 @@ export function resetCalendarSyncState() {
   trailingRequested = false
   lastSyncAt = 0
   try {
-    // 지금 세션 캐시가 가리키는 사용자 슬롯을 지운다 — 로그아웃 onMutate
-    // 시점엔 아직 이전 사용자, 로그인 onSuccess 시점엔 비어 있거나(→
-    // 'anonymous') 막 invalidate된 새 사용자일 수 있다. 어느 쪽이든 "지금
-    // 확인되는 슬롯을 0으로 되돌린다"는 목적엔 맞다 — 같은 계정이 5분 안에
-    // 다시 로그인해도 그 슬롯이 남아 있지 않아 진입 트리거가 스킵되지 않는다.
-    window.localStorage.removeItem(storageKey())
+    // localStorage.key(i)는 삭제할 때마다 뒤 인덱스가 앞으로 밀리므로, 뒤에서
+    // 앞으로 순회해야 건너뛰는 키 없이 전부 지울 수 있다.
+    for (let i = window.localStorage.length - 1; i >= 0; i -= 1) {
+      const key = window.localStorage.key(i)
+      if (key?.startsWith(STORAGE_KEY_PREFIX)) window.localStorage.removeItem(key)
+    }
   } catch {
     // 메모리 값(lastSyncAt=0)만으로도 이 탭의 다음 진입 트리거는 즉시 동기화를
     // 실행한다 — localStorage가 막혀 있어도 정확성에 문제는 없다.
