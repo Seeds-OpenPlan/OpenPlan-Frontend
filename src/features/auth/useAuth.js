@@ -31,6 +31,7 @@ import {
 } from './authApi'
 import { apiClient } from '../../api/client'
 import { withDevFallback } from '../plan/planApi'
+import { resetCalendarSyncState } from '../calendar/useCalendarSync'
 
 /**
  * Read-only access to the session — SAME queryKey/staleTime as router.js's
@@ -82,6 +83,10 @@ export function useLogin() {
       // 로그아웃 억제 해제 — 다시 로그인했으니 이제부터의 401은 진짜 만료다.
       useSessionStore.getState().endLogout()
       queryClient.invalidateQueries({ queryKey: ['auth', 'session'] })
+      // 캘린더 동기화 스로틀 리셋(Thomas 리뷰 SHOULD-FIX) — useCalendarSync.js의
+      // resetCalendarSyncState 헤더 참조. 로그인 직후 한 번은 반드시 돌아야
+      // 이전 계정이 5분 안에 다시 로그인했을 때도 스킵되지 않는다.
+      resetCalendarSyncState()
     },
   })
 }
@@ -122,6 +127,9 @@ export function useLogout() {
     // (sessionStore.js의 `loggingOut` 헤더 참조).
     onMutate: () => {
       useSessionStore.getState().beginLogout()
+      // 같은 이유로 로그아웃 시작 시점에도 리셋한다 — useCalendarSync.js의
+      // resetCalendarSyncState 헤더 참조.
+      resetCalendarSyncState()
     },
     onSettled: () => {
       // ['auth','session']만이 아니라 전량을 비운다: 로그아웃했는데 이전

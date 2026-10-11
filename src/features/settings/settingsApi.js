@@ -391,6 +391,11 @@ export function createGoogleConnection({ authCode, redirectUri, state }) {
  * (synchronize의 `selections.isEmpty()` 분기) — 빈 목록이 오면 "일정이 없다"가
  * 아니라 "가져올 캘린더를 아직 안 골랐다"일 수 있다. 호출부가 그 둘을 구분해
  * 안내한다(CalendarConnectionSection).
+ *
+ * 🔴 이 함수의 또 다른 호출부: `features/calendar/useCalendarSync.js`가 일정
+ * 변경 뒤·앱 진입/탭 복귀 시 응답을 버리는 용도로 자동 호출한다(오직 밖으로
+ * 밀어내는 부작용 때문 — 그 파일 자신의 헤더 참조). 그 경로는 절대 반영하지
+ * 않는다 — apply는 여전히 이 설정 화면의 useApplyCandidateEvents 하나뿐이다.
  */
 export function getExternalEvents(connectionId, applyStatus) {
   const query = applyStatus ? `?applyStatus=${encodeURIComponent(applyStatus)}` : ''

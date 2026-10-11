@@ -43,6 +43,7 @@ import {
 } from './settingsApi'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
+import { scheduleCalendarSync } from '../calendar/useCalendarSync'
 
 // --- 가용 시간 (사용자 입력, phase 1) ------------------------------------------------
 
@@ -105,6 +106,11 @@ export function useCreateFixedSchedule() {
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
       queryClient.invalidateQueries({ queryKey: gridWeekPlanKeyPrefix() })
       toast({ tone: 'success', message: '고정 일정을 추가했습니다' })
+      // FixedOccurrenceReconciler는 다음 동기화 때 "있어야 할 회차"를 현재
+      // 테이블 상태에서 다시 계산한다(usePlanData.js useToggleFixedException의
+      // 같은 주석 참조) — 생성·수정·삭제 모두 그 다음 동기화가 앞당겨질수록
+      // 구글에 더 빨리 반영된다.
+      scheduleCalendarSync()
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
@@ -118,6 +124,9 @@ export function useUpdateFixedSchedule() {
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
       queryClient.invalidateQueries({ queryKey: gridWeekPlanKeyPrefix() })
       toast({ tone: 'success', message: '저장했습니다' })
+      // 위 useCreateFixedSchedule과 같은 이유 — reconciler가 다음 동기화 때
+      // 다시 계산한다.
+      scheduleCalendarSync()
     },
     // NOTE: E-COM-006 (version conflict) is surfaced to the caller via the
     // rejected promise (the mutation's own onError below only toasts a generic
@@ -138,6 +147,9 @@ export function useDeleteFixedSchedule() {
       queryClient.invalidateQueries({ queryKey: fixedSchedulesAllKey() })
       queryClient.invalidateQueries({ queryKey: gridWeekPlanKeyPrefix() })
       toast({ tone: 'success', message: '고정 일정을 삭제했습니다' })
+      // 위 useCreateFixedSchedule과 같은 이유 — reconciler가 다음 동기화 때
+      // 다시 계산한다(사라진 회차는 DELETE로 나간다).
+      scheduleCalendarSync()
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
