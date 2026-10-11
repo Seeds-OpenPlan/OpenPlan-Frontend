@@ -1014,6 +1014,16 @@ export function useSaveWeek() {
     onSuccess: (_data, { weekStartISO }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       toast({ tone: 'success', message: '주간 계획을 저장했습니다' })
+      // 확정이 TASK 블록 내보내기의 유일한 진입점이다(PR #76 AI 재리뷰 Blocking,
+      // 2026-10-11) — WeeklyPlanValidationService.confirm이 DRAFT→CONFIRMED로
+      // 전이하는 자리에서만 PlanBlockOutboundReconciler.onConfirmed(userId, planId)를
+      // 불러 그 주의 TASK 블록 배치를 대기열에 적는다(:146). SCHEDULE 블록과
+      // 달리 TASK는 드래그·배치 시점이 아니라 "이대로 하겠다"로 확정한 시점에만
+      // 나간다 — 초안 단계의 드래그마다 내보내면 실제 캘린더가 흔들리고
+      // 자동 배치 한 번에 수십 건이 나가기 때문이다(그 메서드 자신의 주석).
+      // 이전엔 "확정은 시각을 바꾸지 않는다"는 이유로 제외했는데, 틀렸다 —
+      // 확정은 시각이 아니라 "이 TASK 블록들을 내보낸다"는 결정 자체를 낸다.
+      scheduleCalendarSync()
     },
   })
 }

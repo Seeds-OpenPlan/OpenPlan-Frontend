@@ -117,6 +117,15 @@ function setLastSyncAt(value) {
  * (토스트 없음, 개발 콘솔 경고만). 백엔드가 외부 제공자 실패로 조회를 깨지
  * 않는다는 같은 원칙(ExternalCalendarService.listEvents)을 프론트 쪽 트리거에도
  * 적용한 것이다.
+ *
+ * 여러 트리거가 겹쳐 같은 GET을 반복해도 안전하다(PR #76 AI 재리뷰 확인 사항,
+ * 2026-10-11) — `ExternalCalendarService.synchronize`(origin/main :509-568)가
+ * `externalEventId` 기준 `existing` 맵으로 이미 있는 CANDIDATE 행을 그 자리에서
+ * resync()하지, 매번 새로 insert하지 않는다. 동시에 같은 연동을 두 번 조회해도
+ * 그 저장 경합은 DataIntegrityViolationException으로 흡수된다(같은 파일 :613·621).
+ * 즉 이 GET은 몇 번을 겹쳐 불러도 CANDIDATE가 중복으로 쌓이지 않는다 — in-flight
+ * 가드는 순전히 불필요한 네트워크 왕복을 줄이기 위한 것이고, 정합성을 위해
+ * 필수인 건 아니다.
  */
 async function runSync() {
   if (inFlight) {
