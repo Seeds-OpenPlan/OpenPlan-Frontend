@@ -140,7 +140,35 @@ function stopTouchScrollBlock(blocker) {
 // AI 리뷰 Blocking(#68) 수정분 — startDrag/startDeadlineDrag가 "터치일
 // 때만" 스크롤 차단 리스너를 등록해야 하므로(마우스/펜은 영향 없어야 함)
 // 필요해졌다.
-function withLongPressGate(activate) {
+//
+// AI 리뷰 Should-fix (#68, 6a3f3b8 기준): 롱프레스 "대기" 중에 호출한 바/
+// 손잡이 쪽 컴포넌트가 언마운트되면(행 접기, 다른 행 펼치기, 탭 전환, 드로어
+// 닫기, 리페치로 인한 키 변경) 문제가 생긴다 — 아래 타이머는 window에 걸려
+// 있어 컴포넌트가 사라져도 그대로 450ms를 끝까지 채우고 `activate(shim)`을
+// 실행한다. 그 시점의 `shim.currentTarget`은 이미 DOM에서 떨어져 나간 옛
+// 엘리먼트를 가리키는 클로저인데, activate(startDrag/startDeadlineDrag)는
+// 그래도 `dragRef.current`/`activeDragPointerId`(모듈 전역)를 정상적으로
+// 세팅해 버린다 — 그 뒤로는 pointerup/pointercancel/lostpointercapture가
+// 라우팅될 실제 DOM이 없으니 영원히 오지 않고, `activeDragPointerId`는
+// 다시는 안 지워진다. 이 변수는 모듈 전역이라, 이 타임라인의 다른 모든 바/
+// 손잡이까지 포함해 새로고침 전까지 모든 터치 롱프레스가 막힌다. 두 겹으로
+// 막는다(usePlanDrag.js의 activeCleanupRef 패턴과 같은 생각):
+//   ① 호출자(WbsTimeline/WbsBar)가 `context.pendingCleanupRef`를 넘기면,
+//      대기가 시작되는 즉시 이 gesture의 `cleanup`(아래, 타이머 clear +
+//      리스너 제거 + pendingLongPressPointerId 해제)을 그 ref에 저장해
+//      둔다. 호출자의 unmount effect가 그 핸들을 불러 주기만 하면, 아직
+//      안 끝난 타이머가 그 자리에서 `clearTimeout`으로 완전히 멈춰
+//      activate 자체가 실행되지 않는다 — 정상 종료(손 떼기/많이 움직여
+//      취소/활성화 성공) 때는 매번 `cleanup` 자신이 이 핸들을 비우므로,
+//      언마운트가 그 뒤에 와도 호출할 게 없어 안전하다.
+//   ② ①의 타이밍을 놓쳐(unmount effect가 돌기 전에 타이머가 이미 발화)
+//      activate 호출 직전까지 왔더라도, 호출자가 넘긴 `context.mountedRef`
+//      가 false면(컴포넌트가 이미 언마운트됐다는 뜻) activate를 실행하지
+//      않는다 — 방어선 하나 더. 마우스/펜 경로(위 `pointerType !== 'touch'`
+//      분기)는 이 대기 자체가 없으므로 그대로 영향이 없다.
+function withLongPressGate(activate, context) {
+  const pendingCleanupRef = context?.pendingCleanupRef
+  const mountedRef = context?.mountedRef
   return (e) => {
     const shim = {
       clientX: e.clientX,
@@ -173,7 +201,19 @@ function withLongPressGate(activate) {
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onCancel)
       if (pendingLongPressPointerId === pointerId) pendingLongPressPointerId = null
+      // AI 리뷰 Should-fix (#68): 이 gesture의 대기가 어떤 식으로든
+      // 끝났으니(취소든 활성화든) 호출자가 들고 있던 핸들도 같이 비운다 —
+      // 안 비우면 다음 gesture의 pendingCleanupRef를 언마운트가 엉뚱하게
+      // 다시 호출하거나(이미 끝난 timer를 또 clearTimeout하는 정도라
+      // 해는 없지만), 이미 끝난 핸들을 영원히 붙들고 있게 된다.
+      if (pendingCleanupRef && pendingCleanupRef.current === cleanup) {
+        pendingCleanupRef.current = null
+      }
     }
+    // 타이머를 걸기 전에 미리 노출해 둔다 — 그래야 타이머가 끝나기 전
+    // 어느 시점에 호출자가 언마운트돼도 이 cleanup을 불러 타이머를 멈출 수
+    // 있다(①).
+    if (pendingCleanupRef) pendingCleanupRef.current = cleanup
     // 세 리스너 모두 이 pointerId가 아니면 무시 — 다른 손가락의 move/up/
     // cancel이 이 대기 중인 제스처를 건드리지 않는다.
     const onMove = (ev) => {
@@ -194,6 +234,12 @@ function withLongPressGate(activate) {
     window.addEventListener('pointercancel', onCancel)
     timer = setTimeout(() => {
       cleanup()
+      // AI 리뷰 Should-fix (#68): ①을 놓쳤을 때의 방어선(②) — 이미
+      // 언마운트된 컴포넌트를 위해 activate를 실행하지 않는다. 실행해
+      // 버리면 그 뒤 pointerup/cancel이 갈 곳 없는 드래그가 시작돼
+      // activeDragPointerId가 영원히 잠긴다(이 Should-fix 전체가 고치는
+      // 증상 그 자체).
+      if (mountedRef && mountedRef.current === false) return
       activate(shim)
     }, LONG_PRESS_MS)
   }
@@ -284,6 +330,23 @@ export function WbsTimeline({
   const deadlineDragRef = useRef(null) // { originX, originISO }
   const deadlineDebounceRef = useRef(null)
   const deadlineTooltipFlashRef = useRef(null)
+  // AI 리뷰 Should-fix (#68): withLongPressGate가 "대기 중인 롱프레스를
+  // 취소하는 핸들"을 저장해 두는 자리(그 함수 자신의 헤더 주석 참고) — 이
+  // 핸들이 들어있는 동안 이 컴포넌트가 언마운트되면, 아래 unmount cleanup이
+  // 이걸 불러 타이머를 멈춰서 activate가 전혀 실행되지 않게 한다.
+  const deadlinePendingLongPressRef = useRef(null)
+  // 같은 Should-fix의 두 번째 방어선 — withLongPressGate의 setTimeout이
+  // 멈추기 직전에 이미 발화해 버린 경우를 위해 "이 컴포넌트가 지금도
+  // 마운트돼 있는가"를 읽을 수 있게 둔다. 바로 아래 effect가 mount/unmount
+  // 양쪽에서 갱신한다(Strict Mode의 mount→unmount→mount 재마운트에서도
+  // true로 다시 돌아오도록, useRef의 초기값에만 맡기지 않는다).
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   // MAJOR bug fix (Thomas code review): the latest NOT-YET-SENT deadline
   // drag/keyboard-nudge value, so the unmount cleanup below can FLUSH it
   // instead of silently discarding it — see that cleanup's own comment.
@@ -338,6 +401,17 @@ export function WbsTimeline({
         stopTouchScrollBlock(deadlineDragRef.current.touchScrollBlocker)
         clearActiveDragPointer(deadlineDragRef.current.pointerId)
       }
+      // AI 리뷰 Should-fix (#68, 6a3f3b8 기준): 위 두 블록은 모두 "이미
+      // 활성화된" 드래그만 다룬다 — 롱프레스가 아직 활성화 전, 450ms
+      // 타이머를 "대기" 중인 단계에서 이 컴포넌트가 언마운트되면 그 타이머는
+      // window 리스너로 떠 있어 끝까지 살아남고, 끝나면 이미 사라진 DOM을
+      // 가리키는 옛 클로저로 activate를 실행해 activeDragPointerId를
+      // 세팅해 버린다 — 그 뒤 pointerup/cancel이 갈 곳이 없어 이 변수가
+      // 영원히 안 지워지고, 전체 타임라인(모든 바 포함)의 터치 롱프레스가
+      // 새로고침 전까지 막힌다. 대기 중이던 핸들이 있다면 여기서 먼저
+      // 취소한다 — withLongPressGate 자신의 헤더 주석 ①/②가 그 전체 설계를
+      // 설명한다.
+      deadlinePendingLongPressRef.current?.()
     },
     [],
   )
@@ -759,7 +833,12 @@ export function WbsTimeline({
                   // which the react-hooks/refs rule flags since
                   // startDeadlineDrag touches a ref) — see the resize spans
                   // below for the identical shape.
-                  onPointerDown={(e) => withLongPressGate(startDeadlineDrag)(e)}
+                  onPointerDown={(e) =>
+                    withLongPressGate(startDeadlineDrag, {
+                      pendingCleanupRef: deadlinePendingLongPressRef,
+                      mountedRef,
+                    })(e)
+                  }
                   onPointerMove={onDeadlinePointerMove}
                   onPointerUp={onDeadlinePointerUp}
                   onPointerCancel={onDeadlinePointerCancel}
@@ -904,6 +983,21 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
   const dragRef = useRef(null) // { mode, originStart, originEnd, originX }
   const debounceRef = useRef(null)
   const tooltipFlashRef = useRef(null)
+  // AI 리뷰 Should-fix (#68): WbsTimeline의 deadlinePendingLongPressRef와
+  // 같은 자리·같은 이유 — withLongPressGate가 저장해 두는 "대기 중인
+  // 롱프레스 취소 핸들". move/start/end 세 onPointerDown이 전부 같은
+  // dragRef를 공유하므로(아래 startDrag), 이 핸들도 하나만 두면 셋 다
+  // 커버된다(withLongPressGate 자신의 헤더 주석 참고).
+  const pendingLongPressRef = useRef(null)
+  // 같은 Should-fix의 두 번째 방어선(②) — 타이머가 unmount cleanup보다
+  // 먼저 발화해 버린 경우를 위한 "지금도 마운트돼 있는가" 플래그.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   // MAJOR bug fix (Thomas code review): the latest NOT-YET-SENT drag/nudge
   // patch, so the unmount cleanup below can FLUSH it instead of silently
   // discarding it — see that cleanup's own comment.
@@ -948,6 +1042,12 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       stopTouchScrollBlock(dragRef.current.touchScrollBlocker)
       clearActiveDragPointer(dragRef.current.pointerId)
     }
+    // AI 리뷰 Should-fix (#68, 6a3f3b8 기준): 위는 "이미 활성화된" 드래그만
+    // 다룬다 — 롱프레스가 아직 450ms 타이머를 "대기" 중인 단계에서 이 바가
+    // 언마운트되면, WbsTimeline의 같은 수정과 똑같은 이유로 전역
+    // activeDragPointerId가 영원히 잠긴다(withLongPressGate 자신의 헤더
+    // 주석 참고). 대기 중이던 핸들이 있다면 여기서 먼저 취소한다.
+    pendingLongPressRef.current?.()
     // `node.taskId` (not `node`): this bar is keyed by taskId in the parent
     // list, so a MOUNTED instance's taskId value never actually changes
     // (only `node`'s own object identity does, on every WBS refetch) —
@@ -1101,6 +1201,10 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
 
   const spanDays = diffDaysISO(start, end) + 1
   const label = `${node.title}, 기간 ${monthDayKO(start)}부터 ${monthDayKO(end)}`
+  // AI 리뷰 Should-fix (#68): move/start/end 세 withLongPressGate 호출이 전부
+  // 같은 핸들·같은 마운트 플래그를 공유하므로(dragRef도 공유하는 것과 같은
+  // 이유) 객체를 한 번만 만들어 셋 다 넘긴다.
+  const longPressContext = { pendingCleanupRef: pendingLongPressRef, mountedRef }
 
   return (
     <div
@@ -1120,7 +1224,7 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       // 롱프레스가 일으키는 네이티브 contextmenu(시스템 공유/복사 팝업)는
       // 막아 둔다. 그대로 두면 드래그가 막 활성화된 순간 화면을 덮는다.
       onContextMenu={(e) => e.preventDefault()}
-      onPointerDown={(e) => withLongPressGate((shim) => startDrag('move', shim))(e)}
+      onPointerDown={(e) => withLongPressGate((shim) => startDrag('move', shim), longPressContext)(e)}
       // 리드 셀프리뷰 지적 2: 길게 눌러 끄는 롱프레스 드래그 중 iOS 콜아웃
       // (복사/공유 팝업)이나 텍스트 선택이 끼어들면 드래그가 끊긴다.
       style={{
@@ -1151,7 +1255,7 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       <span
         onPointerDown={(e) => {
           e.stopPropagation()
-          withLongPressGate((shim) => startDrag('start', shim))(e)
+          withLongPressGate((shim) => startDrag('start', shim), longPressContext)(e)
         }}
         style={{ touchAction: 'pan-x pan-y' }}
         className="absolute inset-y-0 left-0 w-6 cursor-ew-resize md:w-11"
@@ -1162,7 +1266,7 @@ function WbsBar({ node, range, dayPx, disabled, deadlineIndex, onCommit }) {
       <span
         onPointerDown={(e) => {
           e.stopPropagation()
-          withLongPressGate((shim) => startDrag('end', shim))(e)
+          withLongPressGate((shim) => startDrag('end', shim), longPressContext)(e)
         }}
         style={{ touchAction: 'pan-x pan-y' }}
         className="absolute inset-y-0 right-0 w-6 cursor-ew-resize md:w-11"
