@@ -191,6 +191,23 @@ export function PrivacyPolicyPage() {
           <b>이미 외부 캘린더에 만들어진 일정은 그대로 남습니다</b> — 서비스가 임의로 지우지 않습니다.
           필요하시면 해당 캘린더에서 직접 삭제하실 수 있습니다.
         </p>
+        {/*
+          구글 OAuth 앱 인증 심사 요건 — 민감 범위(calendar.events)를 쓰는 앱은
+          방침에 Google API Services User Data Policy 준수와 Limited Use 요건을
+          밝혀야 한다. 정책이 정한 공개 문안을 옮긴 것이라 문구를 바꾸지 않는다.
+        */}
+        <p>
+          서비스가 Google API로부터 받은 정보를 사용하고 다른 앱으로 전송하는 것은{' '}
+          <a
+            href="https://developers.google.com/terms/api-services-user-data-policy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2"
+          >
+            Google API 서비스 사용자 데이터 정책
+          </a>
+          (제한적 사용 요건 포함)을 준수합니다.
+        </p>
       </LegalSection>
 
       {/* 근거: password_hash · auth_sessions.refresh_token_hash · access_token_enc(AES-GCM) · nginx-https.conf */}

@@ -25,23 +25,36 @@ function MenuList({ block, items, onClose }) {
         </p>
       ) : (
         <ul>
-          {items.map((it) => (
-            <li key={it.key}>
-              <button
-                type="button"
-                onClick={() => {
-                  it.onSelect?.()
-                  onClose()
-                }}
-                className={[
-                  'flex w-full items-center px-3 py-2.5 text-left text-label transition-colors hover:bg-surface-sunken focus-visible:bg-surface-sunken focus-visible:outline-none',
-                  it.tone === 'danger' ? 'text-danger-600' : 'text-text',
-                ].join(' ')}
-              >
-                {it.label}
-              </button>
-            </li>
-          ))}
+          {items.map((it) =>
+            // `type: 'info'` — plain explanatory text, no action (Thomas BLOCKER:
+            // an INACTIVE(연동 꺼짐) fixed schedule has no working toggle to
+            // offer — see WeeklyPage.jsx's menuItemsFor FIXED branch). Rendered
+            // as a <p>, not a <button>: it must not look clickable (NFR a11y —
+            // a focusable, hoverable element with no effect is worse than this
+            // plain text, which already has same-style precedent in the
+            // `items.length === 0` placeholder above).
+            it.type === 'info' ? (
+              <li key={it.key}>
+                <p className="px-3 py-2.5 text-caption text-text-muted">{it.label}</p>
+              </li>
+            ) : (
+              <li key={it.key}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    it.onSelect?.()
+                    onClose()
+                  }}
+                  className={[
+                    'flex w-full items-center px-3 py-2.5 text-left text-label transition-colors hover:bg-surface-sunken focus-visible:bg-surface-sunken focus-visible:outline-none',
+                    it.tone === 'danger' ? 'text-danger-600' : 'text-text',
+                  ].join(' ')}
+                >
+                  {it.label}
+                </button>
+              </li>
+            ),
+          )}
         </ul>
       )}
     </div>

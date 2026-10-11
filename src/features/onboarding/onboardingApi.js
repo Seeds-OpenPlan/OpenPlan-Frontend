@@ -51,12 +51,22 @@ async function loadOnboardingMock() {
   never finish, no matter how many steps the server had recorded as done.
 
   The cursor is DERIVED as "the first step not yet done", in wizard order —
-  which is exactly what the wizard's own forward-only stepping means. Fields
-  the server has no column for (tutorialSkipped, tutorialStep) keep their local
-  defaults: `tutorialDone` alone can't say whether the tutorial was completed
-  or skipped, and the step index is a mock-only affordance. Both only affect
-  DEV mock runs; against a real server the tutorial overlay reads
-  `tutorialCompleted` and nothing else.
+  which is exactly what the wizard's own forward-only stepping means.
+
+  `tutorialStep` (which of the 6 coachmark steps TUT-03~08 is active) is NOT
+  part of this shape at all, on either side — the server has no column for it
+  (only `tutorialDone`) and this adapter no longer invents one either.
+  PRODUCTION BUG this fixes (owner report, 2026-10): an earlier version kept
+  `tutorialStep`/`tutorialSkipped` here as "local defaults" with a comment
+  claiming they were "mock-only" and that a real server round-trip was safe.
+  That was wrong — TutorialOverlay actually READS `tutorialStep` to decide
+  which step to render, so every PATCH that only carried `{ tutorialStep }`
+  translated (via `progressFlagsFrom` below) to an EMPTY server patch, and the
+  very next normalized response reset the step to 0. The tutorial could never
+  advance past its kickoff dialog against a real server. The step cursor now
+  lives in `features/tutorial/tutorialProgressStore.js` instead (localStorage,
+  FE-only) and is read directly by TutorialOverlay/useTutorialRestart — this
+  file never sees it.
 */
 const WIZARD_ORDER = [
   ['profileDone', 'PROFILE'],
@@ -84,9 +94,10 @@ function normalizeProgress(p) {
     // 서버 진행 레코드에는 프로필 값이 없다 — 프로필 자체는 /users/me가
     // 소유한다(ONB-02 저장도 그쪽으로 간다, updateOnboardingProgress 참고).
     profile: p.profile ?? null,
+    // tutorialStep/tutorialSkipped deliberately absent — see this file's own
+    // header. TutorialOverlay reads its step cursor from
+    // tutorialProgressStore.js, not from this object.
     tutorialCompleted: p.tutorialCompleted ?? p.tutorial_completed ?? p.tutorialDone ?? p.tutorial_done ?? false,
-    tutorialSkipped: p.tutorialSkipped ?? p.tutorial_skipped ?? false,
-    tutorialStep: p.tutorialStep ?? p.tutorial_step ?? 0,
     tutorialSampleProjectId: p.tutorialSampleProjectId ?? p.tutorial_sample_project_id ?? null,
     version: p.version ?? 1,
   }
@@ -115,7 +126,9 @@ function progressFlagsFrom(patch) {
   if (patch.onboardingCompleted) {
     for (const [flag] of WIZARD_ORDER) flags[flag] = true
   }
-  // 서버는 완료와 건너뛰기를 구분하지 않는다 — 둘 다 tutorialDone이다.
+  // 서버는 완료와 건너뛰기를 구분하지 않는다 — 둘 다 tutorialDone이다. 어느
+  // 쪽이든 FE 전용 스텝 커서(tutorialProgressStore.js)는 호출자가 같은
+  // 클릭 안에서 별도로 리셋한다(서버에 보낼 필드가 아니라서 여기엔 없다).
   if (patch.tutorialCompleted !== undefined) flags.tutorialDone = patch.tutorialCompleted
   return flags
 }
