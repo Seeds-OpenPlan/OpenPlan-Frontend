@@ -9,6 +9,7 @@
   title/time before it is submitted) stay in the page's own useState, same
   split every other feature in this codebase follows (design-handoff §3).
 */
+import { useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   getAllFixedSchedules,
@@ -38,7 +39,7 @@ import {
   deactivateAccount,
   reactivateAccount,
   getNotificationSettings,
-  patchNotificationSetting,
+  saveNotificationSettings,
 } from './settingsApi'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
@@ -401,7 +402,7 @@ export function useReactivateAccount() {
   })
 }
 
-// --- 알림 (NOTI-01) -------------------------------------------------------------------
+// --- 알림 (NOTI-01, 확정 계약) --------------------------------------------------------
 
 export const notificationSettingsKey = () => ['notificationSettings']
 
@@ -411,36 +412,132 @@ export function useNotificationSettings() {
 
 /**
  * Each toggle saves itself immediately (AC "5종 토글 즉시 저장") — optimistic,
- * same shape as useSaveAvailability: write the flipped value synchronously so
- * the switch never visibly lags behind the click, roll back on failure.
+ * same shape as useSaveAvailability: write the flipped value(s) synchronously
+ * so the switch never visibly lags behind the click, roll back on failure.
  *
- * Thomas 리뷰 MEDIUM fix: rollback restores ONLY the failed toggle's OWN key,
- * not the whole cached object. The previous version snapshotted the entire
- * notificationSettings object in onMutate and restored that whole snapshot on
- * error — two toggles flipped quickly (both optimistic, both landed in the
- * cache) where the SECOND one fails would restore the pre-FIRST-toggle
- * snapshot, silently reverting the first toggle's already-succeeded change
- * too. Snapshotting just `prevValue = curr?.[key]` and restoring only that
- * one field makes each toggle's rollback independent of any other toggle's
- * concurrent mutation.
+ * `changes`는 `{ type, enabled }` 배열이다. 개별 토글은 원소 1개로 호출하고,
+ * 마스터 토글(화면 전용 편의 기능 — SettingsNotificationsPage 헤더 참고)은
+ * 5개를 한 번에 묶어 호출한다 — 계약 자체가 배열 저장(PUT `{settings:[...]}`)
+ * 이라 이 배열이 그대로 요청 모양이 된다(별도 "마스터 전용" 엔드포인트 없음).
+ *
+ * 2026-10-08 계약 수정에서도 롤백 범위는 이전 usePatchNotificationSetting의
+ * Thomas 리뷰 MEDIUM fix를 그대로 지킨다: 이 호출이 "바꾼 유형들만" 각자의
+ * 이전 값으로 되돌리고, 캐시 전체를 스냅샷/복원하지 않는다. 두 호출이 겹쳐
+ * 들어와도(토글 연타, 또는 마스터+개별 동시) 먼저 성공한 호출의 결과를 나중
+ * 실패한 호출의 롤백이 덮어쓰는 사고를 막는다 — 각 호출은 자기가 만진 키만
+ * 책임진다.
+ *
+ * Thomas PR 리뷰 SHOULD-FIX #1 (onSuccess 누락): PUT 응답은 서버가 부분
+ * 저장을 적용한 뒤 돌려주는 5종 전체 최신값이다 — 그런데 onSuccess가 없어서
+ * 그 값을 그냥 버리고 있었다. 지금은 캐시에 반영한다. `requestId` 순번
+ * 가드를 같이 두는 이유: SettingsNotificationsPage가 `save.isPending` 동안
+ * 토글 전체를 disabled로 막아 겹쳐 보내는 경로 자체를 없앴지만(SHOULD-FIX
+ * #2), 그 disabled 반영은 React 상태 갱신을 한 번 거쳐야 DOM에 닿는다 — 같은
+ * 틱에서 더블클릭처럼 `onMutate`가 두 번 연속 돈 뒤에야 `isPending`이
+ * true로 보이는 극히 짧은 틈이 이론상 남는다. 그 틈에 먼저 보낸 요청의
+ * 응답이 나중에 보낸 요청보다 늦게 도착하면, 가드 없이는 "가장 최근에
+ * 보낸" 낙관적 상태를 "더 오래된" 서버 응답이 덮어써 화면이 거꾸로 간다.
+ * `latestRequestId`와 다르면 onSuccess가 그 응답을 조용히 버려 항상 "가장
+ * 마지막으로 보낸 요청"만 캐시에 반영되게 한다.
+ *
+ * PR #69 AI 리뷰 Blocking 수정: `saveNotificationSettings`(settingsApi.js
+ * `parseSavedSettings`)는 이제 "알려진 5종을 전부 포함한 배열"일 때만 값을
+ * 주고, 그렇지 않으면(계약이 PUT 200 응답 본문을 보장하지 않는다 — 빈
+ * 본문·일부 누락 전부 가능) `null`을 준다. `data`가 `null`이면 캐시를
+ * 섣불리 덮어쓰지 않는다 — 이미 반영된 낙관적 값(onMutate가 쓴 값)을 그대로
+ * 둔 채 GET을 invalidate해 다음 조회가 서버 진실값으로 수렴하게 한다. 이
+ * 분기를 두지 않고 `null`을 그대로 캐시에 썼다면 이후 모든 `settings[type]`
+ * 읽기가 TypeError로 깨졌을 것이고, 빈 배열을 "켜짐 기본값"으로 메웠다면
+ * (이전 버전의 실수) 방금 끈 토글이 저장 성공 직후 다시 켜진 것처럼 보였을
+ * 것이다.
+ *
+ * PR #69 AI 재리뷰 Should-fix (ddd2a63 기준): 위 `requestId` 가드는
+ * onSuccess에만 있고 onError엔 없었다 — "개별 토글 → (isPending 리렌더 전의
+ * 짧은 틈에) 마스터 토글"처럼 두 요청이 겹치고 **나중 요청이 먼저 성공**한
+ * 뒤 **먼저 보낸 요청이 늦게 실패**하면, 가드 없는 롤백이 이미 반영된 최신
+ * 성공값을 낡은 `prevEntries`로 덮어썼다. 게다가 그 경로엔 invalidate도
+ * 없어 화면이 스스로 복구되지 않았다. 세 가지로 고친다:
+ *   ① onError 롤백도 `requestId === latestRequestId.current`일 때만
+ *      적용한다(더 최근 요청이 이미 나갔으면 이 실패는 낡은 요청의 실패이므로
+ *      롤백하지 않는다 — onSuccess와 대칭).
+ *   ② 실패하면(최신이든 아니든) 결국 GET을 invalidate해 서버 진실값에
+ *      수렴시킨다. 단, 겹쳐 날아간 다른 요청이 아직 진행 중일 때 바로
+ *      invalidate하면 그 요청의 낙관적 값을 refetch가 일시적으로 덮어
+ *      깜빡일 수 있다 — `pendingCount`(진행 중인 호출 수)를 `onMutate`에서
+ *      +1, `onSettled`에서 -1 하고, "이 실패를 포함해 지금까지 실패가
+ *      하나라도 있었는지"를 `hadError`로 기억해 두었다가, **마지막 남은
+ *      호출이 settle되는 순간**(`pendingCount`가 0이 됨)에만 invalidate한다
+ *      — 그래야 아직 진행 중인 형제 mutation의 낙관적 값을 밟지 않는다.
+ *   ③ 레이스의 근본 원인인 "클릭 → isPending이 DOM에 disabled로 반영되기
+ *      전의 틈"은 `isPending` 자체가 React 상태라 렌더를 한 번 거쳐야 하는
+ *      한 완전히 없앨 수 없다 — 그래서 그 틈 안에서 생기는 두 번째 호출
+ *      자체를 더 좁히는 보강을 SettingsNotificationsPage(동기 ref 가드,
+ *      그 파일 헤더 참고)에 추가로 두었다. 이 훅의 가드(①②)는 그 보강이
+ *      뚫리거나 우회돼도(StrictMode 이중 호출, 훅 직접 호출 등) 안전망으로
+ *      남는다.
  */
-export function usePatchNotificationSetting() {
+export function useSaveNotificationSettings() {
   const queryClient = useQueryClient()
+  const latestRequestId = useRef(0)
+  // 동시에 진행 중인 PUT 호출 수 — 0으로 돌아오는 순간(= 더 이상 밟을
+  // 낙관적 값이 없는 순간)에만 실패 후 invalidate를 실행하기 위한 카운터.
+  const pendingCount = useRef(0)
+  // 지금까지 settle된 호출 중 실패가 하나라도 있었는지 — pendingCount가
+  // 0이 되는 시점에 "그래서 invalidate가 필요한가"를 판단하는 플래그.
+  const hadError = useRef(false)
   return useMutation({
-    mutationFn: ({ key, enabled }) => patchNotificationSetting(key, enabled),
-    onMutate: ({ key, enabled }) => {
-      const prevValue = queryClient.getQueryData(notificationSettingsKey())?.[key]
-      queryClient.setQueryData(notificationSettingsKey(), (curr) => ({ ...curr, [key]: enabled }))
-      return { key, prevValue }
+    mutationFn: (changes) => saveNotificationSettings(changes),
+    onMutate: (changes) => {
+      const requestId = ++latestRequestId.current
+      pendingCount.current += 1
+      const prev = queryClient.getQueryData(notificationSettingsKey())
+      const prevEntries = changes.map(({ type }) => [type, prev?.[type]])
+      queryClient.setQueryData(notificationSettingsKey(), (curr) => {
+        const next = { ...curr }
+        for (const { type, enabled } of changes) next[type] = enabled
+        return next
+      })
+      return { prevEntries, requestId }
+    },
+    onSuccess: (data, _vars, context) => {
+      // 더 최근 요청이 이미 나갔다면 이 응답(더 오래된 요청의 응답)은 버린다
+      // — 위 헤더 주석의 순번 가드.
+      if (context?.requestId !== latestRequestId.current) return
+      if (data == null) {
+        // 계약이 보장하지 않는 응답(빈 본문 등) — 낙관적 값을 그대로 두고
+        // 서버 진실값을 다시 받아온다. setQueryData로 덮어쓰지 않는다.
+        queryClient.invalidateQueries({ queryKey: notificationSettingsKey() })
+        return
+      }
+      queryClient.setQueryData(notificationSettingsKey(), data)
     },
     onError: (_err, _vars, context) => {
-      if (context) {
-        queryClient.setQueryData(notificationSettingsKey(), (curr) => ({
-          ...curr,
-          [context.key]: context.prevValue,
-        }))
+      // ① 이 실패가 가장 최근 요청의 실패일 때만 그 요청이 바꾼 키들을
+      // 되돌린다 — 더 최근 요청이 이미 나가 있었다면(이 실패는 낡은 요청의
+      // 실패이므로) 이미 반영된 더 최신 상태를 낡은 prevEntries로 덮어쓰지
+      // 않는다(onSuccess와 대칭인 가드).
+      if (context && context.requestId === latestRequestId.current) {
+        queryClient.setQueryData(notificationSettingsKey(), (curr) => {
+          const next = { ...curr }
+          for (const [type, value] of context.prevEntries) next[type] = value
+          return next
+        })
       }
+      hadError.current = true
       toast({ tone: 'error', message: systemMessages.error.writeTitle })
+    },
+    onSettled: () => {
+      pendingCount.current = Math.max(0, pendingCount.current - 1)
+      // ② 겹쳐 날아간 다른 호출이 아직 진행 중이면(pendingCount > 0) 지금
+      // invalidate하지 않는다 — 그 호출의 onMutate가 이미 써 둔 낙관적 값을
+      // refetch가 일시적으로 덮어 깜빡이게 만들 수 있다. 그 호출이 설령
+      // 성공하더라도 자신의 onSettled에서 이 블록이 다시 돈다(hadError는
+      // 그대로 true로 남아 있으므로) — 마지막 호출이 끝나는 순간 정확히
+      // 한 번 invalidate된다.
+      if (pendingCount.current === 0 && hadError.current) {
+        hadError.current = false
+        queryClient.invalidateQueries({ queryKey: notificationSettingsKey() })
+      }
     },
   })
 }

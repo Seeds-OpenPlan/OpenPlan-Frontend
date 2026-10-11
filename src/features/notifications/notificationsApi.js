@@ -28,13 +28,29 @@ async function loadNotificationsMock() {
 
 /** Tolerates snake_case (server) or camelCase (mock) — same reasoning
  * planApi.js's normalizeBlock gives for why this one adapter absorbs the
- * casing question instead of every consumer guessing at both. */
+ * casing question instead of every consumer guessing at both.
+ *
+ * Thomas PR 리뷰 지시(2026-10-08, notification-settings 계약 대조와 같은
+ * 세션): 계약(Notification 스키마, openapi.yaml)의 필드명은
+ * `notificationType`이다. `n.type`만 읽던 전 버전은 실서버 응답에 그런 키가
+ * 없어 항상 undefined로 떨어졌다 — mock(notificationsFixtures.js)이 우연히
+ * `type`이라는 옛 이름을 썼던 탓에 dev에서는 안 걸렸다. `n.type`은 그 mock과의
+ * 하위 호환으로만 남긴다.
+ *
+ * PR #69 AI 리뷰 Should-fix: `body`는 아예 내보내지 않는다. 계약
+ * `NotificationResponse`(BE 확인 — notificationId/notificationType/title/
+ * routePath/readAt/createdAt)엔 이 필드가 없다 — 실서버로는 항상 undefined가
+ * 되는데, 전 버전의 "소비처 없음" 주석이 틀렸다: NotificationPanel.jsx가
+ * `{n.body}`를 캡션 줄로 그대로 렌더해, 실서버 전환 시 모든 알림의 캡션
+ * 줄이 빈 줄로 나왔을 것이다. `n.body`를 여기서 떨어뜨리면(정규화 단계에서
+ * 제거) NotificationPanel이 그 필드가 아예 없는 셈이 되어 캡션 줄 렌더
+ * 분기(해당 파일 자신의 수정 참고)가 "없으면 안 그린다"로 깔끔하게 선다.
+ */
 function normalizeNotification(n) {
   return {
     notificationId: n.notificationId ?? n.notification_id,
-    type: n.type,
+    type: n.notificationType ?? n.notification_type ?? n.type,
     title: n.title,
-    body: n.body,
     routePath: n.routePath ?? n.route_path,
     readAt: n.readAt ?? n.read_at ?? null,
     createdAt: n.createdAt ?? n.created_at,
