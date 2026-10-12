@@ -134,6 +134,12 @@ export const onboardingCopy = {
     // 다시 보낼 뿐이라 이미 열려 있어도 눌러도 무해하다(Coachmark 자신의
     // showReopen 주석 참고).
     reopen: '다시 열기',
+    // DELETE_SAMPLE(TUT-07)이 정리를 감지한 뒤 실행 취소 창(6초)이 끝날 때까지
+    // 조용히 기다리는 동안 보여줄 문구 (owner report, 2026-10: "정리해도 안
+    // 넘어간다" — 실제로는 넘어가는 중이었지만 기다리는 동안 아무 신호가
+    // 없어 멈춘 것처럼 보였다). 타이머 숫자를 보여주지 않는 이유는
+    // TutorialOverlay.jsx의 해당 안내 렌더 주석 참고.
+    cleanupHoldBody: '정리 완료 — 잠시 후 다음 단계로 넘어갑니다.',
     progressLabel: (n, total) => `${n}/${total}`,
     restartTitle: '튜토리얼을 다시 시작할까요?',
     // Thomas 리뷰 MAJOR fix — 이전 문구는 "정리한 뒤 시작합니다"라고 약속했지만

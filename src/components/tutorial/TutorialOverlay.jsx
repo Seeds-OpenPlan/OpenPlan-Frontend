@@ -12,7 +12,7 @@ import { useTutorialEvent } from '../../features/tutorial/tutorialEvents'
 import { TUTORIAL_STEPS } from '../../features/tutorial/tutorialSteps'
 import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
 import { useWeekPlan, UNDO_WINDOW_MS } from '../../features/plan/usePlanData'
-import { currentWeekStartISO } from '../../features/plan/planTime'
+import { useActiveWeekStartISO } from '../../features/plan/activeWeekStore'
 
 const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
 
@@ -143,6 +143,15 @@ export function TutorialOverlay() {
   const activeStep = running && stepIndex >= 0 ? TUTORIAL_STEPS[stepIndex] : null
   const isLast = Boolean(activeStep) && stepIndex === TUTORIAL_STEPS.length - 1
   const isDeleteStep = activeStep?.key === 'DELETE_SAMPLE'
+  // `useActiveWeekStartISO` (not an independently-recomputed
+  // `currentWeekStartISO()` — owner report, 2026-10: TUT-07 정리 후 멈춤
+  // 조사) — reads the EXACT `weekStartISO` WeeklyPage's own state holds
+  // RIGHT NOW, published via activeWeekStore.js. That module's own header
+  // has the full reasoning: re-deriving "today's Monday" independently only
+  // coincidentally matched what WeeklyPage was actually showing; this makes
+  // the two the SAME value by construction, so the query key below is
+  // GUARANTEED to be WeeklyPage's own `weekPlanKey`, not merely usually it.
+  const weekStartISO = useActiveWeekStartISO()
   // Subscribed ONLY while DELETE_SAMPLE is active (`enabled`) — see this
   // file's own header on why this must be REACTIVE rather than a one-off
   // read, and why `enabled` matters (no reason to pull the week plan into
@@ -151,7 +160,7 @@ export function TutorialOverlay() {
   // mounted (DELETE_SAMPLE's route is `/weekly`), so this is NOT a second
   // network request — same cache entry, same in-flight fetch, TanStack Query
   // dedupes by key alone.
-  const weekPlanQuery = useWeekPlan(currentWeekStartISO(), { enabled: isDeleteStep })
+  const weekPlanQuery = useWeekPlan(weekStartISO, { enabled: isDeleteStep })
 
   // Render-time adjustment (React's own "adjusting state when a value
   // changes" pattern, same shape ProjectsPage's own `tabResolvedForId`
@@ -351,7 +360,24 @@ export function TutorialOverlay() {
   // Same function-or-string shape — DELETE_SAMPLE's `body` (tutorialSteps.js,
   // Thomas SHOULD-FIX) names only what this run actually recorded, which
   // only `targets` (read at render time) can answer.
-  const resolvedBody = typeof activeStep.body === 'function' ? activeStep.body(targets) : activeStep.body
+  //
+  // `deleteSatisfied` OVERRIDES that body with a short "정리 완료 — 잠시 후…"
+  // line (owner report, 2026-10: "정리해도 안 넘어간다") — the HOLD effect
+  // above really is still counting down the undo window at this point, but
+  // with NO visible signal the wait reads as broken rather than working. No
+  // literal countdown number: `UNDO_WINDOW_MS` is a SAFETY margin against a
+  // same-window 실행 취소, not a promise to the user ("exactly N seconds"),
+  // and an undo landing restores the step's NORMAL body the instant
+  // `deleteSatisfied` flips back to false (same render that cancels the
+  // pending timer, see that effect's own comment) — a literal countdown
+  // would have to freeze or jump backward in that case instead of just
+  // disappearing, a worse signal than this one's deliberate vagueness.
+  const resolvedBody =
+    isDeleteStep && deleteSatisfied
+      ? onboardingCopy.tutorial.cleanupHoldBody
+      : typeof activeStep.body === 'function'
+        ? activeStep.body(targets)
+        : activeStep.body
   const stepSatisfied = isLast || (isDeleteStep ? deleteSatisfied : gateSatisfied)
   const nextDisabled = !isLast && !stepSatisfied
 

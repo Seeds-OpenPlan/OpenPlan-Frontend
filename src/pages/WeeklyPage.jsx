@@ -56,6 +56,7 @@ import {
   visibleRange,
 } from '../features/plan/planGeometry'
 import { findFirstFreeSlot } from '../features/plan/planPlacement'
+import { usePublishActiveWeek } from '../features/plan/activeWeekStore'
 import { getPopoverAnchorStyle } from '../utils/popoverPosition'
 import {
   addWeeksISO,
@@ -116,6 +117,12 @@ function WeeklyPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [weekStartISO, setWeekStartISO] = useState(() => currentWeekStartISO())
+  // Publishes THIS page's own `weekStartISO` for TutorialOverlay's
+  // DELETE_SAMPLE completion check to read (features/plan/activeWeekStore.js
+  // — see that module's own header for the bug class this closes: the
+  // tutorial computing its own "current week" independently of what THIS
+  // page is actually showing, which only coincidentally matched it before).
+  usePublishActiveWeek(weekStartISO)
   const [mode, setMode] = useState('focus')
   // D4: 가로 모드(높이 360~420px대)에서는 모바일 셸의 플로팅 바들(아래
   // floatingControlsRef/autoDraft 배너)이 쌓인 높이가 뷰포트 자체를 거의
