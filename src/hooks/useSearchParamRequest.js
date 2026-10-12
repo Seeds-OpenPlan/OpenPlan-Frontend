@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /*
   Generic "open-on-param, strip-after" seam — the shape this codebase already
@@ -14,20 +14,49 @@ import { useEffect, useState } from 'react'
   same param while already here — both need the open action to fire again,
   not just once at mount.
 
-  Split in two for `react-hooks/set-state-in-effect` (this codebase's lint
-  config rejects calling setState synchronously inside a `useEffect` body —
-  only a plain `setSearchParams` call, a browser-history write, is exempt,
-  since an effect really is the right place to talk to an EXTERNAL system
-  like the URL, per that rule's own guidance):
-    - `onFire` runs DURING RENDER, guarded by comparing the param's raw value
-      against the last one we already acted on — React's own "adjusting state
-      when a value changes" pattern (the exact shape ProjectsPage's own
-      `tabResolvedForId` already uses for a different seam).
-    - Stripping the param from the URL is a SEPARATE effect that only runs
-      once `onFire` has actually happened for the CURRENT raw value — not
+  Split in THREE for `react-hooks/set-state-in-effect` (this codebase's lint
+  config rejects calling a LOCAL `useState` setter synchronously inside a
+  `useEffect` body — only talking to an EXTERNAL system from an effect, e.g.
+  a plain `setSearchParams` browser-history write or an opaque caller-owned
+  callback, is exempt, per that rule's own guidance):
+    - DECIDING is render-time: comparing the param's raw value against the
+      last one we already acted on, and writing `handledRaw` when it should
+      change — React's own "adjusting state when a value changes" pattern
+      (the exact shape ProjectsPage's own `tabResolvedForId` already uses for
+      a different seam). This step has no side effect of its own (a plain
+      local `setHandledRaw`), so it stays in render rather than an effect.
+    - FIRING is an effect (Thomas code review SHOULD-FIX, 2026-10 — see
+      below) that only REACTS to `handledRaw` having changed; it never
+      decides anything itself.
+    - STRIPPING the param from the URL is a SEPARATE effect that only runs
+      once firing has actually happened for the CURRENT raw value — not
       keyed off the raw searchParams value directly, so a param that hasn't
       met `ready` yet is left alone instead of being stripped before it ever
       got a chance to fire.
+
+  FIRING MOVED OUT OF RENDER (fixes a real risk, not yet a reproduced bug):
+  `onFire` is a caller-supplied side effect — opens a panel/form, seeds a
+  filter, mutates a DIFFERENT component's state (e.g. WeeklyPage's
+  `onFire: () => setPanelOpen(true)`) — and React only guarantees an EFFECT
+  runs exactly once per render that actually COMMITS. Calling it directly in
+  the render body, as this used to, ran it during React 19 Strict Mode's own
+  double-invoked dev render pass too (this file's "adjusting state" step
+  above is written to tolerate that — see its own comment — but `onFire`
+  itself is arbitrary caller code with no such guarantee), and would have
+  silently run for a render a Transition later discarded before it ever
+  committed. Every current caller's own `onFire` happens to be idempotent in
+  its OBSERVABLE result (setting the same boolean/filter twice is a no-op
+  the second time), which is exactly why this bug was only a latent RISK
+  rather than something already reproduced — but this hook has no way to
+  assume that holds for every future caller.
+
+  `onFire` itself is read through a ref (the same shape tutorialEvents.js's
+  own `useTutorialEvent` already uses for an identical reason), so the FIRE
+  effect's dependency array never needs to include it directly: every call
+  site passes a FRESH inline closure on every render, and putting that
+  reference in `useEffect`'s deps would re-run the effect — re-firing the
+  request — on every unrelated re-render of the page, not just when
+  `handledRaw` itself actually changes.
 */
 export function useSearchParamRequest(
   searchParams,
@@ -38,10 +67,14 @@ export function useSearchParamRequest(
   const raw = searchParams.get(paramName)
   const [handledRaw, setHandledRaw] = useState(null)
 
+  const onFireRef = useRef(onFire)
+  useEffect(() => {
+    onFireRef.current = onFire
+  }, [onFire])
+
   if (raw !== handledRaw) {
     if (raw != null && isMatch(raw) && ready) {
       setHandledRaw(raw)
-      onFire(raw)
     } else if (raw == null) {
       // The param is gone WITHOUT us ever firing for it (not ready yet, or it
       // never matched) — forget it, so a FUTURE identical value is compared
@@ -53,6 +86,19 @@ export function useSearchParamRequest(
     // stays whatever it was, so `raw !== handledRaw` keeps re-checking every
     // render until `ready` flips true — a passive retry, not a timer/poll.
   }
+
+  // THE FIRE — see this file's own header for why this lives in an effect
+  // instead of inline above. Keyed on `handledRaw` alone (not `onFire`, see
+  // header): React only runs this when that value actually changes, which
+  // is exactly once per raw value the render-time step above decided on —
+  // including a REPEAT occurrence of the identical string after it went
+  // back to `null` in between (TUT-05's own [다시 열기] relies on this), since
+  // that round trip is still two distinct transitions of `handledRaw`, not
+  // one.
+  useEffect(() => {
+    if (handledRaw == null) return
+    onFireRef.current(handledRaw)
+  }, [handledRaw])
 
   useEffect(() => {
     if (handledRaw == null) return
