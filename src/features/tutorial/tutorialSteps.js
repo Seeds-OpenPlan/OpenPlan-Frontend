@@ -11,20 +11,42 @@ import { TUTORIAL_EVENTS } from './tutorialEvents'
   done anything (see this file's OLD header, kept below in spirit by
   TutorialOverlay's own comment). Every step below now also carries:
 
-    - `buildSearch(targets)` — the "open the real UI for me" request, encoded
-      as a query string TutorialOverlay appends when it navigates into this
-      step (e.g. `create=1` on /projects). This reuses the SAME query-param
-      idiom this codebase already uses for every other screen-to-screen open
-      request (ProjectsPage's `?create=1`, WeeklyPage's `?openUnplaced=1`/
-      `?project=`/`?openReplan=1`) rather than inventing a second, parallel
-      "request channel" — the receiving screen owns reading/opening/stripping
-      its own param exactly like those existing seams already do, so this
-      file and TutorialOverlay never reach into a screen's internal state
-      directly (§4 "화면이 소유한 상태를 직접 건드리지 말고… URL search
-      param" — the codebase already leans this way, so it's the consistent
-      choice, not a new convention). `targets` (below) fills in the pieces
-      that depend on what THIS run already created — e.g. step 2 needs to
-      open the SPECIFIC project step 1 just made, not any project.
+    - `buildSearch(targets, nonce)` — the "open the real UI for me" request,
+      encoded as a query string TutorialOverlay appends when it navigates
+      into this step (e.g. `create=3` on /projects). This reuses the SAME
+      query-param idiom this codebase already uses for every other
+      screen-to-screen open request (ProjectsPage's `?create=1`, WeeklyPage's
+      `?openUnplaced=1`/`?project=`/`?openReplan=1`) rather than inventing a
+      second, parallel "request channel" — the receiving screen owns
+      reading/opening/stripping its own param exactly like those existing
+      seams already do, so this file and TutorialOverlay never reach into a
+      screen's internal state directly (§4 "화면이 소유한 상태를 직접
+      건드리지 말고… URL search param" — the codebase already leans this
+      way, so it's the consistent choice, not a new convention). `targets`
+      fills in the pieces that depend on what THIS run already created —
+      e.g. step 2 needs to open the SPECIFIC project step 1 just made, not
+      any project.
+
+      `nonce` (owner report, 2026-10: "할 일 창이 자동으로 열릴 때도 있고 안
+      열릴 때도 있다") — a counter TutorialOverlay increments on every REAL
+      navigation (the initial auto-open AND every [다시 열기] click), threaded
+      into the "boolean trigger" params below (`create`/`addTask`/
+      `openUnplaced`/`addSchedule` — each previously hardcoded to the literal
+      `'1'`). Two DIFFERENT real requests computing the SAME literal value
+      meant react-router sometimes saw NO location change at all (navigating
+      to a URL identical to the current one is a no-op — nothing for
+      useSearchParamRequest to react to), most reproducible on [다시 열기]
+      or re-entering a step the user had already visited. A monotonic nonce
+      makes every REAL request's own URL distinct from the one before it, by
+      construction, regardless of which exact timing window caused a given
+      occurrence — see TutorialOverlay.jsx's own `requestNonceRef` and
+      useSearchParamRequest.js's own widened `isMatch` default (now "any
+      non-empty string", not just `'1'`) this relies on. `project`/
+      `highlightBlocks` below are UNCHANGED — their own values are already
+      real per-run DATA (a project id, a list of block ids), not a fixed
+      literal, so the same collision class barely applies to them and they
+      keep reading cleanly as "the thing being pointed at" rather than
+      growing an unrelated counter suffix.
     - `targetId` — unchanged shape for a static anchor (TUT-03/04's buttons),
       but may also be a FUNCTION of `targets` for a step whose anchor is a
       per-run, dynamically created element (TUT-05's own unplaced-task card
@@ -68,7 +90,7 @@ export const TUTORIAL_STEPS = [
   {
     key: 'CREATE_PROJECT', // TUT-03
     route: '/projects',
-    buildSearch: () => 'create=1',
+    buildSearch: (targets, nonce) => `create=${nonce}`,
     targetId: 'tut-create-project',
     title: '샘플 프로젝트를 만들어 보세요',
     body: '새 프로젝트 폼이 자동으로 열립니다. 이름을 입력하고 저장하세요.',
@@ -82,7 +104,7 @@ export const TUTORIAL_STEPS = [
   {
     key: 'ADD_TASK', // TUT-04
     route: '/projects',
-    buildSearch: (targets) => (targets.projectId ? `expanded=${targets.projectId}&addTask=1` : ''),
+    buildSearch: (targets, nonce) => (targets.projectId ? `expanded=${targets.projectId}&addTask=${nonce}` : ''),
     targetId: 'tut-add-task',
     title: '태스크를 추가해 보세요',
     body: '방금 만든 프로젝트가 펼쳐지고 태스크 추가 폼이 열립니다. 제목과 예상 시간을 입력해 저장하세요.',
@@ -104,8 +126,8 @@ export const TUTORIAL_STEPS = [
     // project, which in practice already narrows it to the one task this run
     // made. The actual visual highlight comes from `targetId` below, not a
     // query param — see UnplacedTaskCard's own `data-tut-id`.
-    buildSearch: (targets) =>
-      [targets.projectId ? `project=${targets.projectId}` : null, 'openUnplaced=1'].filter(Boolean).join('&'),
+    buildSearch: (targets, nonce) =>
+      [targets.projectId ? `project=${targets.projectId}` : null, `openUnplaced=${nonce}`].filter(Boolean).join('&'),
     targetId: (targets) => (targets.taskId ? `tut-unplaced-task-${targets.taskId}` : null),
     title: '태스크를 캘린더에 배치해 보세요',
     body: '미배치 패널이 열리고 방금 만든 태스크가 강조됩니다. 캘린더 칸으로 드래그하세요. (휴대폰도 카드를 눌러 끌 수 있습니다. 카드에 포커스한 뒤 Enter로도 빈 시간에 바로 배치할 수 있습니다 — 전용 버튼은 없고 이 키보드 동작이 "빠른 배치"입니다.)',
@@ -123,7 +145,7 @@ export const TUTORIAL_STEPS = [
   {
     key: 'ADD_SCHEDULE', // TUT-06
     route: '/weekly',
-    buildSearch: () => 'addSchedule=1',
+    buildSearch: (targets, nonce) => `addSchedule=${nonce}`,
     targetId: null,
     title: '프로젝트와 무관한 일정을 추가해 보세요',
     body: '일정 추가 폼이 자동으로 열리고, 이번 주 비어 있는 시간대가 미리 채워집니다. 제목을 확인하고 저장해 보세요.',

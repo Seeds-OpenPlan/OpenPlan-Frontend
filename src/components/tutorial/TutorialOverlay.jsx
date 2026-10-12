@@ -48,8 +48,8 @@ const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
 
     1. NAVIGATE + REQUEST — the `useEffect` below, keyed on `activeStep`
        alone, fires once per step: it navigates to the step's route WITH the
-       step's own `buildSearch(targets)` query string appended (e.g.
-       `?create=1`) — the "open the real UI for me" request (tutorialSteps.js
+       step's own `buildSearch(targets, nonce)` query string appended (e.g.
+       `?create=3`) — the "open the real UI for me" request (tutorialSteps.js
        header explains why a query param, not a new side-channel). Unlike the
        OLD version, this is UNCONDITIONAL (not gated on `location.pathname
        !== activeStep.route`): TUT-05/06/07 all share `/weekly`, so a step
@@ -128,6 +128,14 @@ export function TutorialOverlay() {
   const [targets, patchTargets] = useTutorialTargets(sessionQuery.data?.userId)
   const kickoffConfirmRef = useRef(null)
   const lastNavigatedStepRef = useRef(null)
+  // Monotonic counter, incremented on every REAL request (the step-change
+  // effect below AND every [다시 열기] click) — see tutorialSteps.js's own
+  // header on `buildSearch(targets, nonce)` for the bug this fixes (owner
+  // report, 2026-10: "할 일 창이 자동으로 열릴 때도 있고 안 열릴 때도
+  // 있다"). Deliberately a REF, not state: bumping it must never itself
+  // trigger a re-render — it only matters at the instant `requestUrl` is
+  // about to be used for an ACTUAL navigation.
+  const requestNonceRef = useRef(0)
   // Safety-valve gate for [다음] (see this file's own header for the one real
   // scenario it covers) — reset whenever the ACTIVE STEP itself changes.
   const [gateSatisfied, setGateSatisfied] = useState(false)
@@ -178,11 +186,27 @@ export function TutorialOverlay() {
   // closing the auto-opened form/panel just re-sends the exact same request;
   // see this file's own header for why a query param rather than a second,
   // imperative "open" channel).
-  const requestUrl = (step) => {
+  // `nonce` is a PARAMETER, not read off `requestNonceRef` in here directly
+  // — this function is also called DURING RENDER for the presence check
+  // (`Boolean(requestUrl(activeStep, ...))` below), and this codebase's lint
+  // config (react-hooks/refs) forbids reading a ref's `.current` from
+  // anything invoked at render time (refs are only safe to read from an
+  // effect or an event handler). The two REAL navigation call sites (the
+  // step-change effect, and onReopen) bump `requestNonceRef` and pass its
+  // new value in THEMSELVES, from inside an effect/event handler — never
+  // from render — so every ACTUAL request still gets a value no earlier
+  // request ever used (see tutorialSteps.js's own header); the presence
+  // check passes a throwaway constant instead, since it only cares whether
+  // `buildSearch` would produce ANY non-empty string, not which exact nonce.
+  const requestUrl = (step, nonce) => {
     if (!step) return null
-    const search = step.buildSearch ? step.buildSearch(targets) : ''
+    const search = step.buildSearch ? step.buildSearch(targets, nonce) : ''
     return search ? `${step.route}?${search}` : step.route
   }
+  // Dummy value for the render-time presence check ONLY — see `requestUrl`'s
+  // own comment above for why render can never read `requestNonceRef`
+  // itself.
+  const presenceCheckNonce = 'x'
 
   // Auto-navigate + auto-request ONCE per step change (not on every
   // render/route change) — see this file's own header, point 1, for why this
@@ -216,7 +240,15 @@ export function TutorialOverlay() {
     // entries — its own push, then this effect's OLD push stacking right on
     // top with the SAME `expanded=` value plus `addTask=1`. Replacing here
     // means this is the only entry that survives for this step.
-    navigate(requestUrl(activeStep), { replace: true })
+    //
+    // Bump the nonce BEFORE computing the url (owner report, 2026-10: "할 일
+    // 창이... 안 열릴 때도 있다") — re-entering a step the user had already
+    // visited once before (이전 → 다음) would otherwise recompute the EXACT
+    // SAME search string as last time, which `navigate()` can treat as a
+    // true no-op (identical location, nothing for any page's own
+    // useSearchParamRequest to react to). See tutorialSteps.js's own header.
+    requestNonceRef.current += 1
+    navigate(requestUrl(activeStep, requestNonceRef.current), { replace: true })
     // Deliberately keyed ONLY on `activeStep` — `targets`/`navigate` are read
     // but must NOT re-trigger this effect (that would fight a user who
     // navigates away mid-step, see this file's own header).
@@ -401,12 +433,18 @@ export function TutorialOverlay() {
       // component's own header). Re-requesting something already open is a
       // harmless no-op (re-focuses/re-opens in place), so one condition
       // covers both cases without needing to tell them apart.
-      showReopen={nextDisabled && Boolean(requestUrl(activeStep))}
+      showReopen={nextDisabled && Boolean(requestUrl(activeStep, presenceCheckNonce))}
       // `{ replace: true }` (S2, same reasoning as the step-change effect
       // above) — re-sending the same request is still a SYSTEM-driven move,
       // and without this, clicking [다시 열기] more than once on the same
-      // step stacked one identical history entry per click.
-      onReopen={() => navigate(requestUrl(activeStep), { replace: true })}
+      // step stacked one identical history entry per click. Nonce bumped
+      // here too (same reasoning as the step-change effect) — a SECOND [다시
+      // 열기] click would otherwise resend the EXACT same request the first
+      // click already sent.
+      onReopen={() => {
+        requestNonceRef.current += 1
+        navigate(requestUrl(activeStep, requestNonceRef.current), { replace: true })
+      }}
       onSkip={finish}
       onPrev={() => setTutorialStep(Math.max(1, stepIndex))}
       onNext={() => {

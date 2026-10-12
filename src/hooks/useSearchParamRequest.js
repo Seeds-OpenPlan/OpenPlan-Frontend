@@ -57,12 +57,32 @@ import { useEffect, useRef, useState } from 'react'
   reference in `useEffect`'s deps would re-run the effect — re-firing the
   request — on every unrelated re-render of the page, not just when
   `handledRaw` itself actually changes.
+
+  DEFAULT `isMatch` WIDENED TO "any non-empty string" (owner report, 2026-10:
+  "할 일 창이 자동으로 열릴 때도 있고 안 열릴 때도 있다") — it used to require
+  the LITERAL `'1'`. This file's own re-fire-on-reappear design (above) and
+  TutorialOverlay's own [다시 열기] both assume the param gets STRIPPED before
+  a repeat request arrives, so a GENUINE repeat of the exact same `'1'` is
+  comparing against `null`, not the previous `'1'` — that part was already
+  correct. The actual gap: a navigation to a URL that is BYTE-FOR-BYTE
+  IDENTICAL to the one react-router already has (one is possible any time a
+  caller recomputes its own request from the SAME inputs — a step the user
+  re-enters, or two [다시 열기] clicks before the first request's own strip
+  effect has run) can be a complete NO-OP at the router level: `location`
+  never changes, so NOTHING here ever sees a new `raw` to react to in the
+  first place — widening `isMatch` cannot fix THAT by itself. The real fix
+  (TutorialOverlay.jsx's own `requestNonceRef`) is sending a value that is
+  NEVER repeated across two real requests, which only works if every
+  CONSUMER here accepts something other than the literal `'1'` — hence this
+  widening. Every existing non-tutorial caller that only ever sends `'1'`
+  (none do today, but nothing stops one from existing later) is unaffected —
+  `'1'.length > 0` still matches.
 */
 export function useSearchParamRequest(
   searchParams,
   setSearchParams,
   paramName,
-  { ready = true, isMatch = (raw) => raw === '1', onFire } = {},
+  { ready = true, isMatch = (raw) => raw.length > 0, onFire } = {},
 ) {
   const raw = searchParams.get(paramName)
   const [handledRaw, setHandledRaw] = useState(null)
