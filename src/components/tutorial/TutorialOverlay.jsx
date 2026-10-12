@@ -192,7 +192,22 @@ export function TutorialOverlay() {
     }
     if (lastNavigatedStepRef.current === activeStep.key) return
     lastNavigatedStepRef.current = activeStep.key
-    navigate(requestUrl(activeStep))
+    // `{ replace: true }` (Thomas code review SHOULD-FIX, S2) — this is a
+    // SYSTEM-driven move (the coachmark deciding "now show this step"), not
+    // a navigation the user themselves chose to make, so it must not grow
+    // the back-button history the way a real page-to-page click would: a
+    // `push` here meant pressing 뒤로 mid-tutorial walked back through each
+    // PAST coachmark step's own URL instead of leaving the tutorial, and the
+    // step shown (still driven by the `tutorialStep` cursor) never matched
+    // whatever stale screen "뒤로" had just landed on. `replace` also
+    // happens to absorb a side effect this uncovered: ADD_TASK's own
+    // `?expanded=` write (ProjectsPage's `expandInProgress`, fired from
+    // CREATE_PROJECT's save-success a tick before this effect sees the step
+    // change) used to leave `expanded=` recorded in TWO consecutive history
+    // entries — its own push, then this effect's OLD push stacking right on
+    // top with the SAME `expanded=` value plus `addTask=1`. Replacing here
+    // means this is the only entry that survives for this step.
+    navigate(requestUrl(activeStep), { replace: true })
     // Deliberately keyed ONLY on `activeStep` — `targets`/`navigate` are read
     // but must NOT re-trigger this effect (that would fight a user who
     // navigates away mid-step, see this file's own header).
@@ -361,7 +376,11 @@ export function TutorialOverlay() {
       // harmless no-op (re-focuses/re-opens in place), so one condition
       // covers both cases without needing to tell them apart.
       showReopen={nextDisabled && Boolean(requestUrl(activeStep))}
-      onReopen={() => navigate(requestUrl(activeStep))}
+      // `{ replace: true }` (S2, same reasoning as the step-change effect
+      // above) — re-sending the same request is still a SYSTEM-driven move,
+      // and without this, clicking [다시 열기] more than once on the same
+      // step stacked one identical history entry per click.
+      onReopen={() => navigate(requestUrl(activeStep), { replace: true })}
       onSkip={finish}
       onPrev={() => setTutorialStep(Math.max(1, stepIndex))}
       onNext={() => {
