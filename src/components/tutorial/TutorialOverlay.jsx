@@ -146,12 +146,26 @@ export function TutorialOverlay() {
 
   const progress = progressQuery.data
   const running = Boolean(progress?.onboardingCompleted && !progress.tutorialCompleted)
-  // D1: `running`이 이 오버레이의 "open" 신호다 — 킥오프부터 각 코치마크
-  // 단계까지 전부 이 한 셸 선택을 공유하므로, 튜토리얼이 진행되는 동안
-  // 폴드 펼침/접힘으로 중간에 셸이 바뀌지 않게 시작 시점에 고정한다.
-  const isDesktop = useLockedIsDesktop(running)
   const stepIndex = tutorialStep - 1 // -1 while still at kickoff (tutorialStep 0)
   const activeStep = running && stepIndex >= 0 ? TUTORIAL_STEPS[stepIndex] : null
+  // D1: locked ONLY while the KICKOFF dialog itself is open (owner report,
+  // 2026-10: "뷰포트 폭을 바꾸면 화면이 바뀌지 않는다") — an earlier version
+  // passed `running`, which stays true for the tutorial's ENTIRE run, not
+  // just the kickoff. `useLockedIsDesktop`'s own contract only re-latches
+  // on an `open` FALSE→TRUE edge and otherwise freezes the value for as
+  // long as `open` stays true — so a `running`-wide `open` froze `isDesktop`
+  // once at mount and then NEVER updated again for the rest of the run,
+  // even on a coachmark step with no Dialog/BottomSheet in sight at all. The
+  // lock is only actually needed while THIS component's own Dialog/
+  // BottomSheet (the kickoff dialog below) is mounted — same reasoning as
+  // every other `useLockedIsDesktop` call in this codebase (a fold mid-drag
+  // must not swap a mounted modal's shell out from under it) — so `open`
+  // here is narrowed to exactly that window. `isDesktop` is unused for
+  // anything else in this file — Coachmark.jsx's own panel/ring already
+  // reads a LIVE, unlocked `useIsDesktop()`/resize listener for its own
+  // layout, so it was never affected by this bug — so narrowing this has no
+  // other effect.
+  const isDesktop = useLockedIsDesktop(running && !activeStep)
   const isLast = Boolean(activeStep) && stepIndex === TUTORIAL_STEPS.length - 1
   const isDeleteStep = activeStep?.key === 'DELETE_SAMPLE'
   // `useActiveWeekStartISO` (not an independently-recomputed
