@@ -130,6 +130,10 @@ export const onboardingCopy = {
     next: '다음',
     prev: '이전',
     done: '완료',
+    // 자동으로 연 창(폼/패널)을 사용자가 닫았을 때의 복구 버튼 — 같은 요청을
+    // 다시 보낼 뿐이라 이미 열려 있어도 눌러도 무해하다(Coachmark 자신의
+    // showReopen 주석 참고).
+    reopen: '다시 열기',
     progressLabel: (n, total) => `${n}/${total}`,
     restartTitle: '튜토리얼을 다시 시작할까요?',
     // Thomas 리뷰 MAJOR fix — 이전 문구는 "정리한 뒤 시작합니다"라고 약속했지만

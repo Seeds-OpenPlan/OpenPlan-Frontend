@@ -144,7 +144,28 @@ function useViewportWidth() {
   utils/overlayStack.js reports ANY Dialog/BottomSheet open, reappearing on
   its own the instant the last one closes.
 */
-export function Coachmark({ targetId, title, body, stepNumber, total, isLast, onNext, onPrev, onSkip }) {
+export function Coachmark({
+  targetId,
+  title,
+  body,
+  stepNumber,
+  total,
+  isLast,
+  // Guided-actions redesign (2026-10): [다음] is now gated on actually having
+  // done the step (nextDisabled/nextDisabledReason — Button's own existing
+  // disabled/disabledReason pattern, same prop names/shape as every other
+  // gated Button in this codebase). [다시 열기] re-sends whatever auto-open
+  // request this step already made once — see TutorialOverlay's own comment
+  // on `showReopen`/`onReopen` for why it is shown unconditionally while
+  // pending rather than only when the opened UI is detected as closed.
+  nextDisabled = false,
+  nextDisabledReason,
+  showReopen = false,
+  onReopen,
+  onNext,
+  onPrev,
+  onSkip,
+}) {
   const rect = useTargetRect(targetId)
   const headingRef = useRef(null)
   const t = onboardingCopy.tutorial
@@ -246,13 +267,32 @@ export function Coachmark({ targetId, title, body, stepNumber, total, isLast, on
           {title}
         </h2>
         <p className="text-caption text-text-muted">{body}</p>
+        {/* [다시 열기] sits on its OWN line, left-aligned — it is a recovery
+            action ("I closed the thing you opened for me"), not a step of
+            the same weight as 이전/다음/건너뛰기, so it doesn't compete with
+            them for the same row. */}
+        {showReopen && (
+          <button
+            type="button"
+            onClick={onReopen}
+            className="self-start text-caption font-medium text-brand-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          >
+            {t.reopen}
+          </button>
+        )}
         <div className="mt-1 flex justify-end gap-2">
           {stepNumber > 1 && (
             <Button variant="secondary" size="sm" onClick={onPrev}>
               {t.prev}
             </Button>
           )}
-          <Button variant="primary" size="sm" onClick={onNext}>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={onNext}
+            disabled={nextDisabled}
+            disabledReason={nextDisabled ? nextDisabledReason : undefined}
+          >
             {isLast ? t.done : t.next}
           </Button>
         </div>
