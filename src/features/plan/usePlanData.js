@@ -569,11 +569,13 @@ export function useResizeBlock() {
   )
 }
 
-// Exported — TutorialOverlay's DELETE_SAMPLE completion check (B1 code
-// review fix) deliberately waits out this SAME window before trusting a
-// "cleaned up" state, so a toast's still-live 실행 취소 action can still flip
-// it back. Duplicating the literal there would silently drift the moment
-// either number changed on its own.
+// Exported for the toast's own `duration` below. (TutorialOverlay's
+// DELETE_SAMPLE completion check used to also wait out this SAME window
+// before trusting a "cleaned up" state — owner decision, 2026-10, removed
+// that hold in favor of advancing immediately once the state check is
+// satisfied; see TutorialOverlay.jsx's own header for the trade-off this
+// accepts. The export stays — this toast's own `duration` below still needs
+// it regardless of that other caller going away.)
 export const UNDO_WINDOW_MS = 6000
 
 /**

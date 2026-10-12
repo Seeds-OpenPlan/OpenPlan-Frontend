@@ -11,7 +11,7 @@ import { useTutorialStep, useTutorialTargets } from '../../features/tutorial/tut
 import { useTutorialEvent } from '../../features/tutorial/tutorialEvents'
 import { TUTORIAL_STEPS } from '../../features/tutorial/tutorialSteps'
 import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
-import { useWeekPlan, UNDO_WINDOW_MS } from '../../features/plan/usePlanData'
+import { useWeekPlan } from '../../features/plan/usePlanData'
 import { useActiveWeekStartISO } from '../../features/plan/activeWeekStore'
 
 const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
@@ -89,12 +89,15 @@ const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
   exactly when it's useful and makes it REACTIVE — a remove/recreate's own
   cache writes (optimistic or post-invalidate-refetch) re-render this
   component the same way they re-render WeeklyPage. Satisfying that state
-  check only ARMS a timer (`UNDO_WINDOW_MS` — the DELETE_SAMPLE effect
-  further below): advancing happens only once that state has held for the
-  WHOLE undo window, and an undo landing before then cancels the pending
-  advance by flipping the state back before the timer fires — fixing (b) as
-  a side effect of fixing (a), since both came from the same root cause
-  (events, not state, used to drive this).
+  check advances IMMEDIATELY (owner decision, 2026-10 — an earlier version
+  additionally waited out the undo toast's own 6-second window before
+  advancing, with a "정리 완료 — 잠시 후…" line explaining the wait; the
+  owner had both removed — see the DELETE_SAMPLE effect further below for
+  the trade-off this accepts). Fixing (b) no longer matters UNDER THIS
+  rule either way: (b) was specifically the OLD event-log's own race
+  against the undo window, which this STATE-based rule never has (it has
+  no "last removal" moment to race against — it just reads whatever is
+  true RIGHT NOW).
 
   [다음] IS STILL A REAL BUTTON (Button's own disabled/disabledReason
   pattern, gated on `stepSatisfied` below) — but in NORMAL single-tab use a
@@ -287,19 +290,25 @@ export function TutorialOverlay() {
   const advance = () => setTutorialStep(stepIndex + 2)
 
   /*
-    DELETE_SAMPLE 자동 진행의 HOLD — `deleteSatisfied`가 true가 되는 순간
-    바로 넘기지 않고, 기존 실행 취소 토스트 창(UNDO_WINDOW_MS, usePlanData.js
-    에서 재사용)만큼 그 상태가 유지될 때만 advance한다. 그 사이 사용자가
-    「실행 취소」로 블록을 되살리면 — 서버가 recreate를 끝내고 캐시가 그
-    taskId/scheduleId를 다시 "존재함"으로 읽는 순간 — `deleteSatisfied`가
-    스스로 false로 돌아가므로, 이 effect의 cleanup이 아직 안 울린 타이머를
-    취소한다. "그 사이 되살리면 진행을 취소하라"는 요구사항을 이벤트
-    북키핑 없이 state 재계산 하나로 만족한다.
+    DELETE_SAMPLE 자동 진행 — `deleteSatisfied`가 true가 되는 즉시 advance한다
+    (owner decision, 2026-10: 이전에는 기존 실행 취소 토스트 창(6초,
+    UNDO_WINDOW_MS)만큼 기다렸다가 넘겼고, 그 동안 "정리 완료 — 잠시 후…"
+    안내를 따로 보여줬다 — 오너가 그 대기/안내를 전부 제거하라고 결정했다).
+
+    트레이드오프(오너가 받아들인 것으로 기록): 사용자가 정리를 마친 "직후"
+    「실행 취소」를 눌러 블록을 되살리면, 이미 다음 단계(TUT-08)로 넘어가 있을
+    수 있다 — 더 이상 그 되살림을 감지해 진행을 취소하지 않는다. 즉시
+    진행이라는 요구사항 자체가 "그런 레이스는 감수한다"는 뜻이라 별도 처리는
+    하지 않는다.
+
+    `deleteSatisfied`는 여전히 STATE 기반 판정 그대로다(바로 위 블록, B1
+    fix) — 이 effect는 그 값이 true로 "바뀌는 순간"에만 반응해 한 번
+    advance하고 끝난다(의존성이 `deleteSatisfied` 자체라 같은 값이 유지되는
+    동안 재실행되지 않는다 — cleanup도 필요 없다, 취소할 타이머가 없다).
   */
   useEffect(() => {
     if (!isDeleteStep || !deleteSatisfied) return
-    const timer = setTimeout(advance, UNDO_WINDOW_MS)
-    return () => clearTimeout(timer)
+    advance()
     // `advance`/`stepIndex` deliberately excluded — stable for as long as
     // this step itself is active (same convention as the navigate effect
     // above, which excludes `targets`/`navigate` for the identical reason).
@@ -391,25 +400,12 @@ export function TutorialOverlay() {
     typeof activeStep.targetId === 'function' ? activeStep.targetId(targets) : activeStep.targetId
   // Same function-or-string shape — DELETE_SAMPLE's `body` (tutorialSteps.js,
   // Thomas SHOULD-FIX) names only what this run actually recorded, which
-  // only `targets` (read at render time) can answer.
-  //
-  // `deleteSatisfied` OVERRIDES that body with a short "정리 완료 — 잠시 후…"
-  // line (owner report, 2026-10: "정리해도 안 넘어간다") — the HOLD effect
-  // above really is still counting down the undo window at this point, but
-  // with NO visible signal the wait reads as broken rather than working. No
-  // literal countdown number: `UNDO_WINDOW_MS` is a SAFETY margin against a
-  // same-window 실행 취소, not a promise to the user ("exactly N seconds"),
-  // and an undo landing restores the step's NORMAL body the instant
-  // `deleteSatisfied` flips back to false (same render that cancels the
-  // pending timer, see that effect's own comment) — a literal countdown
-  // would have to freeze or jump backward in that case instead of just
-  // disappearing, a worse signal than this one's deliberate vagueness.
-  const resolvedBody =
-    isDeleteStep && deleteSatisfied
-      ? onboardingCopy.tutorial.cleanupHoldBody
-      : typeof activeStep.body === 'function'
-        ? activeStep.body(targets)
-        : activeStep.body
+  // only `targets` (read at render time) can answer. No more "정리 완료 —
+  // 잠시 후…" override here (owner decision, 2026-10, removed the hold this
+  // used to explain — see the DELETE_SAMPLE effect above) — satisfying the
+  // step now advances on the VERY NEXT render, so there is no longer a
+  // window where this step's own panel is still visible but already done.
+  const resolvedBody = typeof activeStep.body === 'function' ? activeStep.body(targets) : activeStep.body
   const stepSatisfied = isLast || (isDeleteStep ? deleteSatisfied : gateSatisfied)
   const nextDisabled = !isLast && !stepSatisfied
 
