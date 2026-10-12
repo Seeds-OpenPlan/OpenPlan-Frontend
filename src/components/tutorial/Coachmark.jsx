@@ -164,19 +164,19 @@ export function Coachmark({
   stepNumber,
   total,
   isLast,
-  // Guided-actions redesign (2026-10): [다음] is now gated on actually having
-  // done the step (nextDisabled/nextDisabledReason — Button's own existing
-  // disabled/disabledReason pattern, same prop names/shape as every other
-  // gated Button in this codebase). [다시 열기] re-sends whatever auto-open
-  // request this step already made once — see TutorialOverlay's own comment
-  // on `showReopen`/`onReopen` for why it is shown unconditionally while
-  // pending rather than only when the opened UI is detected as closed.
-  nextDisabled = false,
-  nextDisabledReason,
+  // AUTO-PROGRESS ONLY (owner decision, 2026-10 — removes [이전]/[다음]):
+  // every non-last step now advances purely from TutorialOverlay's own
+  // event/state detection, never a manual click — see that file's own
+  // header for why this is judged safe (완료 조건이 최대한 현재 상태로도
+  // 판정되고, 그래도 막히면 [건너뛰기]가 유일하고 항상 available한 탈출구).
+  // `onComplete` is the ONE remaining manual action, and only for the LAST
+  // step (TUT-08 has nothing to auto-detect — it is a plain "you're done"
+  // screen). [다시 열기] re-sends whatever auto-open request this step
+  // already made once — see TutorialOverlay's own comment on
+  // `showReopen`/`onReopen`.
   showReopen = false,
   onReopen,
-  onNext,
-  onPrev,
+  onComplete,
   onSkip,
 }) {
   const rect = useTargetRect(targetId)
@@ -356,8 +356,12 @@ export function Coachmark({
         <p className="text-caption text-text-muted">{body}</p>
         {/* [다시 열기] sits on its OWN line, left-aligned — it is a recovery
             action ("I closed the thing you opened for me"), not a step of
-            the same weight as 이전/다음/건너뛰기, so it doesn't compete with
-            them for the same row. */}
+            the same weight as 건너뛰기/완료, so it doesn't compete with them
+            for the same row. The only OTHER control this panel ever shows
+            now (AUTO-PROGRESS ONLY, see this component's own header on
+            `onComplete`) — a non-last step has NO button here at all; it
+            simply disappears the instant TutorialOverlay's own detection
+            advances past it. */}
         {showReopen && (
           <button
             type="button"
@@ -367,22 +371,16 @@ export function Coachmark({
             {t.reopen}
           </button>
         )}
-        <div className="mt-1 flex justify-end gap-2">
-          {stepNumber > 1 && (
-            <Button variant="secondary" size="sm" onClick={onPrev}>
-              {t.prev}
+        {/* [완료] — the ONE manual button left, and only on the LAST step
+            (TUT-08): see this component's own header on `onComplete` for why
+            every OTHER step has nothing to click here at all. */}
+        {isLast && (
+          <div className="mt-1 flex justify-end">
+            <Button variant="primary" size="sm" onClick={onComplete}>
+              {t.done}
             </Button>
-          )}
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={onNext}
-            disabled={nextDisabled}
-            disabledReason={nextDisabled ? nextDisabledReason : undefined}
-          >
-            {isLast ? t.done : t.next}
-          </Button>
-        </div>
+          </div>
+        )}
       </div>
     </>,
     document.body,

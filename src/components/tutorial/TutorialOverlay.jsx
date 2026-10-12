@@ -99,28 +99,62 @@ const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
   no "last removal" moment to race against — it just reads whatever is
   true RIGHT NOW).
 
-  [다음] IS STILL A REAL BUTTON (Button's own disabled/disabledReason
-  pattern, gated on `stepSatisfied` below) — but in NORMAL single-tab use a
-  user will essentially never see it enabled while still on a gated step:
-  the SAME event that would let them click it productively also advances
-  past it immediately. Its one genuine job: a SECOND browser tab running the
-  same tutorial writes to the SAME localStorage key (tutorialProgressStore.js)
-  but this tab's event stream has no way to see THAT tab's success (no
-  `storage`-event wiring — out of this redesign's scope), so without a manual
-  fallback it would stay stuck forever despite the task being genuinely done
-  elsewhere.
+  [이전]/[다음] REMOVED (owner decision, 2026-10) — every non-last step now
+  ONLY ever advances from detection (event or state, see the table below),
+  never a manual click. The removed [다음] used to ALSO serve as a safety
+  valve for one real scenario: a SECOND browser tab running the same
+  tutorial writes to the SAME localStorage key (tutorialProgressStore.js),
+  but THIS tab's event stream has no way to see THAT tab's success. Losing
+  that valve is an explicit, accepted trade-off — [건너뛰기] (still a real
+  button, every step) is now the ONLY way out of a step that, for whatever
+  reason, never detects its own completion. [완료] also stays, but ONLY on
+  the LAST step (TUT-08 has nothing to auto-detect at all — it is a plain
+  "you're done" screen, so a manual click is the ONLY way it ever ends).
+
+  PER-STEP COMPLETION — EVENT, now with a STATE-based safety net wherever
+  one is both FEASIBLE and UNAMBIGUOUS (owner decision, 2026-10: "사용자가
+  할 일을 이미 해냈는데 이벤트를 놓치면 진행할 방법이 사라지는 위험" — the
+  event path, see point 2 above, is already structurally reliable — it is
+  called SYNCHRONOUSLY from inside the very mutation that performs the
+  action, not a network callback that could silently drop — but a second,
+  independent STATE check costs little wherever one exists and closes the
+  gap for any future bug in that path too):
+    - CREATE_PROJECT / ADD_TASK — EVENT ONLY, by judgment call (see
+      tutorialSteps.js's own header for why: CREATE_PROJECT has no PRIOR id
+      to disambiguate "a project" from "the sample project" — any state
+      check would have to guess, and guessing wrong risks pointing a LATER
+      step at a real, unrelated project (the exact risk §7 below already
+      rejects for a different reason). ADD_TASK COULD check "does
+      targets.projectId's own task list have ≥1 task" — the project is
+      guaranteed fresh/empty at this step's start, so that check itself
+      would be safe — but picking WHICH task to capture as `targets.taskId`
+      for PLACE_TASK's own later check turns ambiguous the moment more than
+      one task exists, for a marginal gain over an already-reliable event.
+      Reported, not implemented; a follow-up can revisit if still wanted.
+    - PLACE_TASK / ADD_SCHEDULE — EVENT, now ALSO independently satisfied by
+      reading the CURRENT weekPlan cache (`weekPlanQuery` below, the SAME
+      subscription DELETE_SAMPLE already uses — broadened to cover these two
+      steps too): PLACE_TASK checks "a block with `taskId === targets.taskId`
+      exists right now" (the id is already reliably captured at ADD_TASK);
+      ADD_SCHEDULE has no such PRIOR id (same reason as ADD_TASK above), so
+      it instead snapshots every SCHEDULE block's id the INSTANT this step
+      is entered (`scheduleBaselineIds`) and is satisfied the moment a
+      SCHEDULE block NOT in that snapshot appears — "a new one showed up
+      since I started watching" needs no id captured beforehand.
+    - DELETE_SAMPLE — STATE ONLY (B1 fix, unchanged by this redesign, see
+      its own block below).
 
   §7 (오너 보고용 판단 — a STALE cursor from BEFORE this redesign, with no
-  recorded target ids): handled NOT via this manual-override button, but by
-  loosening each step's own `matches` to "any event of the right TYPE
-  counts" once `targets` is missing the id it would otherwise narrow by
-  (tutorialSteps.js). That still requires a real action of the right kind —
-  unlike silently substituting "the user's most recent project", which risked
-  pointing TUT-07's delete instructions at a REAL, unrelated project/task —
-  while never permanently trapping the user on an id this run never
-  captured. The one case with NOTHING left to verify — DELETE_SAMPLE with
-  BOTH ids missing — does bypass the gate outright (`deleteRequiredIds.length
-  === 0` below): there is no real action left to require.
+  recorded target ids): handled by loosening each step's own `matches` to
+  "any event of the right TYPE counts" once `targets` is missing the id it
+  would otherwise narrow by (tutorialSteps.js). That still requires a real
+  action of the right kind — unlike silently substituting "the user's most
+  recent project", which risked pointing TUT-07's delete instructions at a
+  REAL, unrelated project/task — while never permanently trapping the user
+  on an id this run never captured. The one case with NOTHING left to
+  verify — DELETE_SAMPLE with BOTH ids missing — does bypass the gate
+  outright (`deleteRequiredIds.length === 0` below): there is no real
+  action left to require.
 */
 export function TutorialOverlay() {
   const navigate = useNavigate()
@@ -139,10 +173,6 @@ export function TutorialOverlay() {
   // trigger a re-render — it only matters at the instant `requestUrl` is
   // about to be used for an ACTUAL navigation.
   const requestNonceRef = useRef(0)
-  // Safety-valve gate for [다음] (see this file's own header for the one real
-  // scenario it covers) — reset whenever the ACTIVE STEP itself changes.
-  const [gateSatisfied, setGateSatisfied] = useState(false)
-  const [gateResetForKey, setGateResetForKey] = useState(null)
 
   const progress = progressQuery.data
   const running = Boolean(progress?.onboardingCompleted && !progress.tutorialCompleted)
@@ -167,6 +197,12 @@ export function TutorialOverlay() {
   // other effect.
   const isDesktop = useLockedIsDesktop(running && !activeStep)
   const isLast = Boolean(activeStep) && stepIndex === TUTORIAL_STEPS.length - 1
+  // Which /weekly step is active, if any — see this file's own header
+  // ("PER-STEP COMPLETION") for why PLACE_TASK/ADD_SCHEDULE/DELETE_SAMPLE
+  // each get a STATE-based safety net reading the SAME `weekPlanQuery`
+  // below, while CREATE_PROJECT/ADD_TASK (on /projects) do not.
+  const isPlaceTaskStep = activeStep?.key === 'PLACE_TASK'
+  const isAddScheduleStep = activeStep?.key === 'ADD_SCHEDULE'
   const isDeleteStep = activeStep?.key === 'DELETE_SAMPLE'
   // `useActiveWeekStartISO` (not an independently-recomputed
   // `currentWeekStartISO()` — owner report, 2026-10: TUT-07 정리 후 멈춤
@@ -177,26 +213,67 @@ export function TutorialOverlay() {
   // the two the SAME value by construction, so the query key below is
   // GUARANTEED to be WeeklyPage's own `weekPlanKey`, not merely usually it.
   const weekStartISO = useActiveWeekStartISO()
-  // Subscribed ONLY while DELETE_SAMPLE is active (`enabled`) — see this
-  // file's own header on why this must be REACTIVE rather than a one-off
-  // read, and why `enabled` matters (no reason to pull the week plan into
-  // memory for the other 5 steps). Shares the exact query key WeeklyPage's
+  // Subscribed ONLY while one of the THREE /weekly steps is active
+  // (`enabled`) — see this file's own header ("PER-STEP COMPLETION") for why
+  // PLACE_TASK/ADD_SCHEDULE joined DELETE_SAMPLE here (owner decision,
+  // 2026-10 — each now also gets a STATE-based safety net), and why
+  // `enabled` matters at all (no reason to pull the week plan into memory
+  // for the two /projects steps). Shares the exact query key WeeklyPage's
   // own `useWeekPlan(weekStartISO)` call uses while that page is also
-  // mounted (DELETE_SAMPLE's route is `/weekly`), so this is NOT a second
-  // network request — same cache entry, same in-flight fetch, TanStack Query
-  // dedupes by key alone.
-  const weekPlanQuery = useWeekPlan(weekStartISO, { enabled: isDeleteStep })
+  // mounted, so this is NOT a second network request — same cache entry,
+  // same in-flight fetch, TanStack Query dedupes by key alone.
+  const weekPlanQuery = useWeekPlan(weekStartISO, {
+    enabled: isPlaceTaskStep || isAddScheduleStep || isDeleteStep,
+  })
+  const weekBlocks = weekPlanQuery.data?.blocks
 
-  // Render-time adjustment (React's own "adjusting state when a value
-  // changes" pattern, same shape ProjectsPage's own `tabResolvedForId`
-  // uses) — NOT a `useEffect`, because this codebase's lint config
-  // (react-hooks/set-state-in-effect) forbids calling setState synchronously
-  // inside an effect body. An effect is for synchronizing with an EXTERNAL
-  // system; this is purely local state reacting to `activeStep` changing.
-  if ((activeStep?.key ?? null) !== gateResetForKey) {
-    setGateResetForKey(activeStep?.key ?? null)
-    setGateSatisfied(false)
+  /*
+    ADD_SCHEDULE's own STATE fallback needs a BASELINE — see this file's own
+    header ("PER-STEP COMPLETION") for why this step has no prior id to
+    check presence of, unlike PLACE_TASK/DELETE_SAMPLE. The instant this
+    step is entered (and `weekBlocks` has actually loaded), snapshot every
+    SCHEDULE block's own `scheduleId` already on the week; satisfied the
+    moment a SCHEDULE block NOT in that snapshot shows up (see
+    `addScheduleStateSatisfied` below).
+
+    Render-time adjustment (React's own "adjusting state when a value
+    changes" pattern, same shape this file's `gateResetForKey` used to use
+    before the [이전]/[다음] removal, and ProjectsPage's own
+    `tabResolvedForId`) — NOT a `useEffect`, because this codebase's lint
+    config (react-hooks/set-state-in-effect) forbids calling setState
+    synchronously inside an effect body for a value derivable at render
+    time. `weekBlocks` not having loaded YET (still `undefined`) is left
+    alone rather than snapshotting an empty set — the retry condition below
+    (`scheduleBaselineForKey !== activeStep.key`) stays true every render
+    until `weekBlocks` actually arrives, so this captures the REAL baseline
+    once it does rather than a premature empty one.
+  */
+  const [scheduleBaselineForKey, setScheduleBaselineForKey] = useState(null)
+  const [scheduleBaselineIds, setScheduleBaselineIds] = useState(null)
+  if (isAddScheduleStep && scheduleBaselineForKey !== activeStep.key && weekBlocks) {
+    setScheduleBaselineForKey(activeStep.key)
+    setScheduleBaselineIds(new Set(weekBlocks.filter((b) => b.blockType === 'SCHEDULE').map((b) => b.scheduleId)))
+  } else if (!isAddScheduleStep && scheduleBaselineForKey != null) {
+    // Left this step (advanced, or a TUT-09 restart) — forget the baseline
+    // so a FUTURE visit (a restart) captures a fresh one instead of reusing
+    // a stale snapshot from a previous run.
+    setScheduleBaselineForKey(null)
+    setScheduleBaselineIds(null)
   }
+
+  // STATE-based safety nets (owner decision, 2026-10 — see this file's own
+  // header) — each mirrors DELETE_SAMPLE's own "read weekPlan directly"
+  // approach (B1 fix) rather than waiting on an event. Both ALSO being true
+  // at the same moment the matching EVENT fires is expected, not a race:
+  // `advance()` below just writes the SAME target step twice in that case
+  // (idempotent — `stepIndex` has not changed yet either time).
+  const placeTaskSatisfied =
+    isPlaceTaskStep && Boolean(targets.taskId) && Boolean(weekBlocks) && weekBlocks.some((b) => b.taskId === targets.taskId)
+  const addScheduleStateSatisfied =
+    isAddScheduleStep &&
+    scheduleBaselineIds != null &&
+    Boolean(weekBlocks) &&
+    weekBlocks.some((b) => b.blockType === 'SCHEDULE' && !scheduleBaselineIds.has(b.scheduleId))
 
   // The request URL this step wants open RIGHT NOW — shared by the
   // auto-navigate effect below AND the Coachmark panel's [다시 열기] (a user
@@ -295,7 +372,6 @@ export function TutorialOverlay() {
         targets.scheduleId ? { field: 'scheduleId', id: targets.scheduleId } : null,
       ].filter(Boolean)
     : null
-  const weekBlocks = weekPlanQuery.data?.blocks
   const deleteSatisfied =
     deleteRequiredIds != null &&
     (deleteRequiredIds.length === 0 ||
@@ -329,17 +405,53 @@ export function TutorialOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDeleteStep, deleteSatisfied])
 
+  // PLACE_TASK's own STATE safety net (owner decision, 2026-10 — see this
+  // file's own header) — fires the SAME `advance()` the matching TASK_PLACED
+  // event already would, independently of whether that event ever arrives.
+  // Captures `placedBlockId` ONLY if the event path hasn't already (cosmetic
+  // — DELETE_SAMPLE's own `highlightBlocks` hint, see tutorialSteps.js) —
+  // never overwrites a value the event may have ALSO just set in the same
+  // render.
+  useEffect(() => {
+    if (!placeTaskSatisfied) return
+    if (!targets.placedBlockId) {
+      const matched = weekBlocks?.find((b) => b.taskId === targets.taskId)
+      if (matched) patchTargets({ placedBlockId: matched.planBlockId ?? null })
+    }
+    advance()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placeTaskSatisfied])
+
+  // ADD_SCHEDULE's own STATE safety net — same reasoning, but ALSO captures
+  // `scheduleBlockId`/`scheduleId` from whichever NEW schedule block tripped
+  // `addScheduleStateSatisfied` (this path has no event payload to read
+  // them from at all, unlike PLACE_TASK above) — DELETE_SAMPLE's own
+  // completion check (B1 fix) needs `targets.scheduleId` captured by
+  // SOMETHING regardless of which path got there first.
+  useEffect(() => {
+    if (!addScheduleStateSatisfied) return
+    const matched = weekBlocks?.find((b) => b.blockType === 'SCHEDULE' && !scheduleBaselineIds.has(b.scheduleId))
+    if (matched) {
+      patchTargets({ scheduleBlockId: matched.planBlockId ?? null, scheduleId: matched.scheduleId ?? null })
+    }
+    advance()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addScheduleStateSatisfied])
+
   // 완료 감지 — 저장 성공 이벤트가 CURRENT 단계의 규칙과 맞아떨어지면 바로
   // 다음 단계로 넘긴다. DELETE_SAMPLE은 여기를 거치지 않는다 — 위 state 기반
   // 체크가 전담한다(그 단계 객체엔 애초에 `.event`가 없어 아래 첫 줄에서
-  // 자연히 걸러진다). 이 콜백은 매 렌더 새 클로저를 받아도 안전하다
-  // (useTutorialEvent가 ref로 감싸 구독을 다시 걸지 않는다 — tutorialEvents.js).
+  // 자연히 걸러진다). PLACE_TASK/ADD_SCHEDULE은 이 경로를 그대로 "주" 경로로
+  // 유지한다(바로 위 두 effect는 "혹시 이 이벤트를 놓쳤을 때"의 안전망일
+  // 뿐) — 보통은 이 핸들러가 먼저 advance해 버리므로, 위 두 effect가 실제로
+  // "처음" advance를 거는 경우는 이벤트가 정말 안 왔을 때뿐이다. 이 콜백은
+  // 매 렌더 새 클로저를 받아도 안전하다(useTutorialEvent가 ref로 감싸 구독을
+  // 다시 걸지 않는다 — tutorialEvents.js).
   useTutorialEvent(({ type, payload }) => {
     if (!activeStep || isLast) return
     if (type !== activeStep.event) return
     if (!activeStep.matches(payload, targets)) return
     if (activeStep.captureTarget) patchTargets(activeStep.captureTarget(payload))
-    setGateSatisfied(true)
     advance()
   })
 
@@ -420,8 +532,6 @@ export function TutorialOverlay() {
   // step now advances on the VERY NEXT render, so there is no longer a
   // window where this step's own panel is still visible but already done.
   const resolvedBody = typeof activeStep.body === 'function' ? activeStep.body(targets) : activeStep.body
-  const stepSatisfied = isLast || (isDeleteStep ? deleteSatisfied : gateSatisfied)
-  const nextDisabled = !isLast && !stepSatisfied
 
   return (
     <Coachmark
@@ -431,19 +541,17 @@ export function TutorialOverlay() {
       stepNumber={stepIndex + 1}
       total={TUTORIAL_STEPS.length}
       isLast={isLast}
-      nextDisabled={nextDisabled}
-      nextDisabledReason={nextDisabled ? activeStep.nextDisabledReason : undefined}
-      // [다시 열기] — shown whenever this step is still pending AND actually
-      // has something to (re-)request; re-sending the SAME request a closed
-      // auto-opened form/panel already got once is simpler and strictly safer
-      // than trying to detect "did the user close it" across screens that
-      // don't all share one tracked-open mechanism (Dialog/BottomSheet's
-      // overlayStack covers TUT-03/04/06's modals, but NOT WeeklyPage's
-      // desktop unplaced panel, which is a non-modal floating card — see that
-      // component's own header). Re-requesting something already open is a
-      // harmless no-op (re-focuses/re-opens in place), so one condition
-      // covers both cases without needing to tell them apart.
-      showReopen={nextDisabled && Boolean(requestUrl(activeStep, presenceCheckNonce))}
+      // [다시 열기] — shown for every NON-LAST step that actually has
+      // something to (re-)request. No `nextDisabled`-style gate needed
+      // anymore (owner decision, 2026-10, removed [이전]/[다음] — see this
+      // file's own header): a step's own Coachmark is, BY CONSTRUCTION, only
+      // ever rendered while that step is still active — the moment it's
+      // satisfied, `advance()` moves `tutorialStep` on and THIS render is
+      // replaced by the next step's, so "showing while pending" and "showing
+      // at all" are now the same condition. Re-requesting something already
+      // open is a harmless no-op (re-focuses/re-opens in place) — same
+      // reasoning as before, unchanged.
+      showReopen={!isLast && Boolean(requestUrl(activeStep, presenceCheckNonce))}
       // `{ replace: true }` (S2, same reasoning as the step-change effect
       // above) — re-sending the same request is still a SYSTEM-driven move,
       // and without this, clicking [다시 열기] more than once on the same
@@ -456,26 +564,25 @@ export function TutorialOverlay() {
         navigate(requestUrl(activeStep, requestNonceRef.current), { replace: true })
       }}
       onSkip={finish}
-      onPrev={() => setTutorialStep(Math.max(1, stepIndex))}
-      onNext={() => {
-        if (isLast) {
-          // TUT-08 "완료 상태와 다음 이동 화면을 확인한다" — land on the
-          // dashboard once the last step's own [완료] click commits the one
-          // server field this run actually changes. Step reset happens in
-          // onSuccess, same ordering (and same reason) as `finish` above —
-          // see that function's own comment.
-          updateProgress.mutate(
-            { tutorialCompleted: true },
-            {
-              onSuccess: () => {
-                resetTutorialStep()
-                navigate('/')
-              },
+      // ONLY ever called from the LAST step's own [완료] (Coachmark.jsx only
+      // renders that button when `isLast` — see its own header) — every
+      // OTHER step has no manual trigger anymore, so this no longer needs an
+      // `else { advance() }` branch at all.
+      onComplete={() => {
+        // TUT-08 "완료 상태와 다음 이동 화면을 확인한다" — land on the
+        // dashboard once the last step's own [완료] click commits the one
+        // server field this run actually changes. Step reset happens in
+        // onSuccess, same ordering (and same reason) as `finish` above —
+        // see that function's own comment.
+        updateProgress.mutate(
+          { tutorialCompleted: true },
+          {
+            onSuccess: () => {
+              resetTutorialStep()
+              navigate('/')
             },
-          )
-        } else {
-          advance()
-        }
+          },
+        )
       }}
     />
   )

@@ -126,9 +126,10 @@ export const onboardingCopy = {
     kickoffBody:
       '샘플 프로젝트 생성부터 태스크 추가, 캘린더 배치, 일정 추가, 삭제까지 실제 화면에서 그대로 따라 해 봅니다.',
     start: '시작하기',
+    // `next`/`prev` removed (owner decision, 2026-10, removed [이전]/[다음]
+    // — see TutorialOverlay.jsx's own header): `skip`/`done` are the only
+    // two buttons any step still shows.
     skip: '건너뛰기',
-    next: '다음',
-    prev: '이전',
     done: '완료',
     // 자동으로 연 창(폼/패널)을 사용자가 닫았을 때의 복구 버튼 — 같은 요청을
     // 다시 보낼 뿐이라 이미 열려 있어도 눌러도 무해하다(Coachmark 자신의

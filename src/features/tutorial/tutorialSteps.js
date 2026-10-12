@@ -62,11 +62,12 @@ import { TUTORIAL_EVENTS } from './tutorialEvents'
       DELETE_SAMPLE (TUT-07) does not use this trio — its rule needs to track
       TWO ids clearing independently, which doesn't fit this single-event
       shape, so TutorialOverlay special-cases it directly (see that file).
-    - `nextDisabledReason` — shown next to a disabled [다음] (Button's own
-      disabled/disabledReason pattern). In NORMAL operation the matching
-      event above auto-advances before a user would ever see this reason —
-      see TutorialOverlay's own header for the one real scenario where the
-      gate matters despite that (a second tab / a missed event).
+  No more `nextDisabledReason` field (owner decision, 2026-10, removed
+  [이전]/[다음] entirely — see TutorialOverlay.jsx's own header). Each step's
+  `body` already states what to do ("새 프로젝트 폼이 자동으로 열립니다.
+  이름을 입력하고 저장하세요.", etc.) in the SAME words the old gate caption
+  used to repeat next to a now-nonexistent disabled button — nothing to fold
+  in that wasn't already there.
 
   `targetId` matches a `data-tut-id` attribute placed on a REAL button in the
   REAL screen — the whole point of AC3 ("실기능 재사용, 모의 화면 금지"): the
@@ -94,7 +95,6 @@ export const TUTORIAL_STEPS = [
     targetId: 'tut-create-project',
     title: '샘플 프로젝트를 만들어 보세요',
     body: '새 프로젝트 폼이 자동으로 열립니다. 이름을 입력하고 저장하세요.',
-    nextDisabledReason: '먼저 프로젝트를 만들어 보세요',
     event: TUTORIAL_EVENTS.PROJECT_CREATED,
     // Nothing prior to compare against — this is the first sample this run
     // creates, so any project creation while this step is active counts.
@@ -108,7 +108,6 @@ export const TUTORIAL_STEPS = [
     targetId: 'tut-add-task',
     title: '태스크를 추가해 보세요',
     body: '방금 만든 프로젝트가 펼쳐지고 태스크 추가 폼이 열립니다. 제목과 예상 시간을 입력해 저장하세요.',
-    nextDisabledReason: '먼저 태스크를 추가해 보세요',
     event: TUTORIAL_EVENTS.TASK_CREATED,
     // `!targets.projectId` (stale/pre-redesign cursor with no recorded id,
     // §7 판단) falls back to "any task creation counts" rather than blocking
@@ -131,7 +130,6 @@ export const TUTORIAL_STEPS = [
     targetId: (targets) => (targets.taskId ? `tut-unplaced-task-${targets.taskId}` : null),
     title: '태스크를 캘린더에 배치해 보세요',
     body: '미배치 패널이 열리고 방금 만든 태스크가 강조됩니다. 캘린더 칸으로 드래그하세요. (휴대폰도 카드를 눌러 끌 수 있습니다. 카드에 포커스한 뒤 Enter로도 빈 시간에 바로 배치할 수 있습니다 — 전용 버튼은 없고 이 키보드 동작이 "빠른 배치"입니다.)',
-    nextDisabledReason: '먼저 태스크를 캘린더에 배치해 보세요',
     event: TUTORIAL_EVENTS.TASK_PLACED,
     matches: (payload, targets) => !targets.taskId || payload.taskId === targets.taskId,
     // `placedBlockId` only feeds DELETE_SAMPLE's cosmetic `highlightBlocks`
@@ -149,7 +147,6 @@ export const TUTORIAL_STEPS = [
     targetId: null,
     title: '프로젝트와 무관한 일정을 추가해 보세요',
     body: '일정 추가 폼이 자동으로 열리고, 이번 주 비어 있는 시간대가 미리 채워집니다. 제목을 확인하고 저장해 보세요.',
-    nextDisabledReason: '먼저 일정을 추가해 보세요',
     event: TUTORIAL_EVENTS.SCHEDULE_CREATED,
     matches: () => true,
     // `scheduleBlockId` keeps feeding DELETE_SAMPLE's `highlightBlocks`
@@ -193,7 +190,6 @@ export const TUTORIAL_STEPS = [
       // 설명만 한다 (TutorialOverlay의 bypass 규칙과 짝을 이룬다).
       return '캘린더의 블록에서 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) 태스크는 [배치 해제]로, 일정은 [일정 삭제]로 정리할 수 있습니다.'
     },
-    nextDisabledReason: '먼저 방금 만든 블록을 정리해 보세요',
     // TutorialOverlay 특수 분기 전용 — 이 다섯 단계와 같은 단일 event/matches
     // 모양이 아니라 상태 기반 규칙이다("이 run이 기록한 taskId/scheduleId가
     // 전부 현재 weekPlan 캐시에서 사라졌는가"). 그 이유(이벤트 로그 누적 방식을
