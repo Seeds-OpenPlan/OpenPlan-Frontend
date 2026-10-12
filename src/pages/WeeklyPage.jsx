@@ -74,6 +74,7 @@ import {
 import { useAppStore, selectCanWrite } from '../store/useAppStore'
 import { toast } from '../hooks/useToasts'
 import { systemMessages } from '../constants/systemMessages'
+import { useSearchParamRequest } from '../hooks/useSearchParamRequest'
 
 // How long the PLAN-23 highlight stays on a block: two pulses of --duration-slow
 // (320ms) plus a beat, so the ring is gone shortly after the animation ends
@@ -132,15 +133,8 @@ function WeeklyPage() {
   // doc comment on `projectId` below — filtering while the panel stays closed
   // would be invisible, so either param alone opens it, and they combine fine
   // (`?openUnplaced=1&project=xxx`) since both just seed independent state.
-  // Read directly into these two states' own lazy initializers (not mirrored
-  // via an Effect) — same reasoning `?openReplan=1` already uses below; the
-  // params are stripped from the URL once, further down, so a refresh never
-  // reopens/refilters.
-  const initialProjectFilter = searchParams.get('project') || null
-  const [panelOpen, setPanelOpen] = useState(
-    () => searchParams.get('openUnplaced') === '1' || Boolean(initialProjectFilter),
-  )
-  const [projectFilter, setProjectFilter] = useState(() => initialProjectFilter)
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [projectFilter, setProjectFilter] = useState(null)
   const [autoDraft, setAutoDraft] = useState(null) // { placements, unplaced } | null
   const [slotMenu, setSlotMenu] = useState(null) // { point, slot } | null
 
@@ -1466,26 +1460,84 @@ function WeeklyPage() {
     // — no ref needed.
   }, [searchParams, setSearchParams])
 
-  // Strip `?openUnplaced=1`/`?project={id}` the same way, once they've done
-  // their job (already seeded into panelOpen/projectFilter's lazy initializers
-  // above). One effect for both since they always arrive/leave together from
-  // this page's point of view — no ordering dependency between the two deletes.
-  useEffect(() => {
-    const hasOpenUnplaced = searchParams.get('openUnplaced') === '1'
-    const hasProject = searchParams.get('project') !== null
-    if (!hasOpenUnplaced && !hasProject) return
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev)
-        next.delete('openUnplaced')
-        next.delete('project')
-        return next
-      },
-      { replace: true },
-    )
-    // Same once-per-mount reasoning as the `openReplan` effect above: both
-    // params are gone from `searchParams` after the first pass.
-  }, [searchParams, setSearchParams])
+  /*
+    `?openUnplaced=1`/`?project={id}` — OPENS the panel (+ sets the filter).
+    See useSearchParamRequest's own header for why a hook, not the lazy
+    `useState` initializer this used to be: TUT-05's own [다시 열기] can
+    re-send either param while this page stays mounted across TUT-05/06/07
+    (all three share `/weekly`, so none of them remount between steps). Two
+    independent calls (not one combined effect) — either param alone still
+    opens the panel, and `project` additionally sets the filter; each strips
+    and re-fires on its OWN schedule, which matters once `project` can
+    arrive WITHOUT `openUnplaced` (TUT-05's own request) just as easily as
+    the reverse.
+  */
+  useSearchParamRequest(searchParams, setSearchParams, 'openUnplaced', {
+    onFire: () => setPanelOpen(true),
+  })
+  useSearchParamRequest(searchParams, setSearchParams, 'project', {
+    isMatch: (raw) => raw.length > 0,
+    onFire: (projectId) => {
+      setPanelOpen(true)
+      setProjectFilter(projectId)
+    },
+  })
+
+  /*
+    TUT-06 "할 일 창 자동 열기" — `?addSchedule=1` opens ScheduleForm
+    pre-filled with the nearest free slot this week (owner spec: "이번 주
+    가까운 빈 시간대를 미리 채울 수 있으면 채운다"). `ready` waits for `plan`
+    AND the availability fetch — `findFirstFreeSlot` needs real
+    availability/blocks to search, and firing before they load would either
+    find nothing (every window still empty) or search against a blocks array
+    that's about to change; useSearchParamRequest leaves the param in place
+    until `ready` flips true, retrying each render instead of giving up.
+  */
+  useSearchParamRequest(searchParams, setSearchParams, 'addSchedule', {
+    ready: Boolean(plan) && !availQuery.isLoading,
+    onFire: () => {
+      const slot =
+        findFirstFreeSlot({ days, availability, blocks, durationMin: snapDuration(60) }) ??
+        // Every day somehow full (an edge case, not the common path) — open
+        // the form anyway with a fixed fallback rather than silently doing
+        // nothing; the user can still adjust the time before saving.
+        { dayIndex: 0, startMin: 9 * 60 }
+      openScheduleCreate(slot)
+    },
+  })
+
+  /*
+    TUT-07 "할 일 창 자동 열기" — `?highlightBlocks=id1,id2` (comma-separated
+    planBlockIds, TUT-05/06's own created blocks — see tutorialSteps.js's
+    DELETE_SAMPLE entry). Reuses the EXISTING PLAN-23 focus-ring mechanism
+    (`handleFocusBlock`/`focusRequest`) instead of teaching Coachmark a new
+    per-block anchor — that mechanism already scrolls the right block into
+    view and flashes a ring around it, on both shells, which is exactly
+    "강조하거나 스크롤해서 보이게" (owner spec §4.5). Only the FIRST id that's
+    still actually present in this week's blocks gets highlighted — a block
+    already removed in a previous attempt at this step correctly has nothing
+    left to point at.
+  */
+  useSearchParamRequest(searchParams, setSearchParams, 'highlightBlocks', {
+    ready: Boolean(plan),
+    isMatch: (raw) => raw.length > 0,
+    onFire: (raw) => {
+      const ids = raw.split(',').filter(Boolean)
+      const target = blocks.find((b) => ids.includes(String(b.planBlockId)))
+      if (!target) return
+      // Same "widen to 24h if the block falls outside the focus-mode window"
+      // safety handleSelectIssue already needs (and for the identical
+      // reason — see that function's own comment): a TASK/SCHEDULE created
+      // from a slot the user picked themselves (TUT-06's own prefill stays
+      // inside availability, but the form lets them change it before
+      // saving) could land outside what focus mode renders, and scrolling
+      // to a block that isn't in the DOM at all would silently do nothing.
+      const startMin = minutesOfDay(target.startAt)
+      const endMin = minutesOfDayEnd(target.endAt, dateOf(target.startAt))
+      if (startMin < range.startMinutes || endMin > range.endMinutes) setMode('24h')
+      handleFocusBlock(target)
+    },
+  })
 
   // Every open (re)requests all three generated alternatives against whatever
   // the CURRENT draft is — see useReplanOptions's header for why reusing a
