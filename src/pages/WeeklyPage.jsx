@@ -381,6 +381,40 @@ function WeeklyPage() {
 
   const days = useMemo(() => weekDaysOf(weekStartISO), [weekStartISO])
   /*
+    findFirstFreeSlot (quickPlace below, and TUT-06's own auto-open
+    add-schedule request further down) scans `blocks` for occupied spans
+    only — a fixed schedule (#70, BE #90: read straight off this week's own
+    response via `useFixedSchedules`, see that hook's own header) was
+    invisible to it, so "이번 주 가까운 빈 시간대를 미리 채운다" could land
+    directly on top of one (Thomas code review SHOULD-FIX). Only
+    `activeThisWeek` ones count — one turned OFF for just this week
+    (PLAN-33 이번 주만 비활성화) genuinely has nothing there anymore, so it
+    must not block a slot search any more than it blocks the grid's own
+    occupied-span rendering (CalendarGrid's ghost block, unaffected by this).
+
+    Converted to the SAME `{startAt, endAt}` shape findFirstFreeSlot already
+    reads off a real block — so the function itself needs no "also check
+    fixed schedules" branch — rather than a parallel occupancy check. Each
+    fixed schedule recurs on exactly ONE of this week's 7 days
+    (`WEEKDAY_KEYS.indexOf(f.weekday)`); `composeTimestamp` gives the
+    absolute instant for THAT date, the same helper a drag commit already
+    uses to turn a day+minute pair into one.
+  */
+  const occupiedWithFixed = useMemo(() => {
+    const fixedSpans = (fixedSchedulesQuery.data ?? [])
+      .filter((f) => f.activeThisWeek)
+      .map((f) => {
+        const dayISO = days[WEEKDAY_KEYS.indexOf(f.weekday)]
+        // Defensive — an unrecognized weekday string would resolve to -1
+        // (days[-1] === undefined); skip it rather than composing a
+        // timestamp off an undefined date.
+        if (!dayISO) return null
+        return { startAt: composeTimestamp(dayISO, f.startMinutes), endAt: composeTimestamp(dayISO, f.endMinutes) }
+      })
+      .filter(Boolean)
+    return fixedSpans.length > 0 ? [...blocks, ...fixedSpans] : blocks
+  }, [blocks, fixedSchedulesQuery.data, days])
+  /*
     집중 모드의 창은 가용 시간뿐 아니라 **이 주에 실제로 그려지는 것들**까지
     감싸야 한다 — 그러지 않으면 가용 창 밖의 블록·고정 일정이 그리드 위아래로
     잘려 무슨 일정인지 안 보인다(2026-08-29 보고; 자세한 사정은
@@ -962,7 +996,10 @@ function WeeklyPage() {
     const slot = findFirstFreeSlot({
       days,
       availability,
-      blocks,
+      // `occupiedWithFixed` (not bare `blocks`) — see that memo's own header
+      // (S3 fix): a fixed schedule must count as occupied here too, or
+      // "빠른 배치" can drop a task directly on top of one.
+      blocks: occupiedWithFixed,
       durationMin: duration,
     })
     if (slot) placeTaskAt(task, slot)
@@ -1492,12 +1529,17 @@ function WeeklyPage() {
     find nothing (every window still empty) or search against a blocks array
     that's about to change; useSearchParamRequest leaves the param in place
     until `ready` flips true, retrying each render instead of giving up.
+    (No separate `fixedSchedulesQuery`-loading wait: `useFixedSchedules`
+    shares `plan`'s own cache entry — see that hook's own header — so
+    `Boolean(plan)` already covers it.)
   */
   useSearchParamRequest(searchParams, setSearchParams, 'addSchedule', {
     ready: Boolean(plan) && !availQuery.isLoading,
     onFire: () => {
       const slot =
-        findFirstFreeSlot({ days, availability, blocks, durationMin: snapDuration(60) }) ??
+        // `occupiedWithFixed` — see that memo's own header (S3 fix): the
+        // prefilled slot must not land on top of a fixed schedule either.
+        findFirstFreeSlot({ days, availability, blocks: occupiedWithFixed, durationMin: snapDuration(60) }) ??
         // Every day somehow full (an edge case, not the common path) — open
         // the form anyway with a fixed fallback rather than silently doing
         // nothing; the user can still adjust the time before saving.
