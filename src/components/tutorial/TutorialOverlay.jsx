@@ -8,9 +8,11 @@ import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useSession } from '../../features/auth/useAuth'
 import { useOnboardingProgress, useUpdateOnboardingProgress } from '../../features/onboarding/useOnboarding'
 import { useTutorialStep, useTutorialTargets } from '../../features/tutorial/tutorialProgressStore'
-import { useTutorialEvent, TUTORIAL_EVENTS } from '../../features/tutorial/tutorialEvents'
+import { useTutorialEvent } from '../../features/tutorial/tutorialEvents'
 import { TUTORIAL_STEPS } from '../../features/tutorial/tutorialSteps'
 import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
+import { useWeekPlan, UNDO_WINDOW_MS } from '../../features/plan/usePlanData'
+import { currentWeekStartISO } from '../../features/plan/planTime'
 
 const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
 
@@ -60,9 +62,39 @@ const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
        when one matches the CURRENT step's own `event`/`matches` rule
        (tutorialSteps.js), it records whatever `captureTarget` returns (the
        id the NEXT step needs) and advances immediately, no click required.
-       DELETE_SAMPLE (TUT-07) is special-cased inline below, because its own
-       rule tracks TWO ids clearing independently rather than one
-       event/matches pair.
+       DELETE_SAMPLE (TUT-07) does NOT go through this event path at all —
+       see its own block below for why, and for the STATE-based rule that
+       replaces it.
+
+  DELETE_SAMPLE (TUT-07) completion — STATE, not an event log (Thomas code
+  review BLOCKER, fixed 2026-10). The ORIGINAL version accumulated
+  BLOCK_REMOVED events into `targets.removedBlockIds` and treated "every id
+  this run ever recorded has appeared in that accumulated list at least
+  once" as done. That broke in two ways: (a) `useRemoveBlockWithUndo`'s own
+  실행 취소 (undo) recreates the block under a brand-new `planBlockId` without
+  firing any event, so an undone removal still read as "removed" forever —
+  the accumulated list never un-records anything; and (b) the LAST removal
+  satisfied the rule and advanced the very instant it fired, racing ahead of
+  the undo toast's own 6-second window instead of waiting it out.
+
+  The fix judges the CURRENT state of the week's own block list instead of
+  a log of past events: `targets.taskId` (captured at ADD_TASK, step 2 — see
+  tutorialSteps.js) and `targets.scheduleId` (captured at ADD_SCHEDULE, step
+  4) are RESOURCE ids, not block ids — unlike `planBlockId`, a resource id is
+  the SAME before and after an undo-recreate (the server makes a new block
+  but the same task/schedule), so "neither id's block exists in the current
+  weekPlan cache" is naturally un-done the instant an undo's recreate lands,
+  with no event bookkeeping required. `useWeekPlan` below is enabled ONLY
+  while this step is active, which both scopes the extra subscription to
+  exactly when it's useful and makes it REACTIVE — a remove/recreate's own
+  cache writes (optimistic or post-invalidate-refetch) re-render this
+  component the same way they re-render WeeklyPage. Satisfying that state
+  check only ARMS a timer (`UNDO_WINDOW_MS` — the DELETE_SAMPLE effect
+  further below): advancing happens only once that state has held for the
+  WHOLE undo window, and an undo landing before then cancels the pending
+  advance by flipping the state back before the timer fires — fixing (b) as
+  a side effect of fixing (a), since both came from the same root cause
+  (events, not state, used to drive this).
 
   [다음] IS STILL A REAL BUTTON (Button's own disabled/disabledReason
   pattern, gated on `stepSatisfied` below) — but in NORMAL single-tab use a
@@ -84,7 +116,7 @@ const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
   pointing TUT-07's delete instructions at a REAL, unrelated project/task —
   while never permanently trapping the user on an id this run never
   captured. The one case with NOTHING left to verify — DELETE_SAMPLE with
-  BOTH ids missing — does bypass the gate outright (`deleteRequired.length
+  BOTH ids missing — does bypass the gate outright (`deleteRequiredIds.length
   === 0` below): there is no real action left to require.
 */
 export function TutorialOverlay() {
@@ -110,6 +142,16 @@ export function TutorialOverlay() {
   const stepIndex = tutorialStep - 1 // -1 while still at kickoff (tutorialStep 0)
   const activeStep = running && stepIndex >= 0 ? TUTORIAL_STEPS[stepIndex] : null
   const isLast = Boolean(activeStep) && stepIndex === TUTORIAL_STEPS.length - 1
+  const isDeleteStep = activeStep?.key === 'DELETE_SAMPLE'
+  // Subscribed ONLY while DELETE_SAMPLE is active (`enabled`) — see this
+  // file's own header on why this must be REACTIVE rather than a one-off
+  // read, and why `enabled` matters (no reason to pull the week plan into
+  // memory for the other 5 steps). Shares the exact query key WeeklyPage's
+  // own `useWeekPlan(weekStartISO)` call uses while that page is also
+  // mounted (DELETE_SAMPLE's route is `/weekly`), so this is NOT a second
+  // network request — same cache entry, same in-flight fetch, TanStack Query
+  // dedupes by key alone.
+  const weekPlanQuery = useWeekPlan(currentWeekStartISO(), { enabled: isDeleteStep })
 
   // Render-time adjustment (React's own "adjusting state when a value
   // changes" pattern, same shape ProjectsPage's own `tabResolvedForId`
@@ -158,41 +200,63 @@ export function TutorialOverlay() {
   }, [activeStep])
 
   /*
-    DELETE_SAMPLE (TUT-07)의 완료 규칙 — 이 run이 기록한 블록(0~2개) 전부가
-    `removedBlockIds`에 들어왔는지. "기록된" 것만 요구하므로(2개 모두
-    기록됐으면 2개 다, 하나만 기록됐으면 그 하나만) §2의 "너무 엄격하면 하나만
-    지워도 되도록" 우려를 자연스럽게 흡수한다 — 단, 정상 흐름(TUT-05/06을 둘 다
-    실제로 완료한 경우)에서는 둘 다 요구한다: menuItemsFor의 라벨이 TASK는
-    "배치 해제", SCHEDULE은 "일정 삭제"로 다르다는 것 자체가 이 단계의 교육
-    목적이라(tutorialSteps.js 옛 헤더 주석), 하나만 지워도 통과시키면 그
-    구분을 한 번도 안 가르치고 지나갈 수 있다 — 그래서 "완화"는 기록이 아예
-    없는 경우에만 적용하고, 기록된 것은 전부 요구하는 쪽으로 판단했다.
+    DELETE_SAMPLE (TUT-07)의 완료 규칙 — STATE 기반 (B1 fix, see this file's
+    own header for the bug this replaces). `deleteRequiredIds`는 이 run이
+    실제로 기록한 리소스 id만 담는다(0~2개 — §7 스테일 커서는 0개). "기록된"
+    것만 요구하므로(2개 모두 기록됐으면 2개 다, 하나만 기록됐으면 그 하나만)
+    §2의 "너무 엄격하면 하나만 지워도 되도록" 우려를 자연스럽게 흡수한다 — 단,
+    정상 흐름(TUT-05/06을 둘 다 실제로 완료한 경우)에서는 둘 다 요구한다:
+    menuItemsFor의 라벨이 TASK는 "배치 해제", SCHEDULE은 "일정 삭제"로
+    다르다는 것 자체가 이 단계의 교육 목적이라(tutorialSteps.js 옛 헤더
+    주석), 하나만 지워도 통과시키면 그 구분을 한 번도 안 가르치고 지나갈 수
+    있다 — 그래서 "완화"는 기록이 아예 없는 경우에만 적용하고, 기록된 것은
+    전부 요구하는 쪽으로 판단했다.
+
+    `weekPlanQuery.data`가 아직 없으면(첫 fetch 전) 비어 있는 blocks로 읽는
+    대신 명시적으로 미완료 처리한다 — 로딩 중인 빈 배열을 "이미 다 지웠다"로
+    잘못 읽을 수 있기 때문이다.
   */
-  const deleteRequired =
-    activeStep?.key === 'DELETE_SAMPLE' ? [targets.placedBlockId, targets.scheduleBlockId].filter(Boolean) : null
-  const deleteSatisfied = deleteRequired
-    ? deleteRequired.length === 0 || deleteRequired.every((id) => (targets.removedBlockIds ?? []).includes(id))
-    : false
+  const deleteRequiredIds = isDeleteStep
+    ? [
+        targets.taskId ? { field: 'taskId', id: targets.taskId } : null,
+        targets.scheduleId ? { field: 'scheduleId', id: targets.scheduleId } : null,
+      ].filter(Boolean)
+    : null
+  const weekBlocks = weekPlanQuery.data?.blocks
+  const deleteSatisfied =
+    deleteRequiredIds != null &&
+    (deleteRequiredIds.length === 0 ||
+      (Boolean(weekBlocks) && deleteRequiredIds.every(({ field, id }) => !weekBlocks.some((b) => b[field] === id))))
 
   const advance = () => setTutorialStep(stepIndex + 2)
 
+  /*
+    DELETE_SAMPLE 자동 진행의 HOLD — `deleteSatisfied`가 true가 되는 순간
+    바로 넘기지 않고, 기존 실행 취소 토스트 창(UNDO_WINDOW_MS, usePlanData.js
+    에서 재사용)만큼 그 상태가 유지될 때만 advance한다. 그 사이 사용자가
+    「실행 취소」로 블록을 되살리면 — 서버가 recreate를 끝내고 캐시가 그
+    taskId/scheduleId를 다시 "존재함"으로 읽는 순간 — `deleteSatisfied`가
+    스스로 false로 돌아가므로, 이 effect의 cleanup이 아직 안 울린 타이머를
+    취소한다. "그 사이 되살리면 진행을 취소하라"는 요구사항을 이벤트
+    북키핑 없이 state 재계산 하나로 만족한다.
+  */
+  useEffect(() => {
+    if (!isDeleteStep || !deleteSatisfied) return
+    const timer = setTimeout(advance, UNDO_WINDOW_MS)
+    return () => clearTimeout(timer)
+    // `advance`/`stepIndex` deliberately excluded — stable for as long as
+    // this step itself is active (same convention as the navigate effect
+    // above, which excludes `targets`/`navigate` for the identical reason).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDeleteStep, deleteSatisfied])
+
   // 완료 감지 — 저장 성공 이벤트가 CURRENT 단계의 규칙과 맞아떨어지면 바로
-  // 다음 단계로 넘긴다. 이 콜백은 매 렌더 새 클로저를 받아도 안전하다
+  // 다음 단계로 넘긴다. DELETE_SAMPLE은 여기를 거치지 않는다 — 위 state 기반
+  // 체크가 전담한다(그 단계 객체엔 애초에 `.event`가 없어 아래 첫 줄에서
+  // 자연히 걸러진다). 이 콜백은 매 렌더 새 클로저를 받아도 안전하다
   // (useTutorialEvent가 ref로 감싸 구독을 다시 걸지 않는다 — tutorialEvents.js).
   useTutorialEvent(({ type, payload }) => {
     if (!activeStep || isLast) return
-    if (activeStep.key === 'DELETE_SAMPLE') {
-      if (type !== TUTORIAL_EVENTS.BLOCK_REMOVED) return
-      const required = deleteRequired ?? []
-      if (!required.includes(payload.planBlockId)) return
-      const removed = Array.from(new Set([...(targets.removedBlockIds ?? []), payload.planBlockId]))
-      patchTargets({ removedBlockIds: removed })
-      if (required.every((id) => removed.includes(id))) {
-        setGateSatisfied(true)
-        advance()
-      }
-      return
-    }
     if (type !== activeStep.event) return
     if (!activeStep.matches(payload, targets)) return
     if (activeStep.captureTarget) patchTargets(activeStep.captureTarget(payload))
@@ -269,14 +333,18 @@ export function TutorialOverlay() {
   // why TUT-05's `targetId` is a function of `targets` rather than a fixed id.
   const resolvedTargetId =
     typeof activeStep.targetId === 'function' ? activeStep.targetId(targets) : activeStep.targetId
-  const stepSatisfied = isLast || (activeStep.key === 'DELETE_SAMPLE' ? deleteSatisfied : gateSatisfied)
+  // Same function-or-string shape — DELETE_SAMPLE's `body` (tutorialSteps.js,
+  // Thomas SHOULD-FIX) names only what this run actually recorded, which
+  // only `targets` (read at render time) can answer.
+  const resolvedBody = typeof activeStep.body === 'function' ? activeStep.body(targets) : activeStep.body
+  const stepSatisfied = isLast || (isDeleteStep ? deleteSatisfied : gateSatisfied)
   const nextDisabled = !isLast && !stepSatisfied
 
   return (
     <Coachmark
       targetId={resolvedTargetId}
       title={activeStep.title}
-      body={activeStep.body}
+      body={resolvedBody}
       stepNumber={stepIndex + 1}
       total={TUTORIAL_STEPS.length}
       isLast={isLast}

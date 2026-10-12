@@ -55,7 +55,15 @@ export const unplacedTasksKey = (projectId = null) => ['unplacedTasks', projectI
 
 const WEEK_STALE_MS = 60 * 1000
 
-export function useWeekPlan(weekStartISO) {
+/**
+ * `enabled` (default true) lets a caller that only sometimes needs this cache
+ * subscribe WITHOUT forcing a fetch/prefetch while it doesn't — e.g.
+ * TutorialOverlay only cares about this query while its own DELETE_SAMPLE
+ * step is active (see that file's own header on the B1 fix this unlocked),
+ * and would otherwise pull the week plan into memory for every tutorial
+ * step, including the ones with nothing to do with it.
+ */
+export function useWeekPlan(weekStartISO, { enabled = true } = {}) {
   const queryClient = useQueryClient()
 
   const query = useQuery({
@@ -63,10 +71,14 @@ export function useWeekPlan(weekStartISO) {
     queryFn: () => getWeek(weekStartISO),
     placeholderData: keepPreviousData,
     staleTime: WEEK_STALE_MS,
+    enabled,
   })
 
   // Prefetch the adjacent weeks so ‹ › navigation is instant (PLAN-02 AC-2).
+  // Skipped while `enabled` is false — a caller that opted out of even the
+  // PRIMARY fetch above has no use for its neighbors either.
   useEffect(() => {
+    if (!enabled) return
     for (const delta of [-1, 1]) {
       const iso = addWeeksISO(weekStartISO, delta)
       queryClient.prefetchQuery({
@@ -75,7 +87,7 @@ export function useWeekPlan(weekStartISO) {
         staleTime: WEEK_STALE_MS,
       })
     }
-  }, [weekStartISO, queryClient])
+  }, [weekStartISO, queryClient, enabled])
 
   return query
 }
@@ -557,7 +569,12 @@ export function useResizeBlock() {
   )
 }
 
-const UNDO_WINDOW_MS = 6000
+// Exported — TutorialOverlay's DELETE_SAMPLE completion check (B1 code
+// review fix) deliberately waits out this SAME window before trusting a
+// "cleaned up" state, so a toast's still-live 실행 취소 action can still flip
+// it back. Duplicating the literal there would silently drift the moment
+// either number changed on its own.
+export const UNDO_WINDOW_MS = 6000
 
 /**
  * Returns `removeBlock({ weekStartISO, weeklyPlanId, block, mode, claim })` — a
@@ -732,8 +749,15 @@ export function useCreateScheduleBlock() {
       toast({ tone: 'success', message: '일정을 추가했습니다' })
       // SCHEDULE 블록 생성 — PlanBlockService.createBlock이 항상 대기열에 적는다.
       scheduleCalendarSync()
-      // TUT-06 완료 신호 — see useCreateProject's own comment.
-      emitTutorialEvent(TUTORIAL_EVENTS.SCHEDULE_CREATED, { planBlockId: data?.planBlockId })
+      // TUT-06 완료 신호 — see useCreateProject's own comment. `scheduleId`
+      // (not just `planBlockId`) rides along because TUT-07's completion
+      // check (TutorialOverlay, B1 fix) judges by the SAMPLE SCHEDULE's
+      // resource id, which survives a recreate-via-undo with a NEW
+      // planBlockId — see that file's own header for why.
+      emitTutorialEvent(TUTORIAL_EVENTS.SCHEDULE_CREATED, {
+        planBlockId: data?.planBlockId,
+        scheduleId: data?.scheduleId,
+      })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })

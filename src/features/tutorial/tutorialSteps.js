@@ -112,9 +112,12 @@ export const TUTORIAL_STEPS = [
     nextDisabledReason: '먼저 태스크를 캘린더에 배치해 보세요',
     event: TUTORIAL_EVENTS.TASK_PLACED,
     matches: (payload, targets) => !targets.taskId || payload.taskId === targets.taskId,
-    // `planBlockId`가 없을 수 있다(자동 배치 배치 경로 — tutorialEvents.js
-    // 헤더 참고) — 그 경우 TUT-07이 이 블록을 지울 대상으로 요구하지 않는다
-    // (WeeklyPage의 DELETE_SAMPLE 특수 분기, "recorded ids만 요구").
+    // `placedBlockId` only feeds DELETE_SAMPLE's cosmetic `highlightBlocks`
+    // hint (buildSearch below on that step) — it can be null on the
+    // auto-place path (tutorialEvents.js header) without weakening TUT-07's
+    // actual completion check, which keys off `targets.taskId` (captured at
+    // ADD_TASK, unaffected by which placement path was used — B1/S4 fix,
+    // TutorialOverlay.jsx header) rather than this block id.
     captureTarget: (payload) => ({ placedBlockId: payload.planBlockId ?? null }),
   },
   {
@@ -127,7 +130,11 @@ export const TUTORIAL_STEPS = [
     nextDisabledReason: '먼저 일정을 추가해 보세요',
     event: TUTORIAL_EVENTS.SCHEDULE_CREATED,
     matches: () => true,
-    captureTarget: (payload) => ({ scheduleBlockId: payload.planBlockId ?? null }),
+    // `scheduleBlockId` keeps feeding DELETE_SAMPLE's `highlightBlocks`
+    // request below (a point-at-this-block hint, cosmetic). `scheduleId` is
+    // the actual completion key (B1 fix) — see TutorialOverlay.jsx's header
+    // for why a `planBlockId` alone can't survive an undo-recreate.
+    captureTarget: (payload) => ({ scheduleBlockId: payload.planBlockId ?? null, scheduleId: payload.scheduleId ?? null }),
   },
   {
     key: 'DELETE_SAMPLE', // TUT-07
@@ -135,18 +142,40 @@ export const TUTORIAL_STEPS = [
     // WeeklyPage reads this once and fires its OWN existing PLAN-23 focus-ring
     // (the same highlight "검토 항목 선택"/"블록 클릭" already use) at
     // whichever of these two ids is still present in the current week's
-    // blocks — see that file's own comment on `highlightBlocks`.
+    // blocks — see that file's own comment on `highlightBlocks`. Cosmetic
+    // only: the actual completion judgment (TutorialOverlay.jsx) keys off
+    // `targets.taskId`/`targets.scheduleId` instead, not these block ids.
     buildSearch: (targets) => {
       const ids = [targets.placedBlockId, targets.scheduleBlockId].filter(Boolean)
       return ids.length > 0 ? `highlightBlocks=${ids.join(',')}` : ''
     },
     targetId: null,
     title: '연습으로 만든 블록을 정리해 보세요',
-    body: '방금 만든 블록이 캘린더에서 강조됩니다. 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) 태스크는 [배치 해제]로, 일정은 [일정 삭제]로 정리해 보세요.',
+    // A FUNCTION (like `targetId`/`buildSearch` above), not a static string —
+    // Thomas code review SHOULD-FIX: the copy must name only what this run
+    // actually recorded (a stale §7 cursor may be missing one of the two, or
+    // even both), not always claim "태스크는... 일정은..." regardless.
+    body: (targets) => {
+      const hasTask = Boolean(targets.taskId)
+      const hasSchedule = Boolean(targets.scheduleId)
+      if (hasTask && hasSchedule) {
+        return '방금 만든 블록이 캘린더에서 강조됩니다. 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) 태스크는 [배치 해제]로, 일정은 [일정 삭제]로 정리해 보세요.'
+      }
+      if (hasTask) {
+        return '방금 배치한 태스크 블록이 캘린더에서 강조됩니다. 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) [배치 해제]로 정리해 보세요.'
+      }
+      if (hasSchedule) {
+        return '방금 만든 일정 블록이 캘린더에서 강조됩니다. 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) [일정 삭제]로 정리해 보세요.'
+      }
+      // 둘 다 기록이 없다(§7 스테일 커서) — 가리킬 블록이 없으므로 기능
+      // 설명만 한다 (TutorialOverlay의 bypass 규칙과 짝을 이룬다).
+      return '캘린더의 블록에서 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) 태스크는 [배치 해제]로, 일정은 [일정 삭제]로 정리할 수 있습니다.'
+    },
     nextDisabledReason: '먼저 방금 만든 블록을 정리해 보세요',
     // TutorialOverlay 특수 분기 전용 — 이 다섯 단계와 같은 단일 event/matches
-    // 모양이 아니라 "이 run이 기록한 블록(0~2개) 전부 제거" 규칙이다. 그
-    // 이유(둘 다 요구하는 쪽을 택한 근거 포함)는 TutorialOverlay.jsx 헤더.
+    // 모양이 아니라 상태 기반 규칙이다("이 run이 기록한 taskId/scheduleId가
+    // 전부 현재 weekPlan 캐시에서 사라졌는가"). 그 이유(이벤트 로그 누적 방식을
+    // 버린 이유 포함)는 TutorialOverlay.jsx 헤더.
   },
   {
     key: 'COMPLETE', // TUT-08

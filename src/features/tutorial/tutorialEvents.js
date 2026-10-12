@@ -25,7 +25,9 @@ import { useEffect, useRef } from 'react'
     - useApplyAutoPlace     → TASK_PLACED      { taskId } (per placement — an
       auto-place batch can commit several tasks at once, and the tutorial only
       cares that SOME task matching its own saved id landed)
-    - useCreateScheduleBlock→ SCHEDULE_CREATED { planBlockId }
+    - useCreateScheduleBlock→ SCHEDULE_CREATED { planBlockId, scheduleId }
+      (`scheduleId` added for the B1 completion-check fix — see
+      usePlanData.js's own emit call and TutorialOverlay.jsx's header)
     - useRemoveBlockWithUndo→ BLOCK_REMOVED    { planBlockId } (both 배치 해제
       and 일정 삭제 funnel through this one hook — see its own header)
 
