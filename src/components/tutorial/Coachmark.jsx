@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '../common/Button'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useIsDesktop, useMediaQuery } from '../../hooks/useMediaQuery'
 import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
 import { getOverlayStackSnapshot, subscribeOverlayStack } from '../../utils/overlayStack'
 
@@ -134,15 +134,28 @@ function useViewportWidth() {
   interacting with the real page (click the highlighted button, drag a task)
   while this floats on top — only the panel's own buttons capture focus/clicks.
 
-  MODAL-AWARE (owner report, production/운영): this component's own z-[70]/
-  z-[71] sit ABOVE Dialog/BottomSheet's z-50 — exactly the stacking a
-  tooltip-style coachmark needs so its ring can sit over a real page button,
-  but it also meant the ProjectCreateForm/TaskCreateForm modals TUT-03/04
-  themselves tell the user to open rendered UNDER this panel, with the ring
-  and instructions floating uselessly on top of the user's own form. Hidden
-  (not unmounted — see the render guard below) for as long as
-  utils/overlayStack.js reports ANY Dialog/BottomSheet open, reappearing on
-  its own the instant the last one closes.
+  MODAL-AWARE, THIRD SHAPE (owner report #78, 2026-10 — supersedes the #74
+  design this replaces): this component's own z-[70]/z-[71] sit ABOVE
+  Dialog/BottomSheet's z-50 — exactly the stacking a tooltip-style coachmark
+  needs so its ring can sit over a real page button — which ALSO meant the
+  ProjectCreateForm/TaskCreateForm modals TUT-03/04/06 themselves auto-open
+  rendered UNDER this panel, with the ring and instructions floating
+  uselessly on top of the user's own form. The #74 fix was to hide this
+  component ENTIRELY while any modal was open (utils/overlayStack.js) — which
+  traded "floating uselessly on top" for "no guidance at all while the user
+  is actually filling in the form", the exact moment guidance matters most
+  (owner report: "폼이 자동으로 열리면 튜토리얼 메시지가 안 보인다").
+
+  The fix is a THIRD render shape, not a toggle between the two above: a
+  slim, INFORMATION-ONLY strip pinned to the very top of the viewport,
+  ABOVE the modal (z-[80], still higher than Dialog/BottomSheet's z-50),
+  shown for as long as `modalOpen` — see the render branch below for the
+  full reasoning (sizing, pointer-events, focus/ARIA trade-offs). The
+  anchored/un-anchored shapes above are UNCHANGED and resume the instant
+  `modalOpen` goes false (same instance — see the render guard below, this
+  component is never unmounted while a modal opens/closes, so its own
+  internal state — `useTargetRect`'s poll, the focus-steal effect — keeps
+  running quietly underneath exactly as it already did pre-#78).
 */
 export function Coachmark({
   targetId,
@@ -177,6 +190,11 @@ export function Coachmark({
   // exact store for (see that file's header).
   const stackSnapshot = useSyncExternalStore(subscribeOverlayStack, getOverlayStackSnapshot)
   const modalOpen = stackSnapshot.length > 0
+  // Same breakpoint WeeklyPage's own D4 fold-handling already uses for "not
+  // enough vertical room to show everything" — reused here (not a new
+  // threshold) so the top strip's own body line drops at the SAME point a
+  // short/landscape viewport already starts trimming other floating chrome.
+  const shortViewport = useMediaQuery('(max-height: 480px)')
 
   // Move focus/SR-announce to the new step's heading, same reasoning
   // ErrorState's `page` variant gives for doing the same on mount — EXCEPT
@@ -227,11 +245,80 @@ export function Coachmark({
       })()
     : { position: 'fixed', left: '50%', bottom: fallbackBottom, width: panelWidth, transform: 'translateX(-50%)' }
 
-  // Hidden, not unmounted: `useTargetRect`'s poll/listeners and the focus
-  // effect above keep running quietly while a modal is open, so the moment
-  // it closes this reappears in place on the SAME instance — no remount,
-  // no fresh focus-steal, no re-measuring flash.
-  if (modalOpen) return null
+  // Not hidden anymore, not unmounted either (#78 fix — see this file's own
+  // header): `useTargetRect`'s poll/listeners and the focus-steal effect
+  // above keep running quietly underneath this branch exactly as they did
+  // when this used to return null, so the moment the modal closes the
+  // anchored shape below reappears in place on the SAME instance — no
+  // remount, no fresh focus-steal, no re-measuring flash.
+  if (modalOpen) {
+    return createPortal(
+      <div
+        // `role="status"` (implicit `aria-live="polite"` + `aria-atomic="true"`
+        // — explicit `aria-live` kept alongside it for clarity, not because
+        // it adds anything `role="status"` doesn't already imply) so a
+        // SCREEN READER announces the step changing while the modal is open,
+        // not just while the anchored panel is visible.
+        //
+        // BEST-EFFORT, NOT GUARANTEED (this file's own header, and the task
+        // that added this branch, both flag this): this strip is a sibling
+        // of the Dialog/BottomSheet's own portal under `document.body`, OUTSIDE
+        // that modal's `aria-modal="true"` subtree. Per the ARIA modal
+        // pattern, assistive tech is expected to treat everything outside an
+        // open modal's subtree as inert while it's open — in practice this
+        // codebase's Dialog/BottomSheet never actually applies `aria-hidden`/
+        // `inert` to the REST of the page to enforce that (no such code in
+        // either component), so most screen readers (NVDA/JAWS + Firefox/
+        // Chrome, VoiceOver in most configurations) DO still announce a
+        // body-level live region like this one even while focus is trapped
+        // inside the modal — but a fully spec-compliant AT that hides
+        // everything outside the modal subtree could legitimately suppress
+        // it. Closing that gap for certain would mean rendering this text
+        // INSIDE Dialog/BottomSheet's own DOM subtree, which would require
+        // those two shared, tutorial-agnostic components to know about the
+        // tutorial specifically — a coupling judged not worth it for a
+        // best-effort, not safety-critical, announcement (the step's own
+        // instructions are still fully available the moment the modal
+        // closes, same as before this change).
+        role="status"
+        aria-live="polite"
+        className={[
+          // Highest z-layer in the app on purpose — above Dialog/BottomSheet's
+          // OWN z-50 content AND their z-50 backdrop (same stacking context,
+          // so no separate "above the backdrop, below the content" layer is
+          // needed). `pointer-events-none`: this strip is READ-ONLY — see
+          // this file's own header for why [건너뛰기]/[다음]/[이전] stay on the
+          // anchored panel instead of living here too (would sit above the
+          // modal's own backdrop click-catcher/focus trap and risks being
+          // mistaken for part of the form).
+          'pointer-events-none fixed inset-x-0 top-0 z-[80] flex flex-col items-center gap-0.5',
+          'bg-brand-700 px-4 text-center text-caption text-white shadow-popover',
+          // `env(safe-area-inset-top)` (#68 D2 convention — see MobileTopBar's
+          // own identical `pt-[env(safe-area-inset-top)]`) keeps this clear of
+          // a notch/status bar on mobile. Kept DELIBERATELY SHORT (small
+          // vertical padding, one or two lines of `text-caption`, no icon/
+          // close button) — see this file's own header on why minimizing this
+          // strip's own height is the chosen mitigation against covering a
+          // tall Dialog/BottomSheet's own top content, rather than teaching
+          // those two shared components to reserve space for it.
+          'py-1.5 pt-[calc(0.375rem+env(safe-area-inset-top))]',
+        ].join(' ')}
+      >
+        <span className="font-medium">
+          {t.progressLabel(stepNumber, total)} · {title}
+        </span>
+        {/* Dropped on a short/landscape viewport (`shortViewport` above) —
+            the step+title line alone is already the load-bearing part (it is
+            what tells the user "this form IS the tutorial step"); the fuller
+            instructions are redundant with the form's own labels in a pinch
+            and the first thing worth shedding to keep this strip from
+            crowding a Dialog/BottomSheet that is ALSO fighting for vertical
+            room on the same short screen. */}
+        {!shortViewport && <span className="text-white/90">{body}</span>}
+      </div>,
+      document.body,
+    )
+  }
 
   return createPortal(
     <>
