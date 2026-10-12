@@ -10,7 +10,7 @@ import { OvlAccountDeactivate } from '../../components/auth/OvlAccountDeactivate
 import { OvlAccountReactivate } from '../../components/auth/OvlAccountReactivate'
 import { deriveReactivationInfo } from '../../features/auth/reactivationInfo'
 import { useLogout } from '../../features/auth/useAuth'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import {
   useAccount,
   useUpdateAccount,
@@ -29,7 +29,8 @@ function formatDateKO(iso) {
 }
 
 function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', onClose, onConfirm, submitting }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const confirmRef = useRef(null)
 
@@ -67,7 +68,8 @@ function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', 
 // 이름 변경 (오너 리뷰 3차, item 5). ProjectManageForm 등 이 코드베이스의 다른
 // 폼과 같은 모양: 폼 자체 state는 로컬, 서버 왕복은 useUpdateAccount 하나.
 function NameEditDialog({ currentName, onClose, onSubmit, submitting }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const inputRef = useRef(null)
   const [name, setName] = useState(currentName)

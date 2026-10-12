@@ -5,7 +5,7 @@ import { Button } from '../common/Button'
 import { ErrorState } from '../common/ErrorState'
 import { Skeleton } from '../common/Skeleton'
 import { UnplacedTaskCard } from './UnplacedTaskCard'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 
 /*
@@ -178,7 +178,11 @@ export function UnplacedPanel({
   heightBound,
   ...bodyProps
 }) {
-  const isDesktop = useIsDesktop()
+  // D1: open prop으로 상시 마운트된 채 토글됨 — 데스크톱의 움직일 수 있는
+  // 플로팅 카드와 모바일 BottomSheet는 구조가 완전히 다르므로, 패널이 열려
+  // 있는 동안 폴드 펼침/접힘으로 바뀌면 드래그해 둔 위치가 날아간다. 열리는
+  // 시점에 고정한다.
+  const isDesktop = useLockedIsDesktop(open)
   const reducedMotion = useReducedMotion()
 
   // Desktop panel is a movable floating card (so it never permanently covers the

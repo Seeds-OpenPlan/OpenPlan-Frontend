@@ -4,7 +4,7 @@ import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { ErrorState } from '../common/ErrorState'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useSessionStore } from '../../features/auth/sessionStore'
 import { useLogin } from '../../features/auth/useAuth'
 
@@ -39,7 +39,6 @@ const FIELD =
   첫 진입은 여기가 아니라 로그인 화면으로 간다(sessionStore.js 헤더 참조).
 */
 export function SessionExpiredOverlay() {
-  const isDesktop = useIsDesktop()
   const titleId = useId()
   const emailRef = useRef(null)
   const expired = useSessionStore((s) => s.expired)
@@ -47,6 +46,10 @@ export function SessionExpiredOverlay() {
   const resolve = useSessionStore((s) => s.resolve)
   const navigate = useNavigate()
   const loginMutation = useLogin()
+  // D1: `expired`가 이 오버레이의 "open" 신호다 — 세션이 만료된 동안 폴드
+  // 펼침/접힘으로 Dialog↔BottomSheet가 바뀌어 입력 중이던 비밀번호가
+  // 날아가지 않게, 만료되는 시점의 셸로 고정한다.
+  const isDesktop = useLockedIsDesktop(expired)
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
