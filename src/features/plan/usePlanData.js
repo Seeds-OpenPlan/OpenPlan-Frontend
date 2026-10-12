@@ -44,6 +44,7 @@ import { dashboardKey } from '../dashboard/useDashboard'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
 import { scheduleCalendarSync } from '../calendar/useCalendarSync'
+import { emitTutorialEvent, TUTORIAL_EVENTS } from '../tutorial/tutorialEvents'
 
 export const weekPlanKey = (weekStartISO) => ['weekPlan', weekStartISO]
 export const availabilityKey = () => ['availability']
@@ -344,6 +345,10 @@ export function usePlaceTask() {
           // soon as the POST resolves, so the block becomes a first-class,
           // interactable block without waiting on the refetch (temp-id race fix).
           const realId = result?.planBlockId
+          // TUT-05 완료 신호 — tutorialEvents.js 헤더 참고. 드래그/빠른 배치/
+          // 「여기에 배치」 메뉴가 전부 이 한 콜백을 통과하므로(WeeklyPage.
+          // placeTaskAt) 호출 경로별로 따로 걸 필요가 없다.
+          emitTutorialEvent(TUTORIAL_EVENTS.TASK_PLACED, { taskId: task.taskId, planBlockId: realId ?? null })
           if (!realId) return
           // Cancel a stale in-flight refetch before writing (see this hook's
           // header) so it can't land after this reconcile and revert it.
@@ -443,12 +448,20 @@ export function useApplyAutoPlace() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ weeklyPlanId, placements }) => postBlockBatch(weeklyPlanId, placements),
-    onSuccess: (_data, { weekStartISO }) => {
+    onSuccess: (_data, { weekStartISO, placements }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       queryClient.invalidateQueries({ queryKey: ['unplacedTasks'] })
       // 일괄 배치는 SCHEDULE 블록도 섞일 수 있다(자동 배치가 항상 TASK만
       // 배치한다는 보장이 이 계층에 없다) — 가리지 않고 매번 건다.
       scheduleCalendarSync()
+      // TUT-05 완료 신호 — 일반 튜토리얼 안내(드래그)와는 다른 경로지만,
+      // 사용자가 그 대신 자동 배치를 눌러도 같은 태스크가 배치됐다면 똑같이
+      // 완료로 쳐야 한다. 이 응답은 블록별 planBlockId를 안 주므로 그 필드는
+      // 비운다 — TUT-07은 "기록된 id만 요구"(WeeklyPage 주석)라 비어 있는
+      // 경우를 이미 감당한다.
+      for (const p of placements ?? []) {
+        if (p.taskId) emitTutorialEvent(TUTORIAL_EVENTS.TASK_PLACED, { taskId: p.taskId, planBlockId: null })
+      }
     },
     onError: () => {
       toast({ tone: 'error', message: systemMessages.error.writeTitle })
@@ -610,6 +623,11 @@ export function useRemoveBlockWithUndo() {
             // 대기열에 아무것도 적지 않으므로(PlanBlockService.deleteBlock의
             // SCHEDULE 분기 참조) 그 경로는 그냥 건너뛴다.
             if (!isUnplace) scheduleCalendarSync()
+            // TUT-07 완료 신호 — 배치 해제·일정 삭제가 전부 이 한 경로를
+            // 지난다(이 함수 자신의 헤더). 실제 서버 삭제가 끝난 지금 시점에
+            // 거는 것이 중요하다 — 낙관적 캐시 필터는 이미 위에서 끝났지만,
+            // 그건 "아직 서버에 확인 안 된" 상태라 여기서 거는 것과 다르다.
+            emitTutorialEvent(TUTORIAL_EVENTS.BLOCK_REMOVED, { planBlockId: current.planBlockId })
           })
           .catch(() => {
             queryClient.setQueryData(weekKey, prevWeek)
@@ -709,11 +727,13 @@ export function useCreateScheduleBlock() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ weeklyPlanId, body }) => postScheduleBlock(weeklyPlanId, body),
-    onSuccess: (_data, { weekStartISO }) => {
+    onSuccess: (data, { weekStartISO }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       toast({ tone: 'success', message: '일정을 추가했습니다' })
       // SCHEDULE 블록 생성 — PlanBlockService.createBlock이 항상 대기열에 적는다.
       scheduleCalendarSync()
+      // TUT-06 완료 신호 — see useCreateProject's own comment.
+      emitTutorialEvent(TUTORIAL_EVENTS.SCHEDULE_CREATED, { planBlockId: data?.planBlockId })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
