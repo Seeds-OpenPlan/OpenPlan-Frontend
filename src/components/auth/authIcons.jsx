@@ -2,10 +2,14 @@
   Inline SVG icons for the ST-F1-14 auth screens. Two different fidelity
   levels, deliberately:
 
-  - `BrandMarkIcon` follows this codebase's existing icon convention
-    (currentColor stroke, aria-hidden, no icon package — statusIcons.jsx's own
-    header) since it's OUR OWN brand mark and must ride the same token scale
-    as everything else.
+  - `BrandMarkIcon` is a thin re-export of the shared `AppIcon` (the owner's
+    confirmed app icon — a single centered ring — also used for the PWA/store
+    icons and the top bar). It used to be its own placeholder glyph (a plan/list icon)
+    before the app icon design was finalized; now that the real mark exists,
+    every brand-mark spot should show the SAME icon rather than two different
+    marks that both claim to represent OpenPlan. Kept as a wrapper (not
+    inlined at the AuthShell call site) so AuthShell's existing `<BrandMarkIcon />`
+    usage stays unchanged.
   - The three social provider glyphs below are a DELIBERATE EXCEPTION to the
     "100% tokens, zero hardcoded colors" rule: Google/Naver/Kakao's own
     button guidelines require rendering THEIR brand colors exactly, not
@@ -15,27 +19,12 @@
     codebase references them.
 */
 
-const strokeBase = {
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 2,
-  strokeLinecap: 'round',
-  strokeLinejoin: 'round',
-  'aria-hidden': 'true',
-}
+import { AppIcon } from '../common/AppIcon'
 
-// SCR-LANDING / SCR-AUTH-* header mark — rounded square + three lines, echoing
-// Mobile.Login.png's icon square (a plan/list glyph, tying the mark back to
-// "실행 가능한 계획" rather than an arbitrary abstract shape).
+// SCR-LANDING / SCR-AUTH-* header mark. See intro above — this now renders
+// the real, owner-confirmed app icon instead of a bespoke placeholder glyph.
 export function BrandMarkIcon({ className, size = 56 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 56 56" aria-hidden="true" className={className}>
-      <rect width="56" height="56" rx="14" fill="var(--color-brand-600)" />
-      <g {...strokeBase} stroke="white" strokeWidth={3}>
-        <path d="M17 20h22M17 28h22M17 36h14" />
-      </g>
-    </svg>
-  )
+  return <AppIcon className={className} size={size} />
 }
 
 // Google "G" — standard 4-color mark, widely reused path data for
