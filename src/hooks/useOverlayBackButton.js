@@ -21,8 +21,13 @@ import {
   `history.back()`을 부르는 경우가 있다(overlayHistory.js 헤더의 "스택 0 판정 지연"
   참고). 그 popstate가 이 리스너에 도착했을 때 "사용자가 뒤로 가기를 눌렀다"로 오인하면
   전혀 무관하게 그 사이 열린 다른 오버레이를 닫아 버린다 — `isSelfInitiatedPopstate`가
-  바로 그 구분이다(모든 인스턴스가 같은 이벤트에 같은 답을 받는 조회 함수; 그 파일
-  자신의 헤더가 `stopImmediatePropagation` 대신 이 방식을 택한 이유를 설명한다).
+  바로 그 구분이다. 판정 자체(idx 매칭·소비)는 이 훅이 아니라 overlayHistory.js의 상시
+  전역 리스너가 **오버레이가 열려 있는지와 무관하게 모든 popstate**에 대해 내린다
+  (PR 리뷰 B1 — 예전에는 이 훅의 리스너가 판정을 "소비"했는데, 그 리스너는 오버레이가
+  열려 있을 때만 붙어 있어서 스택이 0일 때 도착하는 self-back popstate를 아무도 소비하지
+  못해 판정이 영구히 샜다). 이 훅은 그 전역 리스너가 이벤트 자신에게 캐시해 둔 답을
+  **읽기만** 한다 — 리스너 등록 순서와 무관하게 항상 같은 답을 받는다(그 파일 자신의
+  헤더가 `stopImmediatePropagation` 대신 이 방식을 택한 이유도 설명한다).
 */
 export function useOverlayBackButton(overlayId, open, onCloseRef) {
   useEffect(() => {

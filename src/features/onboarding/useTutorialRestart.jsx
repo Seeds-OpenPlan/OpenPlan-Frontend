@@ -8,6 +8,7 @@ import { useSession } from '../auth/useAuth'
 import { useUpdateOnboardingProgress } from './useOnboarding'
 import { resetTutorialStep } from '../tutorial/tutorialProgressStore'
 import { onboardingCopy } from './onboardingCopy'
+import { suppressPendingSelfBack } from '../../utils/overlayHistory'
 
 const TITLE_ID = 'tutorial-restart-title'
 
@@ -75,6 +76,13 @@ export function useTutorialRestart() {
       {
         onSuccess: () => {
           resetTutorialStep(sessionQuery.data?.userId)
+          // 이 다이얼로그를 닫은 것(맨 위 setConfirmOpen(false))과 PATCH 성공 뒤의 이동이
+          // 겹치는 경우다 — overlayHistory.js의 self-back() 지연 재확인 창(두 프레임)보다
+          // 이 PATCH가 더 오래 걸리면(실 네트워크 왕복) 재확인이 먼저 self-back()을 불러
+          // 버려, 뒤이은 이 navigate('/')가 그 back()과 경합해 킥오프 다이얼로그가 0.1초
+          // 보였다가 사라지는 사고(TUT-09, owner 리뷰 S2)로 이어질 수 있다. navigate()
+          // 바로 앞에서 알려 그 재확인이 포기하게 한다.
+          suppressPendingSelfBack()
           navigate('/')
         },
       },

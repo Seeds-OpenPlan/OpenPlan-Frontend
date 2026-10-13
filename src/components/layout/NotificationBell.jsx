@@ -9,6 +9,7 @@ import {
   useUnreadNotificationCount,
   useMarkNotificationRead,
 } from '../../features/notifications/useNotifications'
+import { suppressPendingSelfBack } from '../../utils/overlayHistory'
 
 const PANEL_TITLE_ID = 'notification-panel-title'
 
@@ -93,6 +94,11 @@ export function NotificationBell() {
   const handleItemClick = (notification) => {
     if (!notification.readAt) markRead.mutate(notification.notificationId)
     setOpen(false)
+    // 모바일에서는 이 패널이 BottomSheet(오버레이 스택 등록 대상)다 — 닫기와 다른
+    // pathname으로의 이동이 겹치는 "닫기+이동" 경합(owner 리뷰 S2)을 피하려면
+    // navigate() 앞에서 알려야 한다. 데스크톱의 비모달 드롭다운은 오버레이 스택에
+    // 등록되지 않으므로 여기서는 그냥 아무 효과 없는 호출이다(안전).
+    suppressPendingSelfBack()
     if (notification.routePath) navigate(notification.routePath)
   }
 
@@ -100,6 +106,7 @@ export function NotificationBell() {
   // 패널부터 닫아야 뒤에 남은 드롭다운/시트가 없다.
   const openNotificationSettings = () => {
     setOpen(false)
+    suppressPendingSelfBack() // 위 handleItemClick과 같은 이유(S2) — 모바일 BottomSheet 한정
     navigate('/settings/notifications')
   }
 
