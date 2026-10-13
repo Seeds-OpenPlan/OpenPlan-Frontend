@@ -22,12 +22,6 @@ import { toast } from '../../hooks/useToasts'
 const FIELD =
   'w-full rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring'
 
-function formatDateKO(iso) {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return String(iso)
-  return d.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
-}
-
 function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', onClose, onConfirm, submitting }) {
   // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
   const isDesktop = useLockedIsDesktop()
@@ -211,10 +205,6 @@ function SettingsAccountPage() {
         <div className="flex flex-col gap-1">
           <span className="text-caption text-text-muted">이메일</span>
           <span className="text-label text-text">{account.email}</span>
-        </div>
-        <div className="flex flex-col gap-1">
-          <span className="text-caption text-text-muted">가입일</span>
-          <span className="text-label text-text">{formatDateKO(account.createdAt)}</span>
         </div>
       </section>
 

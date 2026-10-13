@@ -121,7 +121,10 @@ const flakyRetried = new Set()
 let account = {
   name: '오픈플랜 사용자',
   email: 'user@openplan.dev',
-  createdAt: '2026-03-02T00:00:00.000Z',
+  // createdAt은 여기 두지 않는다 — 계약 UserProfile(openapi.yaml ~2494행)에
+  // 이 필드가 없어 실서버는 항상 값을 주지 않는다(오너 결정: BE를 바꾸지
+  // 않고 화면에서 가입일 항목 자체를 숨긴다, SettingsAccountPage.jsx 참고).
+  // mock도 계약과 다른 필드를 들고 있으면 안 되므로 함께 제거했다.
   status: 'ACTIVE', // 'ACTIVE' | 'DEACTIVATED'
   deactivatedAt: null,
   // ACCT-04/05가 다루는 "복구 기한"의 자리만 잡아 둠 — 실제 문구/일수는 ST-F1-14
