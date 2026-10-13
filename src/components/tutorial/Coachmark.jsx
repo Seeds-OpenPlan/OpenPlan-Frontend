@@ -79,8 +79,10 @@ function isRenderedRect(rect) {
   return rect.width > 0 || rect.height > 0
 }
 
+const NOT_FOUND = { rect: null, insideModal: false }
+
 function useTargetRect(targetId) {
-  const [rect, setRect] = useState(null)
+  const [found, setFound] = useState(NOT_FOUND)
 
   useEffect(() => {
     if (!targetId) return undefined
@@ -101,15 +103,26 @@ function useTargetRect(targetId) {
         way, with no per-step special-casing here.
       */
       const candidates = document.querySelectorAll(`[data-tut-id="${targetId}"]`)
-      let found = null
-      for (const el of candidates) {
-        const r = el.getBoundingClientRect()
+      let rect = null
+      let el = null
+      for (const candidate of candidates) {
+        const r = candidate.getBoundingClientRect()
         if (isRenderedRect(r)) {
-          found = r
+          rect = r
+          el = candidate
           break
         }
       }
-      setRect(found)
+      // `insideModal` (owner report #78, 2026-10: 3-2단계 — 미배치 패널 안의
+      // 태스크 카드) — whether the FOUND element lives inside a CURRENTLY
+      // OPEN Dialog/BottomSheet (both render `role="dialog"` on their own
+      // container, see those files' own markup). This is NOT the same
+      // question as `modalOpen` below (any overlay open ANYWHERE) — a
+      // target that is ITSELF part of the open overlay (the mobile
+      // unplaced-panel's own BottomSheet) must still get its ring, while a
+      // target merely COVERED by an UNRELATED modal (TUT-03's own button,
+      // now hidden under its own just-opened create form) must not.
+      setFound({ rect, insideModal: rect ? Boolean(el.closest('[role="dialog"]')) : false })
     }
     // First measurement deferred to a rAF callback (not called synchronously
     // in the effect body itself) — setState belongs in a callback the effect
@@ -129,11 +142,11 @@ function useTargetRect(targetId) {
     }
   }, [targetId])
 
-  // Mask stale rect from a PREVIOUS targetId the instant this one goes null
+  // Mask stale result from a PREVIOUS targetId the instant this one goes null
   // (e.g. a step with no anchor) — the effect above still owns clearing it
   // asynchronously on the next targetId change, this is just the synchronous
   // read-time guard so a consumer never briefly sees the wrong element's rect.
-  return targetId ? rect : null
+  return targetId ? found : NOT_FOUND
 }
 
 // Panel never grows wider than this, but on a narrow phone (e.g. a 320px-wide
@@ -192,35 +205,53 @@ function useViewportWidth() {
   interacting with the real page (click the highlighted button, drag a task)
   while this floats on top — only the panel's own buttons capture focus/clicks.
 
-  MODAL-AWARE, THIRD SHAPE (owner report #78, 2026-10 — supersedes the #74
-  design this replaces): this component's own z-[70]/z-[71] sit ABOVE
-  Dialog/BottomSheet's z-50 — exactly the stacking a tooltip-style coachmark
-  needs so its ring can sit over a real page button — which ALSO meant the
-  ProjectCreateForm/TaskCreateForm modals TUT-03/04/06 themselves auto-open
-  rendered UNDER this panel, with the ring and instructions floating
-  uselessly on top of the user's own form. The #74 fix was to hide this
-  component ENTIRELY while any modal was open (utils/overlayStack.js) — which
-  traded "floating uselessly on top" for "no guidance at all while the user
-  is actually filling in the form", the exact moment guidance matters most
-  (owner report: "폼이 자동으로 열리면 튜토리얼 메시지가 안 보인다").
+  MODAL-AWARE, THIRD SHAPE (owner report #78, 2026-10 — PARTIALLY superseded
+  by the ring-based redesign below, same report, see that paragraph): this
+  component's own z-[70]/z-[71] sit ABOVE Dialog/BottomSheet's z-50 —
+  exactly the stacking a tooltip-style coachmark needs so its ring can sit
+  over a real page button — which could ALSO mean a modal the USER opened
+  by clicking the very button being pointed at (e.g. step 1's "+ 새
+  프로젝트" → ProjectCreateForm) renders UNDER this panel, with the ring and
+  instructions floating uselessly on top of that form. An earlier #74 fix
+  hid this component ENTIRELY whenever ANY modal was open — too broad once
+  "find a real control" anchors can themselves live INSIDE an open modal
+  (see `insideModal` below) — fixed to check THAT specifically, not just
+  "is anything open".
 
-  The fix is a THIRD render shape, not a toggle between the two above: a
-  slim, INFORMATION-ONLY strip pinned to the very top of the viewport,
-  ABOVE the modal (z-[80], still higher than Dialog/BottomSheet's z-50),
-  shown for as long as `modalOpen` — see the render branch below for the
+  A THIRD render shape, not a toggle between the two above: a slim,
+  INFORMATION-ONLY strip pinned to the very top of the viewport, ABOVE the
+  modal (z-[80], still higher than Dialog/BottomSheet's z-50), shown
+  whenever `modalOpen && !insideModal` — see the render branch below for the
   full reasoning (sizing, pointer-events, focus/ARIA trade-offs). The
   anchored/un-anchored shapes above are UNCHANGED and resume the instant
-  `modalOpen` goes false (same instance — see the render guard below, this
-  component is never unmounted while a modal opens/closes, so its own
+  that condition goes false (same instance — see the render guard below,
+  this component is never unmounted while a modal opens/closes, so its own
   internal state — `useTargetRect`'s poll, the focus-steal effect — keeps
-  running quietly underneath exactly as it already did pre-#78).
+  running quietly underneath).
+
+  RING-BASED REDESIGN (owner decision, 2026-10, supersedes auto-opening a
+  form/panel for the user): every step now points the ring at a REAL control
+  the user clicks THEMSELVES — `insideModal` (from `useTargetRect`) is why
+  that still works even when the control being pointed at is ITSELF inside
+  an open overlay (튜토리얼 3-2단계: the unplaced-task card inside the
+  MOBILE unplaced panel, which is a modal BottomSheet — see that component's
+  own header on why desktop's own non-modal drawer never hits this branch at
+  all, `modalOpen` just stays false there). `insideModal` asks "is the
+  element I FOUND inside a CURRENTLY OPEN Dialog/BottomSheet" (both render
+  `role=\"dialog\"` on their own container) — a DIFFERENT question from
+  `modalOpen` ("is ANYTHING open anywhere"): a target merely COVERED by an
+  UNRELATED modal (the step-1 case above) must still fall back to the top
+  strip, while a target that IS PART OF the open overlay must not.
 */
 export function Coachmark({
   targetId,
   title,
   body,
-  stepNumber,
-  total,
+  // Pre-formatted by TutorialOverlay (e.g. "2-1/5", "4/5") — this component
+  // has no notion of sub-steps or how many main steps exist; it just shows
+  // whatever string it's handed (owner decision, 2026-10: "하위 동작은
+  // '2-1, 2-2' 형식으로 표시"). Replaces the old `stepNumber`/`total` pair.
+  progressLabel,
   isLast,
   // AUTO-PROGRESS ONLY (owner decision, 2026-10 — removes [이전]/[다음]):
   // every non-last step now advances purely from TutorialOverlay's own
@@ -229,15 +260,18 @@ export function Coachmark({
   // 판정되고, 그래도 막히면 [건너뛰기]가 유일하고 항상 available한 탈출구).
   // `onComplete` is the ONE remaining manual action, and only for the LAST
   // step (TUT-08 has nothing to auto-detect — it is a plain "you're done"
-  // screen). [다시 열기] re-sends whatever auto-open request this step
-  // already made once — see TutorialOverlay's own comment on
-  // `showReopen`/`onReopen`.
-  showReopen = false,
-  onReopen,
+  // screen, and no longer shows [건너뛰기] either — owner decision, 2026-10:
+  // "6단계에는 건너뛰기를 표시하지 마라").
+  //
+  // [다시 열기] REMOVED (owner decision, 2026-10, same report as the
+  // ring-based redesign this file's own header describes) — there is
+  // nothing left to "re-open": every step points at a REAL control already
+  // sitting on screen, not a form this component auto-opened on the user's
+  // behalf, so there was never a second request to re-send.
   onComplete,
   onSkip,
 }) {
-  const rect = useTargetRect(targetId)
+  const { rect, insideModal } = useTargetRect(targetId)
   const headingRef = useRef(null)
   const t = onboardingCopy.tutorial
   const isDesktop = useIsDesktop()
@@ -306,10 +340,11 @@ export function Coachmark({
   // Not hidden anymore, not unmounted either (#78 fix — see this file's own
   // header): `useTargetRect`'s poll/listeners and the focus-steal effect
   // above keep running quietly underneath this branch exactly as they did
-  // when this used to return null, so the moment the modal closes the
-  // anchored shape below reappears in place on the SAME instance — no
-  // remount, no fresh focus-steal, no re-measuring flash.
-  if (modalOpen) {
+  // when this used to return null, so the moment the modal closes (or the
+  // target turns out to be INSIDE it — `insideModal`, see this file's own
+  // header) the anchored shape below reappears in place on the SAME
+  // instance — no remount, no fresh focus-steal, no re-measuring flash.
+  if (modalOpen && !insideModal) {
     return createPortal(
       <div
         // `role="status"` (implicit `aria-live="polite"` + `aria-atomic="true"`
@@ -363,7 +398,7 @@ export function Coachmark({
         ].join(' ')}
       >
         <span className="font-medium">
-          {t.progressLabel(stepNumber, total)} · {title}
+          {progressLabel} · {title}
         </span>
         {/* Dropped on a short/landscape viewport (`shortViewport` above) —
             the step+title line alone is already the load-bearing part (it is
@@ -397,19 +432,25 @@ export function Coachmark({
       )}
       <div
         role="region"
-        aria-label={`튜토리얼 ${t.progressLabel(stepNumber, total)}`}
+        aria-label={`튜토리얼 ${progressLabel}`}
         style={panelStyle}
         className="z-[71] flex flex-col gap-3 rounded-card border border-border bg-surface p-4 shadow-popover motion-safe:transition-[top,bottom,left] motion-safe:duration-fast"
       >
         <div className="flex items-center justify-between">
-          <span className="text-caption font-medium text-brand-700">{t.progressLabel(stepNumber, total)}</span>
-          <button
-            type="button"
-            onClick={onSkip}
-            className="text-caption text-text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            {t.skip}
-          </button>
+          <span className="text-caption font-medium text-brand-700">{progressLabel}</span>
+          {/* [건너뛰기] — EVERY step except the LAST (owner decision,
+              2026-10: "6단계에는 건너뛰기를 표시하지 마라, 완료만 둔다") —
+              TUT-08 is a terminal "you're done" screen with nothing left to
+              skip PAST; [완료] below is the only way it ever ends. */}
+          {!isLast && (
+            <button
+              type="button"
+              onClick={onSkip}
+              className="text-caption text-text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            >
+              {t.skip}
+            </button>
+          )}
         </div>
         <h2 ref={headingRef} tabIndex={-1} className="text-label font-semibold text-text outline-none">
           {title}
@@ -418,26 +459,10 @@ export function Coachmark({
             site above: a checklist body is a `<ul>`/`<p>` fragment, invalid
             nested inside a `<p>`. */}
         <div className="text-caption text-text-muted">{renderBody(body)}</div>
-        {/* [다시 열기] sits on its OWN line, left-aligned — it is a recovery
-            action ("I closed the thing you opened for me"), not a step of
-            the same weight as 건너뛰기/완료, so it doesn't compete with them
-            for the same row. The only OTHER control this panel ever shows
-            now (AUTO-PROGRESS ONLY, see this component's own header on
-            `onComplete`) — a non-last step has NO button here at all; it
-            simply disappears the instant TutorialOverlay's own detection
-            advances past it. */}
-        {showReopen && (
-          <button
-            type="button"
-            onClick={onReopen}
-            className="self-start text-caption font-medium text-brand-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            {t.reopen}
-          </button>
-        )}
-        {/* [완료] — the ONE manual button left, and only on the LAST step
-            (TUT-08): see this component's own header on `onComplete` for why
-            every OTHER step has nothing to click here at all. */}
+        {/* [완료] — the ONE button left on the LAST step (TUT-08); every
+            OTHER step has NOTHING here at all now (no [다시 열기] — see this
+            component's own header on why the ring-based redesign removed
+            it; no [건너뛰기] either, above). */}
         {isLast && (
           <div className="mt-1 flex justify-end">
             <Button variant="primary" size="sm" onClick={onComplete}>
