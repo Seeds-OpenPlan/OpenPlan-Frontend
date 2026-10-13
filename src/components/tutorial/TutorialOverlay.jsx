@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
@@ -13,7 +13,7 @@ import { useTutorialEvent } from '../../features/tutorial/tutorialEvents'
 import { TUTORIAL_STEPS } from '../../features/tutorial/tutorialSteps'
 import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
 import { useWeekPlan, weekPlanKey } from '../../features/plan/usePlanData'
-import { useActiveWeekStartISO } from '../../features/plan/activeWeekStore'
+import { useActiveWeekStartISO, useUnplacedPanelOpen } from '../../features/plan/activeWeekStore'
 import { getWeek, deleteBlock } from '../../features/plan/planApi'
 import { getProject, deleteProject } from '../../features/project/projectApi'
 import { projectKey, projectsKey } from '../../features/project/useProjectData'
@@ -22,6 +22,14 @@ import { systemMessages } from '../../constants/systemMessages'
 
 const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
 const CLEANUP_TITLE_ID = 'tutorial-cleanup-title'
+const OFF_ROUTE_TITLE_ID = 'tutorial-off-route-title'
+const RESUME_TITLE_ID = 'tutorial-resume-title'
+// sessionStorage key — gates the RESUME prompt to "once per tab session"
+// (see this file's own header, "RESUME PROMPT").
+const RESUME_ASKED_KEY = 'tutorial-resume-asked'
+// 5 main steps (CREATE_PROJECT..DELETE_SAMPLE) — COMPLETE is NOT counted
+// (owner's own example, "2-1/5" — see tutorialSteps.js's own header on why).
+const MAIN_STEP_LABELS = ['1', '2', '3', '4', '5']
 
 /*
   OVL-TUT host — mounted once in AppLayout (same placement class as
@@ -40,38 +48,45 @@ const CLEANUP_TITLE_ID = 'tutorial-cleanup-title'
 
   State machine (tutorialStep):
     0                          → not started: TUT-01 kickoff dialog (AC3).
-    1..TUTORIAL_STEPS.length    → TUT-03~08, one Coachmark each (n/6 = TUT-03
-                                  is n=1 of 6, per tutorialSteps.js's order).
+    1..TUTORIAL_STEPS.length    → TUT-03~08, one Coachmark each (progress
+                                  label "n/5" or "n-m/5" — see tutorialSteps.js
+                                  for why COMPLETE isn't counted in the "5").
     completed/skipped          → renders nothing (tutorialCompleted:true).
 
-  GUIDED ACTIONS (owner-approved redesign, 2026-10 — supersedes this file's
-  OLD self-paced design; the OLD [한계] here worried that real-time detection
-  would mean subscribing to ProjectsPage/WeeklyPage's own TanStack Query
-  caches from here and diffing them per step. That coupling never had to
-  happen: every mutation hook instead fires ONE line into a shared event
-  stream, tutorialEvents.js, at its own real success point, and this file
-  only subscribes to that stream — it never reaches into either screen's
-  query cache directly). Two effects do the actual work:
+  RING-BASED REDESIGN (owner decision, 2026-10 — supersedes an earlier
+  "auto-open the real form/panel for the user" redesign this file used to
+  describe here). The owner's own dev-testing concluded auto-opening taught
+  nothing (the user never had to find the control themselves) and its timing
+  intermittently missed. Every step now instead:
+    - points Coachmark's ring at a REAL, already-visible control
+      (`resolvedTargetId` below, from `tutorialSteps.js`'s own `targetId`) and
+      tells the user to click/drag it — nothing here calls `navigate()` with
+      a request query param anymore;
+    - for ADD_TASK/PLACE_TASK, resolves WHICH of two `subSteps` to show from
+      real on-screen state (`uiState` below — `?expanded=` for "that project
+      row is open", `useUnplacedPanelOpen()` for "the panel is open") rather
+      than an event — see tutorialSteps.js's own header for why this is
+      state, not event, based;
+    - still advances the STEP ITSELF (not the sub-step) from the SAME
+      event/state detection as before this redesign — completely unchanged,
+      see "PER-STEP COMPLETION" below.
+  Every mutation hook fires ONE line into a shared event stream
+  (tutorialEvents.js) at its own real success point, and this file only
+  subscribes to that stream — it never reaches into either screen's query
+  cache directly (except the three `weekPlanQuery`-based STATE safety nets
+  described below, which read the SAME shared cache WeeklyPage itself reads,
+  not a parallel one).
 
-    1. NAVIGATE + REQUEST — the `useEffect` below, keyed on `activeStep`
-       alone, fires once per step: it navigates to the step's route WITH the
-       step's own `buildSearch(targets, nonce)` query string appended (e.g.
-       `?create=3`) — the "open the real UI for me" request (tutorialSteps.js
-       header explains why a query param, not a new side-channel). Unlike the
-       OLD version, this is UNCONDITIONAL (not gated on `location.pathname
-       !== activeStep.route`): TUT-05/06/07 all share `/weekly`, so a step
-       change between them is a search-only navigation that must still fire
-       even though the pathname never changes — gating on pathname would
-       silently skip the request for every one of those three. Still fires at
-       most ONCE per step (`lastNavigatedStepRef`, unchanged) — this never
-       fights a user who navigates AWAY mid-step.
-    2. COMPLETION — `useTutorialEvent` below watches every tutorial event;
-       when one matches the CURRENT step's own `event`/`matches` rule
-       (tutorialSteps.js), it records whatever `captureTarget` returns (the
-       id the NEXT step needs) and advances immediately, no click required.
-       DELETE_SAMPLE (TUT-07) does NOT go through this event path at all —
-       see its own block below for why, and for the STATE-based rule that
-       replaces it.
+  ONE EXCEPTION navigates automatically: entering PLACE_TASK (TUT-05, "3-1")
+  still moves the user from /projects to /weekly on its own (owner's own
+  wording: "3-1: /weekly로 이동(이 이동만 허용)") — there is no on-screen
+  "go to weekly" control for this flow to point a ring at instead. The
+  combined effect below performs this ONCE per step-entry (`enteredStepKeyRef`
+  — a step key the effect has already processed once never re-triggers it,
+  even if the user later navigates away and the OFF-ROUTE flow brings them
+  back) and otherwise never calls `navigate()` for a step change at all —
+  every other transition already leaves the user exactly where they already
+  are (step1→2 stays on /projects; step3→4→5→6 all stay on /weekly).
 
   DELETE_SAMPLE (TUT-07) completion — STATE, not an event log (Thomas code
   review BLOCKER, fixed 2026-10). The ORIGINAL version accumulated
@@ -106,17 +121,62 @@ const CLEANUP_TITLE_ID = 'tutorial-cleanup-title'
   no "last removal" moment to race against — it just reads whatever is
   true RIGHT NOW).
 
-  [이전]/[다음] REMOVED (owner decision, 2026-10) — every non-last step now
-  ONLY ever advances from detection (event or state, see the table below),
-  never a manual click. The removed [다음] used to ALSO serve as a safety
-  valve for one real scenario: a SECOND browser tab running the same
-  tutorial writes to the SAME localStorage key (tutorialProgressStore.js),
-  but THIS tab's event stream has no way to see THAT tab's success. Losing
-  that valve is an explicit, accepted trade-off — [건너뛰기] (still a real
-  button, every step) is now the ONLY way out of a step that, for whatever
-  reason, never detects its own completion. [완료] also stays, but ONLY on
-  the LAST step (TUT-08 has nothing to auto-detect at all — it is a plain
-  "you're done" screen, so a manual click is the ONLY way it ever ends).
+  [이전]/[다음]/[다시 열기] REMOVED (owner decision, 2026-10) — every
+  non-last step now ONLY ever advances from detection (event or state, see
+  the table below), never a manual click. [다시 열기] specifically no longer
+  has anything left to DO — no step auto-opens a form/panel anymore (see
+  "RING-BASED REDESIGN" above), so there is nothing to re-open. The removed
+  [다음] used to ALSO serve as a safety valve for one real scenario: a SECOND
+  browser tab running the same tutorial writes to the SAME localStorage key
+  (tutorialProgressStore.js), but THIS tab's event stream has no way to see
+  THAT tab's success. Losing that valve is an explicit, accepted trade-off —
+  [건너뛰기] (still a real button, every step but the last) is now the ONLY
+  way out of a step that, for whatever reason, never detects its own
+  completion. [완료] also stays, but ONLY on the LAST step (TUT-08 has
+  nothing to auto-detect at all — it is a plain "you're done" screen, so a
+  manual click is the ONLY way it ever ends, and [건너뛰기] would be
+  meaningless there — owner decision, 2026-10, Coachmark.jsx hides it when
+  `isLast`).
+
+  OFF-ROUTE PROMPT (owner decision, 2026-10) — a mid-tutorial navigation to
+  a route OTHER than the active step's own `route` (e.g. 대시보드/통계/설정
+  — anything that isn't /projects or /weekly, as the active step itself
+  requires) hides Coachmark/the top banner and asks "튜토리얼을 종료할까요?"
+  instead, via [튜토리얼로 돌아가기] (navigates back to the step's own route)
+  / [종료] (the SAME `exitWithCleanupCheck` → PATCH flow [완료]/[건너뛰기]
+  already use). Dismissing the ASK itself (Esc/backdrop) leaves the user
+  exactly on the off-tutorial screen they already navigated to, with the
+  tutorial UI STAYING hidden — not re-shown — until they navigate BACK to
+  the step's own route on their own, at which point Coachmark reappears with
+  no further action needed (`offRouteState` below resets to `null` the
+  moment `location.pathname` matches `activeStep.route` again, regardless of
+  how it got there). The combined effect below deliberately does NOT treat
+  the one-time PLACE_TASK auto-navigate (above) as an off-route excursion —
+  without that exclusion, the single render between "step advanced to
+  PLACE_TASK" and "the auto-navigate's own `navigate()` call lands" would
+  misread as a real excursion and flash the ask dialog for a frame before
+  immediately un-asking it.
+
+  RESUME PROMPT (owner decision, 2026-10) — a FRESH MOUNT (refresh,
+  re-login, app restart; TutorialOverlay itself otherwise stays mounted for
+  an entire tab's lifetime per this file's own header, so this is the only
+  time a "first render" actually means a NEW session) while `tutorialStep`
+  is already mid-progress shows "진행 중이던 튜토리얼이 있습니다" INSTEAD of
+  silently re-showing the stored step's own Coachmark — [이어서 하기] simply
+  dismisses (the stored step continues exactly as it would have without this
+  prompt); [처음부터 다시] runs the SAME `exitWithCleanupCheck` flow as
+  [완료]/[종료] above but with a DIFFERENT `proceedFn` (reset the LOCAL step
+  cursor only — `tutorialCompleted` never changes, this is not an exit). The
+  `resumePromptState` render-time adjustment below (same "adjust state during
+  render" idiom this file already uses for `scheduleBaselineForKey`) fires
+  this decision exactly once, the FIRST render `progress` is available —
+  gated additionally by `sessionStorage` (`RESUME_ASKED_KEY`) so a user who
+  refreshes SEVERAL times in the same tab session is asked only the first
+  time, per the owner's own "탭/경로 변경마다 아님" instruction. Every effect
+  below that could navigate or arm the off-route ask is itself gated on
+  `resumePromptState === 'resolved'` — otherwise a mid-progress PLACE_TASK
+  resume could auto-navigate or ask about a route mismatch before the user
+  has even answered this prompt.
 
   PER-STEP COMPLETION — EVENT, now with a STATE-based safety net wherever
   one is both FEASIBLE and UNAMBIGUOUS (owner decision, 2026-10: "사용자가
@@ -222,8 +282,30 @@ export function TutorialOverlay() {
   const updateProgress = useUpdateOnboardingProgress()
   const [tutorialStep, setTutorialStep, resetTutorialStep] = useTutorialStep(sessionQuery.data?.userId)
   const [targets, patchTargets] = useTutorialTargets(sessionQuery.data?.userId)
+  const navLocation = useLocation()
+  const [searchParams] = useSearchParams()
+  const unplacedPanelOpen = useUnplacedPanelOpen()
   const kickoffConfirmRef = useRef(null)
-  const lastNavigatedStepRef = useRef(null)
+  // Which step key the combined off-route/auto-navigate effect below has
+  // already processed its ONE entry-tick for (see this file's own header,
+  // "RING-BASED REDESIGN") — replaces the old `lastNavigatedStepRef`, same
+  // one-shot-per-step-key shape, but now also doubles as the "don't ask
+  // off-route on the very first render of a step" guard.
+  const enteredStepKeyRef = useRef(null)
+  // OFF-ROUTE prompt state — see this file's own header. `null` = on-route
+  // (or no active step); `'asking'` = currently showing the ask dialog;
+  // `'dismissed'` = the user closed the ask via Esc/backdrop without
+  // choosing, so the tutorial UI stays hidden until they navigate back on
+  // their own (the combined effect resets this to `null` the instant
+  // `location.pathname` matches `activeStep.route` again, from EITHER
+  // state).
+  const [offRouteState, setOffRouteState] = useState(null)
+  // RESUME prompt state — see this file's own header. Starts `'pending'`
+  // until `progress` first loads (see the render-time adjustment below,
+  // which is the ONLY place this ever leaves `'pending'`); `'open'` = mid-
+  // progress cursor found, not yet asked this session; `'resolved'` =
+  // nothing to ask (fresh start, or already asked/answered this session).
+  const [resumePromptState, setResumePromptState] = useState('pending')
   // Practice-data cleanup confirm — null while not showing; otherwise
   // `{ items, proceedFn }` (see this file's own header, "PRACTICE-DATA
   // CLEANUP", for the full flow). `cleanupChecking` guards the brief async
@@ -239,14 +321,13 @@ export function TutorialOverlay() {
   // Same D1 fold-safety reasoning as the kickoff dialog's own `isDesktop`
   // below, scoped to exactly this dialog's own open window.
   const isDesktopForCleanup = useLockedIsDesktop(Boolean(cleanupPrompt))
-  // Monotonic counter, incremented on every REAL request (the step-change
-  // effect below AND every [다시 열기] click) — see tutorialSteps.js's own
-  // header on `buildSearch(targets, nonce)` for the bug this fixes (owner
-  // report, 2026-10: "할 일 창이 자동으로 열릴 때도 있고 안 열릴 때도
-  // 있다"). Deliberately a REF, not state: bumping it must never itself
-  // trigger a re-render — it only matters at the instant `requestUrl` is
-  // about to be used for an ACTUAL navigation.
-  const requestNonceRef = useRef(0)
+  // Same D1 reasoning, scoped to the OFF-ROUTE/RESUME dialogs' own open
+  // windows respectively. Each focuses its own emphasized action on open —
+  // same convention as `kickoffConfirmRef`/`cleanupConfirmRef` above.
+  const isDesktopForOffRoute = useLockedIsDesktop(offRouteState === 'asking')
+  const isDesktopForResume = useLockedIsDesktop(resumePromptState === 'open')
+  const offRouteReturnRef = useRef(null)
+  const resumeContinueRef = useRef(null)
 
   const progress = progressQuery.data
   const running = Boolean(progress?.onboardingCompleted && !progress.tutorialCompleted)
@@ -349,79 +430,149 @@ export function TutorialOverlay() {
     Boolean(weekBlocks) &&
     weekBlocks.some((b) => b.blockType === 'SCHEDULE' && !scheduleBaselineIds.has(b.scheduleId))
 
-  // The request URL this step wants open RIGHT NOW — shared by the
-  // auto-navigate effect below AND the Coachmark panel's [다시 열기] (a user
-  // closing the auto-opened form/panel just re-sends the exact same request;
-  // see this file's own header for why a query param rather than a second,
-  // imperative "open" channel).
-  // `nonce` is a PARAMETER, not read off `requestNonceRef` in here directly
-  // — this function is also called DURING RENDER for the presence check
-  // (`Boolean(requestUrl(activeStep, ...))` below), and this codebase's lint
-  // config (react-hooks/refs) forbids reading a ref's `.current` from
-  // anything invoked at render time (refs are only safe to read from an
-  // effect or an event handler). The two REAL navigation call sites (the
-  // step-change effect, and onReopen) bump `requestNonceRef` and pass its
-  // new value in THEMSELVES, from inside an effect/event handler — never
-  // from render — so every ACTUAL request still gets a value no earlier
-  // request ever used (see tutorialSteps.js's own header); the presence
-  // check passes a throwaway constant instead, since it only cares whether
-  // `buildSearch` would produce ANY non-empty string, not which exact nonce.
-  const requestUrl = (step, nonce) => {
-    if (!step) return null
-    const search = step.buildSearch ? step.buildSearch(targets, nonce) : ''
-    return search ? `${step.route}?${search}` : step.route
-  }
-  // Dummy value for the render-time presence check ONLY — see `requestUrl`'s
-  // own comment above for why render can never read `requestNonceRef`
-  // itself.
-  const presenceCheckNonce = 'x'
+  /*
+    Sub-step resolution (RING-BASED REDESIGN — see this file's own header) —
+    `uiState` bundles the two cross-component UI-state signals a step's own
+    `subStepIndex` might read: `expandedProjectId` from the SAME `?expanded=`
+    URL param ProjectsPage's own accordion already keeps (2-1→2-2), and
+    `unplacedPanelOpen` from activeWeekStore.js's published value (3-1→3-2 —
+    that module's own header explains why a URL param alone can't cover this
+    one). A step with no `subSteps` (CREATE_PROJECT/ADD_SCHEDULE/
+    DELETE_SAMPLE/COMPLETE) IS its own "sub-step" — same title/body/targetId
+    shape either way, so the render below never needs to branch on which
+    kind of step it's looking at.
+  */
+  const uiState = { expandedProjectId: searchParams.get('expanded'), unplacedPanelOpen }
+  const activeSubStepIndex = activeStep?.subSteps ? activeStep.subStepIndex(targets, uiState) : null
+  const activeSubStep = activeStep ? (activeStep.subSteps ? activeStep.subSteps[activeSubStepIndex] : activeStep) : null
+  // Same function-or-string shape `targetId`/`body` already had before this
+  // redesign (tutorialSteps.js's own header) — now resolved off
+  // `activeSubStep` instead of `activeStep` directly, so a sub-stepped
+  // step's OWN per-substep anchor/copy wins over any (nonexistent, for those
+  // two steps) step-level one.
+  const resolvedTargetId =
+    typeof activeSubStep?.targetId === 'function' ? activeSubStep.targetId(targets) : activeSubStep?.targetId
+  const resolvedTitle = activeSubStep?.title
+  const resolvedBody =
+    typeof activeSubStep?.body === 'function' ? activeSubStep.body(targets, weekBlocks) : activeSubStep?.body
+  // Progress label — "n/5" for a step with no sub-steps, "n-m/5" for one
+  // that has them, and a bare "완료" (no fraction) for COMPLETE — see this
+  // file's own header and tutorialSteps.js's for why COMPLETE sits outside
+  // the "5" denominator entirely rather than being a 6th thing to count.
+  const progressLabel = !activeStep
+    ? ''
+    : isLast
+      ? onboardingCopy.tutorial.completeProgressLabel
+      : activeStep.subSteps
+        ? `${MAIN_STEP_LABELS[stepIndex]}-${activeSubStepIndex + 1}/5`
+        : `${MAIN_STEP_LABELS[stepIndex]}/5`
 
-  // Auto-navigate + auto-request ONCE per step change (not on every
-  // render/route change) — see this file's own header, point 1, for why this
-  // call is now UNCONDITIONAL (no `location.pathname !== activeStep.route`
-  // guard) unlike the pre-redesign version.
+  /*
+    RESUME PROMPT decision — render-time adjustment (same idiom as
+    `scheduleBaselineForKey` above), fires EXACTLY ONCE: the first render
+    `progress` is truthy. Before that, `resumePromptState` stays `'pending'`
+    and nothing below it (the off-route/auto-navigate effect, the render
+    branch) acts on `activeStep` yet — see this file's own header for why
+    gating those on `'resolved'` matters.
+  */
+  if (resumePromptState === 'pending' && progress) {
+    const midProgress = running && stepIndex >= 0
+    const alreadyAskedThisSession = sessionStorage.getItem(RESUME_ASKED_KEY) === '1'
+    setResumePromptState(midProgress && !alreadyAskedThisSession ? 'open' : 'resolved')
+  }
+  // Marks the session as "asked" the INSTANT the decision above leaves
+  // `'pending'` (whether that decision was "show it" or "nothing to show") —
+  // a plain side effect (writing to sessionStorage), so it belongs in an
+  // effect, not the render-time adjustment above.
   useEffect(() => {
+    if (resumePromptState === 'pending') return
+    sessionStorage.setItem(RESUME_ASKED_KEY, '1')
+  }, [resumePromptState])
+
+  // Combined OFF-ROUTE + the one-time PLACE_TASK auto-navigate — see this
+  // file's own header ("RING-BASED REDESIGN"/"OFF-ROUTE PROMPT") for why
+  // these two concerns share ONE effect: evaluating them separately risked
+  // a one-frame flash of the off-route ask while PLACE_TASK's own
+  // auto-navigate is still in flight (same render, stale `location.pathname`
+  // not yet reflecting the `navigate()` call about to land).
+  useEffect(() => {
+    // The resume prompt (if showing) must be answered first — see this
+    // file's own header.
+    if (resumePromptState !== 'resolved') return
     if (!activeStep) {
-      // Back at kickoff (fresh run, or a TUT-09 restart) — clear the marker
-      // so the FIRST real step after this, even if it's the exact same key
-      // as whatever the PREVIOUS run last navigated to, still auto-navigates.
-      // Without this, a restart that lands back on CREATE_PROJECT (the same
-      // key the ref already held from the run being restarted) silently
-      // skipped the redirect to /projects.
-      lastNavigatedStepRef.current = null
+      enteredStepKeyRef.current = null
+      // `offRouteState`'s own reset for THIS condition lives in the
+      // render-time adjustment right below this effect, not here — ESLint's
+      // react-hooks/set-state-in-effect flags a setState call that reacts to
+      // nothing but a value ALREADY known at render time (`!activeStep`), as
+      // opposed to the mismatch arm/disarm further down, which is entangled
+      // with the `navigate()` side effect and genuinely needs to run here.
       return
     }
-    if (lastNavigatedStepRef.current === activeStep.key) return
-    lastNavigatedStepRef.current = activeStep.key
-    // `{ replace: true }` (Thomas code review SHOULD-FIX, S2) — this is a
-    // SYSTEM-driven move (the coachmark deciding "now show this step"), not
-    // a navigation the user themselves chose to make, so it must not grow
-    // the back-button history the way a real page-to-page click would: a
-    // `push` here meant pressing 뒤로 mid-tutorial walked back through each
-    // PAST coachmark step's own URL instead of leaving the tutorial, and the
-    // step shown (still driven by the `tutorialStep` cursor) never matched
-    // whatever stale screen "뒤로" had just landed on. `replace` also
-    // happens to absorb a side effect this uncovered: ADD_TASK's own
-    // `?expanded=` write (ProjectsPage's `expandInProgress`, fired from
-    // CREATE_PROJECT's save-success a tick before this effect sees the step
-    // change) used to leave `expanded=` recorded in TWO consecutive history
-    // entries — its own push, then this effect's OLD push stacking right on
-    // top with the SAME `expanded=` value plus `addTask=1`. Replacing here
-    // means this is the only entry that survives for this step.
-    //
-    // Bump the nonce BEFORE computing the url (owner report, 2026-10: "할 일
-    // 창이... 안 열릴 때도 있다") — re-entering a step the user had already
-    // visited once before (이전 → 다음) would otherwise recompute the EXACT
-    // SAME search string as last time, which `navigate()` can treat as a
-    // true no-op (identical location, nothing for any page's own
-    // useSearchParamRequest to react to). See tutorialSteps.js's own header.
-    requestNonceRef.current += 1
-    navigate(requestUrl(activeStep, requestNonceRef.current), { replace: true })
-    // Deliberately keyed ONLY on `activeStep` — `targets`/`navigate` are read
-    // but must NOT re-trigger this effect (that would fight a user who
-    // navigates away mid-step, see this file's own header).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStep])
+    const isEntryTick = enteredStepKeyRef.current !== activeStep.key
+    if (isEntryTick) {
+      enteredStepKeyRef.current = activeStep.key
+      if (activeStep.key === 'PLACE_TASK' && navLocation.pathname !== activeStep.route) {
+        navigate(activeStep.route, { replace: true })
+        return // This tick's mismatch is already being corrected — never ask.
+      }
+    }
+    // `setOffRouteState` here reacts to `navLocation.pathname` — the
+    // ROUTER's own state, an EXTERNAL system from this component's own
+    // point of view — changing out from under an already-active step; this
+    // is exactly the "subscribe to an external system, setState when it
+    // changes" case react-hooks/set-state-in-effect's own message calls
+    // out as fine, not the "derivable at render time" case it otherwise
+    // flags (unlike the `!activeStep` branch above, which WAS purely that
+    // and got moved out). A render-time version would also re-introduce
+    // the same one-frame flash this effect's own header already explains
+    // the combined-effect design avoids, since React would resolve the new
+    // `offRouteState` SYNCHRONOUSLY within the SAME render pass that first
+    // sees `isEntryTick`, defeating the one-tick suppression above.
+    const onRoute = navLocation.pathname === activeStep.route
+    if (!onRoute && offRouteState === null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setOffRouteState('asking')
+    } else if (onRoute && offRouteState !== null) {
+      setOffRouteState(null)
+    }
+  }, [resumePromptState, activeStep, navLocation.pathname, navigate, offRouteState])
+
+  // Render-time counterpart to the effect above — `!activeStep` (back at
+  // kickoff, or the run just ended) is already known synchronously, so
+  // resetting `offRouteState` for THIS one condition belongs here, not
+  // inside the effect (see that effect's own comment on why only this
+  // branch moved out).
+  if (!activeStep && offRouteState !== null) {
+    setOffRouteState(null)
+  }
+
+  // [튜토리얼로 돌아가기] — returns to the active step's OWN route; the
+  // effect above resets `offRouteState` to `null` on its own the moment
+  // `navLocation.pathname` actually matches, but clearing it here too avoids
+  // waiting an extra render for the dialog to disappear.
+  const returnToTutorialRoute = () => {
+    setOffRouteState(null)
+    navigate(activeStep.route)
+  }
+  // [종료] — goes through the SAME `exitWithCleanupCheck` → PATCH flow as
+  // [완료]/kickoff's own [건너뛰기] (defined further below as `finish`).
+  const exitFromOffRoute = () => {
+    setOffRouteState(null)
+    finish()
+  }
+  // [이어서 하기] — nothing to do beyond dismissing; the stored step
+  // continues exactly as if this prompt had never shown.
+  const resumeContinue = () => setResumePromptState('resolved')
+  // [처음부터 다시] — same `exitWithCleanupCheck` wrapper, but its own
+  // `proceedFn` only resets the LOCAL step cursor (no PATCH — this run was
+  // never actually completed, just restarted).
+  const resumeRestart = () => {
+    exitWithCleanupCheck(() => {
+      resetTutorialStep()
+      setResumePromptState('resolved')
+    })
+  }
 
   /*
     DELETE_SAMPLE (TUT-07)의 완료 규칙 — STATE 기반 (B1 fix, see this file's
@@ -494,11 +645,14 @@ export function TutorialOverlay() {
     CHANGES (`lastHighlightRef`) — not merely re-renders — so deleting ONE
     of two blocks re-sends a highlight pointing at just the remaining one,
     but an unrelated re-render (e.g. the banner's own viewport listener)
-    never re-fires it for no reason. Deliberately NOT routed through
-    `buildSearch`/`requestNonceRef` like every other step's own request
-    (tutorialSteps.js's own header) — this one's value is ALREADY guaranteed
-    distinct whenever it actually needs to re-fire (a different id set is a
-    different string), so a nonce would add nothing here.
+    never re-fires it for no reason. This is the ONE `navigate()` call left
+    in this file that still carries a query param at all (`highlightBlocks=`,
+    WeeklyPage's own PLAN-23 focus-ring mechanism, pre-dating and unrelated
+    to the RING-BASED REDESIGN's own `targetId`/Coachmark ring) — see
+    DELETE_SAMPLE's own entry in tutorialSteps.js for why it still uses that
+    mechanism instead of a `data-tut-id` anchor (the real controls it
+    describes — the block action menu — are transient, not a single
+    always-mounted element).
   */
   const highlightIdsKey = isDeleteStep
     ? (weekBlocks ?? [])
@@ -729,8 +883,40 @@ export function TutorialOverlay() {
   */
   let mainContent
 
-  // tutorialStep 0 — TUT-01 kickoff.
-  if (!activeStep) {
+  // RESUME PROMPT — highest priority (see this file's own header): answered
+  // before anything else below ever gets to navigate/ask/show a step.
+  if (resumePromptState === 'open') {
+    const t = onboardingCopy.tutorial
+    const body = (
+      <div className="flex flex-col gap-4">
+        <h2 id={RESUME_TITLE_ID} className="text-title font-semibold text-text">
+          {t.resumeTitle}
+        </h2>
+        <p className="text-body text-text-muted">{t.resumeBody}</p>
+        <div className="mt-1 flex justify-end gap-2">
+          <Button variant="secondary" size="md" onClick={resumeRestart}>
+            {t.resumeRestart}
+          </Button>
+          <Button ref={resumeContinueRef} variant="primary" size="md" onClick={resumeContinue}>
+            {t.resumeContinue}
+          </Button>
+        </div>
+      </div>
+    )
+    // Esc/backdrop → same as [이어서 하기] (dismissing without choosing must
+    // not silently restart/discard progress) — same reasoning as the
+    // cleanup dialog's own `onClose` below.
+    mainContent = isDesktopForResume ? (
+      <Dialog open onClose={resumeContinue} labelledById={RESUME_TITLE_ID} initialFocusRef={resumeContinueRef}>
+        {body}
+      </Dialog>
+    ) : (
+      <BottomSheet open onClose={resumeContinue} labelledById={RESUME_TITLE_ID} initialFocusRef={resumeContinueRef}>
+        {body}
+      </BottomSheet>
+    )
+  } else if (!activeStep) {
+    // tutorialStep 0 — TUT-01 kickoff.
     const t = onboardingCopy.tutorial
     const body = (
       <div className="flex flex-col gap-4">
@@ -759,55 +945,64 @@ export function TutorialOverlay() {
         {body}
       </BottomSheet>
     )
+  } else if (offRouteState === 'asking') {
+    // OFF-ROUTE ask — see this file's own header. Replaces the normal
+    // Coachmark render entirely while showing (the "hide ring+banner, ask
+    // instead" the owner specified), not a stacked overlay on top of it.
+    const t = onboardingCopy.tutorial
+    const body = (
+      <div className="flex flex-col gap-4">
+        <h2 id={OFF_ROUTE_TITLE_ID} className="text-title font-semibold text-text">
+          {t.offRouteTitle}
+        </h2>
+        <p className="text-body text-text-muted">{t.offRouteBody}</p>
+        <div className="mt-1 flex justify-end gap-2">
+          <Button variant="secondary" size="md" onClick={exitFromOffRoute}>
+            {t.offRouteExit}
+          </Button>
+          <Button ref={offRouteReturnRef} variant="primary" size="md" onClick={returnToTutorialRoute}>
+            {t.offRouteReturn}
+          </Button>
+        </div>
+      </div>
+    )
+    // Esc/backdrop/back → `'dismissed'`, NOT `null` — see this file's own
+    // header ("OFF-ROUTE PROMPT"): this must leave the user exactly on the
+    // off-tutorial screen they already navigated to, with the tutorial UI
+    // staying hidden (not re-shown) until they navigate back on their own.
+    mainContent = isDesktopForOffRoute ? (
+      <Dialog
+        open
+        onClose={() => setOffRouteState('dismissed')}
+        labelledById={OFF_ROUTE_TITLE_ID}
+        initialFocusRef={offRouteReturnRef}
+      >
+        {body}
+      </Dialog>
+    ) : (
+      <BottomSheet
+        open
+        onClose={() => setOffRouteState('dismissed')}
+        labelledById={OFF_ROUTE_TITLE_ID}
+        initialFocusRef={offRouteReturnRef}
+      >
+        {body}
+      </BottomSheet>
+    )
+  } else if (offRouteState === 'dismissed') {
+    // User closed the ask without choosing — stay on whatever off-tutorial
+    // screen they're on, tutorial UI hidden, until the off-route effect
+    // above detects a return to `activeStep.route` and resets this to
+    // `null` on its own (see this file's own header).
+    mainContent = null
   } else {
-    // Resolve a dynamic (per-run) anchor — see tutorialSteps.js's own header
-    // on why TUT-05's `targetId` is a function of `targets` rather than a
-    // fixed id.
-    const resolvedTargetId =
-      typeof activeStep.targetId === 'function' ? activeStep.targetId(targets) : activeStep.targetId
-    // Same function-or-string shape — DELETE_SAMPLE's `body` (tutorialSteps.js,
-    // Thomas SHOULD-FIX) names only what this run actually recorded, which
-    // only `targets`/`weekBlocks` (both read at render time) can answer. No
-    // more "정리 완료 — 잠시 후…" override here (owner decision, 2026-10,
-    // removed the hold this used to explain — see the DELETE_SAMPLE effect
-    // above) — satisfying the step now advances on the VERY NEXT render, so
-    // there is no longer a window where this step's own panel is still
-    // visible but already done. `weekBlocks` passed through for
-    // DELETE_SAMPLE's OWN checklist body (tutorialSteps.js) — every other
-    // step's `body` function simply ignores this second argument.
-    const resolvedBody =
-      typeof activeStep.body === 'function' ? activeStep.body(targets, weekBlocks) : activeStep.body
-
     mainContent = (
       <Coachmark
         targetId={resolvedTargetId}
-        title={activeStep.title}
+        title={resolvedTitle}
         body={resolvedBody}
-        stepNumber={stepIndex + 1}
-        total={TUTORIAL_STEPS.length}
+        progressLabel={progressLabel}
         isLast={isLast}
-        // [다시 열기] — shown for every NON-LAST step that actually has
-        // something to (re-)request. No `nextDisabled`-style gate needed
-        // anymore (owner decision, 2026-10, removed [이전]/[다음] — see this
-        // file's own header): a step's own Coachmark is, BY CONSTRUCTION, only
-        // ever rendered while that step is still active — the moment it's
-        // satisfied, `advance()` moves `tutorialStep` on and THIS render is
-        // replaced by the next step's, so "showing while pending" and "showing
-        // at all" are now the same condition. Re-requesting something already
-        // open is a harmless no-op (re-focuses/re-opens in place) — same
-        // reasoning as before, unchanged.
-        showReopen={!isLast && Boolean(requestUrl(activeStep, presenceCheckNonce))}
-        // `{ replace: true }` (S2, same reasoning as the step-change effect
-        // above) — re-sending the same request is still a SYSTEM-driven move,
-        // and without this, clicking [다시 열기] more than once on the same
-        // step stacked one identical history entry per click. Nonce bumped
-        // here too (same reasoning as the step-change effect) — a SECOND [다시
-        // 열기] click would otherwise resend the EXACT same request the first
-        // click already sent.
-        onReopen={() => {
-          requestNonceRef.current += 1
-          navigate(requestUrl(activeStep, requestNonceRef.current), { replace: true })
-        }}
         onSkip={finish}
         // ONLY ever called from the LAST step's own [완료] (Coachmark.jsx only
         // renders that button when `isLast` — see its own header) — every
