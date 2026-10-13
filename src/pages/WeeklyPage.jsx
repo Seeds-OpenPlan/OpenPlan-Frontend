@@ -1533,34 +1533,6 @@ function WeeklyPage() {
   })
 
   /*
-    TUT-06 "할 일 창 자동 열기" — `?addSchedule=1` opens ScheduleForm
-    pre-filled with the nearest free slot this week (owner spec: "이번 주
-    가까운 빈 시간대를 미리 채울 수 있으면 채운다"). `ready` waits for `plan`
-    AND the availability fetch — `findFirstFreeSlot` needs real
-    availability/blocks to search, and firing before they load would either
-    find nothing (every window still empty) or search against a blocks array
-    that's about to change; useSearchParamRequest leaves the param in place
-    until `ready` flips true, retrying each render instead of giving up.
-    (No separate `fixedSchedulesQuery`-loading wait: `useFixedSchedules`
-    shares `plan`'s own cache entry — see that hook's own header — so
-    `Boolean(plan)` already covers it.)
-  */
-  useSearchParamRequest(searchParams, setSearchParams, 'addSchedule', {
-    ready: Boolean(plan) && !availQuery.isLoading,
-    onFire: () => {
-      const slot =
-        // `occupiedWithFixed` — see that memo's own header (S3 fix): the
-        // prefilled slot must not land on top of a fixed schedule either.
-        findFirstFreeSlot({ days, availability, blocks: occupiedWithFixed, durationMin: snapDuration(60) }) ??
-        // Every day somehow full (an edge case, not the common path) — open
-        // the form anyway with a fixed fallback rather than silently doing
-        // nothing; the user can still adjust the time before saving.
-        { dayIndex: 0, startMin: 9 * 60 }
-      openScheduleCreate(slot)
-    },
-  })
-
-  /*
     TUT-07 "할 일 창 자동 열기" — `?highlightBlocks=id1,id2` (comma-separated
     planBlockIds, TUT-05/06's own created blocks — see tutorialSteps.js's
     DELETE_SAMPLE entry). Reuses the EXISTING PLAN-23 focus-ring mechanism
