@@ -91,7 +91,7 @@ function useCalendarConnectionBadge() {
   return { loading: false, connected }
 }
 
-function Row({ to, onClick, icon: Icon, title, subtitle, trailing }) {
+function Row({ to, onClick, icon: Icon, title, subtitle, trailing, linkState }) {
   const content = (
     <>
       <span
@@ -115,7 +115,17 @@ function Row({ to, onClick, icon: Icon, title, subtitle, trailing }) {
 
   if (to) {
     return (
-      <NavLink to={to} className={({ isActive }) => `${rowClass} ${isActive ? 'bg-brand-50' : ''}`}>
+      // `linkState` (see SettingsNavList's own `fromHubState` below) —
+      // SettingsLayout.jsx's mobile ← button reads `location.state` to tell
+      // "came from the hub, just pop one history entry" apart from "landed on
+      // this detail route some other way (auto-redirect, direct URL, or a
+      // desktop sidebar jump from one detail straight to another)" (PR #82 AI
+      // 리뷰 Blocking fix).
+      <NavLink
+        to={to}
+        state={linkState}
+        className={({ isActive }) => `${rowClass} ${isActive ? 'bg-brand-50' : ''}`}
+      >
         {content}
       </NavLink>
     )
@@ -141,11 +151,22 @@ function Section({ title, children }) {
   )
 }
 
-export function SettingsNavList({ onTutorialRestart }) {
+export function SettingsNavList({ onTutorialRestart, atHub }) {
   const availability = useAvailabilityBadge()
   const fixedBadge = useFixedScheduleBadge()
   const taskCategoryBadge = useTaskCategoryBadge()
   const calendarBadge = useCalendarConnectionBadge()
+
+  // PR #82 AI 리뷰 Blocking fix — `atHub`는 "지금 이 Row가 그려지는 시점에
+  // 사용자가 허브(/settings) 위에 서 있는가"다(SettingsLayout.jsx가 자신의
+  // location으로 매 렌더 다시 계산해 내려준다). 이 값을 클릭 시점이 아니라
+  // 렌더 시점에 고정해 각 NavLink의 `state`로 실어 보낸다 — 허브에서 상세로
+  // 막 들어가는 클릭만 `fromSettingsHub: true`를 받고, 데스크톱 2단에서 이미
+  // 상세를 보는 채로(atHub가 false) 다른 행을 눌러 상세→상세로 건너뛰는
+  // 클릭은 이 값이 없다(undefined). 모바일로 전환됐을 때 SettingsLayout의
+  // ← 버튼이 전자는 navigate(-1), 후자는 허브로 replace로 가르는 근거가
+  // 된다.
+  const fromHubState = atHub ? { fromSettingsHub: true } : undefined
 
   return (
     <nav aria-label="설정 메뉴">
@@ -156,12 +177,14 @@ export function SettingsNavList({ onTutorialRestart }) {
           icon={SlidersIcon}
           title="기본값 설정"
           subtitle="재계획 대안 기본 전략"
+          linkState={fromHubState}
         />
         <Row
           to="/settings/availability"
           icon={ClockIcon}
           title="가용시간 설정"
           subtitle="가용 시간 범위·요일별 조정"
+          linkState={fromHubState}
           trailing={
             availability.loading ? (
               <Skeleton width="4rem" height="0.875rem" />
@@ -175,6 +198,7 @@ export function SettingsNavList({ onTutorialRestart }) {
           icon={CalendarIcon}
           title="고정일정 관리"
           subtitle="반복 일정·충돌 확인"
+          linkState={fromHubState}
           trailing={
             fixedBadge.loading ? (
               <Skeleton width="4rem" height="0.875rem" />
@@ -193,6 +217,7 @@ export function SettingsNavList({ onTutorialRestart }) {
           icon={TagIcon}
           title="태스크 카테고리"
           subtitle="태스크 분류 프리셋 관리"
+          linkState={fromHubState}
           trailing={
             taskCategoryBadge.loading ? (
               <Skeleton width="3rem" height="0.875rem" />
@@ -205,7 +230,13 @@ export function SettingsNavList({ onTutorialRestart }) {
 
       {/* 오너 지정 순서(item 3/4): 계정관리 → 캘린더연동 → 알림. */}
       <Section title="계정">
-        <Row to="/settings/account" icon={UserCircleIcon} title="계정 관리" subtitle="프로필·로그아웃·계정 상태" />
+        <Row
+          to="/settings/account"
+          icon={UserCircleIcon}
+          title="계정 관리"
+          subtitle="프로필·로그아웃·계정 상태"
+          linkState={fromHubState}
+        />
         <Row
           to="/settings/calendar"
           icon={CalendarIcon}
@@ -213,6 +244,7 @@ export function SettingsNavList({ onTutorialRestart }) {
           // 안드로이드 앱에서는 애플 행을 그리지 않으므로(CalendarConnectionSection
           // 헤더 참고) 부제도 같이 맞춘다 — 없는 제공자를 안내하면 안 된다.
           subtitle={isAndroidAppShell() ? 'Google 캘린더 가져오기' : 'Google·Apple 캘린더 가져오기'}
+          linkState={fromHubState}
           trailing={
             calendarBadge.loading ? (
               <Skeleton width="3rem" height="0.875rem" />
@@ -223,7 +255,13 @@ export function SettingsNavList({ onTutorialRestart }) {
             )
           }
         />
-        <Row to="/settings/notifications" icon={BellIcon} title="알림" subtitle="푸시 알림·리마인더" />
+        <Row
+          to="/settings/notifications"
+          icon={BellIcon}
+          title="알림"
+          subtitle="푸시 알림·리마인더"
+          linkState={fromHubState}
+        />
       </Section>
 
       <Section title="지원 및 정보">
@@ -238,8 +276,20 @@ export function SettingsNavList({ onTutorialRestart }) {
             /faq·/notices로 튕겨 나갔음 — 그 경로들은 이제 여기로 redirect만
             한다, router.js 참고). "지원"은 그 안에서도 FAQ 탭이 기본(오너
             피드백 #7 — "궁금한 걸 먼저 찾아보고, 없으면 문의"). */}
-        <Row to="/settings/support" icon={ChatIcon} title="지원" subtitle="문의·피드백 보내기" />
-        <Row to="/settings/notices" icon={MegaphoneIcon} title="공지" subtitle="업데이트·공지사항" />
+        <Row
+          to="/settings/support"
+          icon={ChatIcon}
+          title="지원"
+          subtitle="문의·피드백 보내기"
+          linkState={fromHubState}
+        />
+        <Row
+          to="/settings/notices"
+          icon={MegaphoneIcon}
+          title="공지"
+          subtitle="업데이트·공지사항"
+          linkState={fromHubState}
+        />
       </Section>
 
       {/* 오너 리뷰 2차 (E) — 참조 PNG 하단의 "OpenPlan v1.0.0" 푸터. 실제

@@ -43,9 +43,10 @@ const SIDEBAR_WIDTH_WIDE = '340px'
   `fixed inset-0`로 덮는다. 뒤로가기는 BottomSheet의 overlayHistory 브리지를
   쓰지 않는다 — `/settings/xxx`가 이미 진짜 라우트라서 브라우저/안드로이드
   뒤로가기는 라우터 기본 동작(popstate)만으로 허브로 돌아간다. 화면 안의
-  ← 버튼은 NotFoundPage/ForbiddenPage와 같은 "직접 진입 가드"
-  (`window.history.length > 1`)로 navigate(-1)과 `/settings`를 가른다 — 북마크로
-  `/settings/account`에 바로 들어온 경우 뒤로가기가 앱 밖으로 나가지 않게.
+  ← 버튼은 (PR #82 AI 리뷰 Blocking fix) `window.history.length` 같은
+  간접 신호가 아니라 SettingsNavList가 허브에서 상세로 들어갈 때만 실어
+  보내는 `location.state.fromSettingsHub`로 "허브를 거쳐 왔는지"를 직접
+  판정한다 — 자세한 이유와 각 분기는 아래 `handleBack` 자신의 주석 참고.
 
   데스크톱 2단(B)은 모양·동작 그대로: SettingsNavList는 라우트가 아니라 이
   레이아웃이 직접, 항상 렌더한다. 리스트는 100%(허브) ↔ SIDEBAR_WIDTH(상세),
@@ -109,17 +110,37 @@ function SettingsLayout() {
     titleRef.current?.focus()
   }, [isDesktop, atHub, location.pathname])
 
-  // ← 버튼: 허브에서 들어온 보통 경로는 navigate(-1)이 히스토리를 한 칸
-  // 되돌려 허브로 간다(브라우저 뒤로가기와 동일한 결과). 북마크·새로고침
-  // 등으로 상세 라우트에 직접 들어온 경우 popping할 앱 내 히스토리가 없어
-  // navigate(-1)이 앱 밖으로 나가 버린다 — NotFoundPage/ForbiddenPage가 이미
-  // 쓰는 `window.history.length > 1` 가드로 그 경우만 `/settings`로 보낸다.
+  // ← 버튼 (PR #82 AI 리뷰 Blocking fix): "허브에서 들어왔는지"를
+  // `window.history.length`가 아니라 location.state로 명시적으로 추적한다.
+  //
+  // 이전 가드(`window.history.length > 1`)의 전제가 틀렸었다 — 데스크톱
+  // 자동 리다이렉트(95-99행, `/settings`→첫 상세, `replace: true`)가 허브
+  // 엔트리를 히스토리에서 지우고 나면, 그 뒤 창을 좁혀 모바일로 바뀌어도
+  // `history.length`는 여전히 1보다 커서(설정에 들어오기 전의 다른 페이지들
+  // 때문에) navigate(-1)이 실행됐다 — 그 결과 ← 버튼이 허브를 건너뛰고
+  // 설정에 들어오기 전 화면으로 나가 버렸다.
+  //
+  // 지금은 SettingsNavList의 Row가 "지금 허브에 서 있다가 상세로 들어가는"
+  // 클릭에만 `state={{ fromSettingsHub: true }}`를 NavLink에 실어 보낸다
+  // (그 파일 자신의 `fromHubState` 주석 참고):
+  // - state가 있으면 → 허브를 거쳐 방금 들어왔다는 뜻 → navigate(-1)로
+  //   히스토리를 한 칸 되감는다(브라우저 뒤로가기와 동일한 결과).
+  // - state가 없으면 → 데스크톱 자동 리다이렉트·북마크/새로고침 직접 진입·
+  //   데스크톱 2단에서 상세→상세로 건너뛴 경우(허브를 거치지 않음) 중
+  //   하나다 → `/settings`로 **replace**한다. push를 쓰면 지금 보던 상세
+  //   위에 허브가 새로 쌓여, 그다음 뒤로가기를 누르면 그 상세로 되돌아가는
+  //   루프가 생긴다 — replace는 그 상세 엔트리 자체를 허브로 바꿔치기해
+  //   루프를 만들지 않는다.
   const handleBack = () => {
-    if (window.history.length > 1) navigate(-1)
-    else navigate('/settings')
+    if (location.state?.fromSettingsHub) navigate(-1)
+    else navigate('/settings', { replace: true })
   }
 
-  const navList = <SettingsNavList onTutorialRestart={requestRestart} />
+  // `atHub`를 내려 보낸다 — SettingsNavList가 "지금 허브에서 상세로 들어가는
+  // 클릭"과 "데스크톱 2단에서 상세→상세로 건너뛰는 클릭"을 구분해 NavLink의
+  // `state`를 다르게 싣는다(그 파일 자신의 `fromHubState` 주석, 그리고 아래
+  // handleBack 주석 참고).
+  const navList = <SettingsNavList onTutorialRestart={requestRestart} atHub={atHub} />
   // 모바일에서 상세(전체화면 슬라이드)가 열려 있는 동안 허브 리스트를
   // 포커스/스크린리더에서 뺀다 — 시각적으로는 상세가 `fixed`로 완전히 덮지만
   // DOM상으론 둘 다 떠 있으므로, inert 없이는 Tab이나 가상 커서가 가려진
