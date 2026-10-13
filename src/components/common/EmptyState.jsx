@@ -1,4 +1,4 @@
-import { BrandMarkOutlineIcon, EMPTY_STATE_ICON_SIZE, EMPTY_STATE_ICON_CLASS } from './statusIcons'
+import { SearchIcon, EMPTY_STATE_ICON_SIZE, EMPTY_STATE_ICON_CLASS } from './statusIcons'
 import { Button } from './Button'
 
 /*
@@ -7,14 +7,15 @@ import { Button } from './Button'
   two actions (primary + optional secondary), centered — the shape every
   "nothing here yet, here's how to start" surface in this codebase repeats.
 
-  Icon history (owner direction, 2026-10-13): first removed app-wide (a
-  generic "empty box" illustration read as clutter), then replaced with the
-  app's own brand mark instead of staying icon-less — "no icon" was too
-  plain, but the old literal box wasn't the answer either — then the owner
-  asked for it lighter and a little larger (32px/text-text-disabled →
-  40px/text-neutral-300). Size/color come from `EMPTY_STATE_ICON_SIZE` /
-  `EMPTY_STATE_ICON_CLASS` (statusIcons.jsx) rather than local literals, so
-  this card and DashboardEmptyState.jsx can't drift apart on a future tweak.
+  Icon history (owner direction, 2026-10-13): removed app-wide (a generic
+  "empty box" illustration read as clutter) → replaced with the app's brand
+  mark (ring+check) since "no icon" was too plain → lightened/enlarged
+  (32px/text-text-disabled → 40px/text-neutral-300) → finally swapped the
+  mark itself for a magnifying glass ("not bad, but a search icon reads
+  better" — `SearchIcon`, an alias for the existing SCR-404 icon shape,
+  statusIcons.jsx). Size/color still come from `EMPTY_STATE_ICON_SIZE` /
+  `EMPTY_STATE_ICON_CLASS` rather than local literals, so this card and
+  DashboardEmptyState.jsx can't drift apart on a future tweak.
 
   Not `role="alert"`/`role="status"`: an empty list is a normal, expected state
   (not an error, not a transient announcement), so it renders like ordinary
@@ -38,7 +39,7 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-card border border-border bg-surface px-4 py-8 text-center">
-      <BrandMarkOutlineIcon className={EMPTY_STATE_ICON_CLASS} size={EMPTY_STATE_ICON_SIZE} />
+      <SearchIcon className={EMPTY_STATE_ICON_CLASS} size={EMPTY_STATE_ICON_SIZE} />
       <p className="text-body font-medium text-text">{title}</p>
       {description && <p className="max-w-[42ch] text-label text-text-muted">{description}</p>}
       {(onAction || onSecondaryAction) && (

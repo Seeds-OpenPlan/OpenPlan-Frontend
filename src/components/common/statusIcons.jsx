@@ -15,6 +15,12 @@ const base = {
 }
 
 // SCR-404 — compass/search: "you are looking for something that isn't here".
+// Also re-exported below as `SearchIcon`: this same magnifying-glass shape is
+// what the owner picked for the empty-state decorative mark too (feedback
+// 2026-10-13 — "not bad, but a magnifying glass would read better" than the
+// earlier brand-mark ring+check), and since both uses are purely decorative
+// (aria-hidden, meaning carried by adjacent text) there's no reason to draw
+// the same circle+diagonal twice under two names.
 export function NotFoundIcon({ className, size = 24 }) {
   return (
     <svg {...base} width={size} height={size} viewBox="0 0 24 24" className={className}>
@@ -23,6 +29,12 @@ export function NotFoundIcon({ className, size = 24 }) {
     </svg>
   )
 }
+
+// Alias used by empty-state surfaces (EmptyState.jsx, DashboardEmptyState.jsx)
+// so call sites read "search" rather than "not found" — same component, a
+// name that fits the "nothing here yet, go look elsewhere" context instead
+// of the 404-page one.
+export const SearchIcon = NotFoundIcon
 
 // SCR-403 — lock: access denied (visually distinct from 404, story §2 requires it).
 export function LockIcon({ className, size = 24 }) {
@@ -67,35 +79,20 @@ export function CheckCircleIcon({ className, size = 24 }) {
   )
 }
 
-// EmptyState / DashboardEmptyState decorative mark (owner direction,
-// 2026-10-13: replaces the earlier generic "empty box" illustration with the
-// app's own brand mark — ring+check — rendered small and muted instead of
-// removed outright). Coordinates are lifted directly from the
-// design-of-record SVG (docs/플레이 출시 작업내용/스토어 그래픽/openplan-icon.svg,
-// 512 viewBox), same shape AppIcon.jsx (PR #75) renders — but outline-only:
-// no background square, no hardcoded white fill, so `currentColor` lets each
-// call site mute it via className (e.g. `EMPTY_STATE_ICON_CLASS` below)
-// instead of forcing the solid brand blue, since here it's a quiet
-// watermark, not the literal app icon. Named BrandMarkOutlineIcon (not
-// AppIcon) to stay clear of that component's name.
-export function BrandMarkOutlineIcon({ className, size = 24 }) {
-  return (
-    <svg {...base} width={size} height={size} viewBox="0 0 512 512" className={className}>
-      <circle cx="256" cy="256" r="148" strokeWidth="44" />
-      <path d="M190 262 L238 310 L324 218" strokeWidth="40" />
-    </svg>
-  )
-}
-
-// Shared size/color for every `BrandMarkOutlineIcon` usage in an empty-state
-// card (EmptyState.jsx, DashboardEmptyState.jsx). Exported as constants
-// — not left as separate literals at each call site — so a future owner
-// tweak (this pair has already changed once: 32px/text-text-disabled →
-// 40px/text-neutral-300) only needs editing here instead of two files
+// Shared size/color for every `SearchIcon` usage in an empty-state card
+// (EmptyState.jsx, DashboardEmptyState.jsx). Exported as constants — not
+// left as separate literals at each call site — so a future owner tweak
+// (this pair has already changed twice: 32px/text-text-disabled →
+// 40px/text-neutral-300, then the icon itself from a brand-mark ring+check
+// to this magnifying glass) only needs editing here instead of two files
 // silently drifting apart. `text-neutral-300` (lighter than the
 // text-disabled/neutral-400 token) is a deliberate one-off for this
 // decorative mark, not a semantic-token substitute — it's purely
-// decorative (aria-hidden) so WCAG text-contrast minimums don't apply.
+// decorative (aria-hidden) so WCAG text-contrast minimums don't apply. At
+// 40px the NotFoundIcon/SearchIcon circle's default base strokeWidth=2 (its
+// 24-unit viewBox scaled ~1.67x) renders ≈3.3px — the same proportional
+// scaling every other icon in this file gets at a larger `size`, so it's
+// neither too thin nor too heavy without a one-off override.
 export const EMPTY_STATE_ICON_SIZE = 40
 export const EMPTY_STATE_ICON_CLASS = 'text-neutral-300'
 
