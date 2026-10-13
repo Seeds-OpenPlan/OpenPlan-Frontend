@@ -60,10 +60,12 @@ import { TUTORIAL_EVENTS } from './tutorialEvents'
       this single-event shape, so TutorialOverlay special-cases it
       directly (see that file).
 
-  PROGRESS NUMBERING — 5 main steps, not 6 (owner's own example: "2-1/5"):
-  COMPLETE (TUT-08) is deliberately NOT counted in the denominator — it is
-  a terminal "you're done" screen with nothing to click toward, not a 6th
-  thing-to-do (see TutorialOverlay.jsx's own progress-label comment).
+  PROGRESS NUMBERING — 5 main steps, not 6: COMPLETE (TUT-08) is
+  deliberately not one of them — it is a terminal "you're done" screen with
+  nothing to click toward, not a 6th thing-to-do. The label TutorialOverlay
+  shows never carries this "5" as a visible denominator ("2-1", not
+  "2-1/5" — owner's own later feedback, 2026-10, dropped the fraction an
+  earlier pass had shown) — see that file's own `progressLabel` comment.
 */
 export const TUTORIAL_STEPS = [
   {

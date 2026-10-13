@@ -28,7 +28,9 @@ const RESUME_TITLE_ID = 'tutorial-resume-title'
 // (see this file's own header, "RESUME PROMPT").
 const RESUME_ASKED_KEY = 'tutorial-resume-asked'
 // 5 main steps (CREATE_PROJECT..DELETE_SAMPLE) — COMPLETE is NOT counted
-// (owner's own example, "2-1/5" — see tutorialSteps.js's own header on why).
+// (see tutorialSteps.js's own header on why). The label itself carries no
+// denominator ("2-1", not "2-1/5" — owner's own later feedback, 2026-10,
+// dropped the "/5" the FIRST version of this redesign had shown).
 const MAIN_STEP_LABELS = ['1', '2', '3', '4', '5']
 
 /*
@@ -49,8 +51,8 @@ const MAIN_STEP_LABELS = ['1', '2', '3', '4', '5']
   State machine (tutorialStep):
     0                          → not started: TUT-01 kickoff dialog (AC3).
     1..TUTORIAL_STEPS.length    → TUT-03~08, one Coachmark each (progress
-                                  label "n/5" or "n-m/5" — see tutorialSteps.js
-                                  for why COMPLETE isn't counted in the "5").
+                                  label "n" or "n-m", no denominator — see
+                                  `progressLabel`'s own comment below).
     completed/skipped          → renders nothing (tutorialCompleted:true).
 
   RING-BASED REDESIGN (owner decision, 2026-10 — supersedes an earlier
@@ -174,6 +176,21 @@ const MAIN_STEP_LABELS = ['1', '2', '3', '4', '5']
   exactly the BLOCKER the "EVERY step's own entry navigates" fix above
   closes — kickoff→CREATE_PROJECT is the same shape as PLACE_TASK's own
   /projects→/weekly move, just not special-cased before).
+
+  CLOSE-THEN-MOVE HARDENING (Thomas 분석, 2026-10 — defense-in-depth on top
+  of the fix above, independent of the separate `fix/overlay-history` PR
+  rebuilding `utils/overlayHistory.js` itself, which this file does not
+  touch): nowhere in this file does a click handler both close a Dialog
+  (`setOffRouteState`/etc.) AND call `navigate()` in the SAME tick anymore.
+  [튜토리얼로 돌아가기] (`returnToTutorialRoute` below) only calls
+  `navigate()` — the off-route ask's own Dialog closes ONE RENDER LATER,
+  via the combined effect's own reactive disarm, once `navLocation.pathname`
+  actually reflects that navigation. The render branch chain below ALSO
+  renders NOTHING (not the surface about to close, not yet the Coachmark
+  ring) for the one tick between a step becoming active and its own
+  entry-navigate landing (see that branch's own comment) — covering BOTH
+  kickoff→CREATE_PROJECT and a RESUME onto a step whose route the user
+  wasn't already on.
 
   RESUME PROMPT (owner decision, 2026-10) — a FRESH MOUNT (refresh,
   re-login, app restart; TutorialOverlay itself otherwise stays mounted for
@@ -473,17 +490,18 @@ export function TutorialOverlay() {
   const resolvedTitle = activeSubStep?.title
   const resolvedBody =
     typeof activeSubStep?.body === 'function' ? activeSubStep.body(targets, weekBlocks) : activeSubStep?.body
-  // Progress label — "n/5" for a step with no sub-steps, "n-m/5" for one
-  // that has them, and a bare "완료" (no fraction) for COMPLETE — see this
-  // file's own header and tutorialSteps.js's for why COMPLETE sits outside
-  // the "5" denominator entirely rather than being a 6th thing to count.
+  // Progress label — 오너 실측 피드백(2026-10): 분모("/5")를 뗀다. "n"(단일
+  // 단계) 또는 "n-m"(하위 단계가 있는 단계), COMPLETE는 그대로 "완료"(이
+  // 라벨에는 애초에 분모가 없었다) — tutorialSteps.js's own header still
+  // explains WHY there are 5 main steps (COMPLETE excluded from that count),
+  // this is now purely a display decision, independent of that count.
   const progressLabel = !activeStep
     ? ''
     : isLast
       ? onboardingCopy.tutorial.completeProgressLabel
       : activeStep.subSteps
-        ? `${MAIN_STEP_LABELS[stepIndex]}-${activeSubStepIndex + 1}/5`
-        : `${MAIN_STEP_LABELS[stepIndex]}/5`
+        ? `${MAIN_STEP_LABELS[stepIndex]}-${activeSubStepIndex + 1}`
+        : MAIN_STEP_LABELS[stepIndex]
 
   /*
     RESUME PROMPT decision — render-time adjustment (same idiom as
@@ -577,12 +595,18 @@ export function TutorialOverlay() {
     setOffRouteState(null)
   }
 
-  // [튜토리얼로 돌아가기] — returns to the active step's OWN route; the
-  // effect above resets `offRouteState` to `null` on its own the moment
-  // `navLocation.pathname` actually matches, but clearing it here too avoids
-  // waiting an extra render for the dialog to disappear.
+  // [튜토리얼로 돌아가기] — returns to the active step's OWN route. Does
+  // NOT also call `setOffRouteState(null)` here (Thomas 분석, 2026-10
+  // hardening — "닫기와 이동을 같은 틱에 하지 않기"): closing this Dialog
+  // and calling `navigate()` in the SAME click handler would close+move in
+  // one tick, the exact shape of race the kickoff→CREATE_PROJECT BLOCKER
+  // above was. The reactive disarm already in the combined effect above
+  // (`onRoute && offRouteState !== null → setOffRouteState(null)`) closes
+  // this dialog on its own, ONE RENDER LATER, once `navLocation.pathname`
+  // actually reflects this `navigate()` call — the dialog staying open for
+  // that one extra tick is imperceptible and strictly safer than closing
+  // it before the navigation it depends on has actually landed.
   const returnToTutorialRoute = () => {
-    setOffRouteState(null)
     navigate(activeStep.route)
   }
   // [종료] — goes through the SAME `exitWithCleanupCheck` → PATCH flow as
@@ -975,6 +999,28 @@ export function TutorialOverlay() {
         {body}
       </BottomSheet>
     )
+  } else if (navLocation.pathname !== activeStep.route && offRouteState === null) {
+    /*
+      PENDING ENTRY NAVIGATE (Thomas 분석, 2026-10 하드닝 — "닫기와 이동을
+      같은 틱에 하지 않기") — a step just became active but its own
+      entry-tick `navigate()` (the combined effect above) hasn't landed on
+      screen yet; `offRouteState === null` is what tells this apart from a
+      REAL later off-route excursion (that effect never arms the ask during
+      THIS gap — see its own `isEntryTick` branch). Renders NOTHING rather
+      than either the surface that was just about to close (kickoff's own
+      Dialog on the very first entry, or the RESUME ask's Dialog if resuming
+      mid-progress onto a step whose route the user wasn't already on) or
+      the Coachmark ring (whose target doesn't exist on the CURRENT page
+      yet anyway). This keeps that closing Dialog's own unmount and this
+      step's own `navigate()` call from both happening in the exact same
+      effect pass — the shape of race the kickoff→CREATE_PROJECT BLOCKER
+      above was. The gap is one render tick, imperceptible; the owner's own
+      instruction left the choice between keeping the old surface open vs.
+      rendering nothing here, and "nothing" was picked specifically because
+      "keep the old surface" would show kickoff's own [시작하기] copy during
+      a RESUME's analogous gap, which is wrong content for that case.
+    */
+    mainContent = null
   } else if (offRouteState === 'asking') {
     // OFF-ROUTE ask — see this file's own header. Replaces the normal
     // Coachmark render entirely while showing (the "hide ring+banner, ask
@@ -1042,17 +1088,17 @@ export function TutorialOverlay() {
         // own header ("PRACTICE-DATA CLEANUP").
         onComplete={() => {
           exitWithCleanupCheck(() => {
-            // TUT-08 "완료 상태와 다음 이동 화면을 확인한다" — land on the
-            // dashboard once the last step's own [완료] click commits the one
-            // server field this run actually changes. Step reset happens in
-            // onSuccess, same ordering (and same reason) as `finish` above —
-            // see that function's own comment.
+            // 오너 요구(2026-10, 실측 피드백): 종료 경로는 현재 화면을
+            // 유지한다 — `navigate('/')`로 대시보드로 보내던 것을 제거했다.
+            // [완료]를 누른 그 WEEKLY 화면(TUT-08의 own route)에 그대로
+            // 남는다. Step reset happens in onSuccess, same ordering (and
+            // same reason) as `finish` above — see that function's own
+            // comment.
             updateProgress.mutate(
               { tutorialCompleted: true },
               {
                 onSuccess: () => {
                   resetTutorialStep()
-                  navigate('/')
                 },
               },
             )

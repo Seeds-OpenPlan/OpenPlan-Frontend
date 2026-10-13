@@ -135,11 +135,11 @@ export const onboardingCopy = {
     // redesign — see Coachmark.jsx's own header): [다시 열기] no longer
     // exists (nothing left to re-open once no step auto-opens anything),
     // and the progress label is now a plain pre-formatted string
-    // TutorialOverlay builds itself ("2-1/5" — sub-step numbering lives
-    // there, not in a copy-table function). `completeProgressLabel` is the
-    // ONE exception — COMPLETE has no "n/5" to show (it sits outside the
-    // 5-step denominator, tutorialSteps.js's own header), so this is a
-    // fixed label rather than something TutorialOverlay computes.
+    // TutorialOverlay builds itself ("2-1", "4" — no denominator, owner's
+    // own later feedback dropped the "/5" an earlier pass had shown — sub-
+    // step numbering lives there, not in a copy-table function).
+    // `completeProgressLabel` is the ONE exception — COMPLETE never had a
+    // denominator to drop, it's always just been this fixed label.
     completeProgressLabel: '완료',
     //
     // OFF-ROUTE prompt (owner decision, 2026-10) — shown when the current

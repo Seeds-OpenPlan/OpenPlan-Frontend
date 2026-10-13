@@ -247,10 +247,11 @@ export function Coachmark({
   targetId,
   title,
   body,
-  // Pre-formatted by TutorialOverlay (e.g. "2-1/5", "4/5") — this component
-  // has no notion of sub-steps or how many main steps exist; it just shows
-  // whatever string it's handed (owner decision, 2026-10: "하위 동작은
-  // '2-1, 2-2' 형식으로 표시"). Replaces the old `stepNumber`/`total` pair.
+  // Pre-formatted by TutorialOverlay (e.g. "2-1", "4" — no denominator, see
+  // that file's own comment on why) — this component has no notion of
+  // sub-steps or how many main steps exist; it just shows whatever string
+  // it's handed (owner decision, 2026-10: "하위 동작은 '2-1, 2-2' 형식으로
+  // 표시"). Replaces the old `stepNumber`/`total` pair.
   progressLabel,
   isLast,
   // AUTO-PROGRESS ONLY (owner decision, 2026-10 — removes [이전]/[다음]):
