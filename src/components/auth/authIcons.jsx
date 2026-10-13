@@ -3,8 +3,8 @@
   levels, deliberately:
 
   - `BrandMarkIcon` is a thin re-export of the shared `AppIcon` (the owner's
-    confirmed app icon — ring + check — also used for the PWA/store icons and
-    the top bar). It used to be its own placeholder glyph (a plan/list icon)
+    confirmed app icon — a single centered ring — also used for the PWA/store
+    icons and the top bar). It used to be its own placeholder glyph (a plan/list icon)
     before the app icon design was finalized; now that the real mark exists,
     every brand-mark spot should show the SAME icon rather than two different
     marks that both claim to represent OpenPlan. Kept as a wrapper (not
