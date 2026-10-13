@@ -8,9 +8,13 @@ import { CalendarConnectionSection } from '../../components/settings/CalendarCon
   — 구글·애플 각자 독립된 연결/해제 토글, 오너 4차 리뷰로 라운드 2의 단일
   병합을 정정)는 그대로 재사용, 이 페이지는 배치만 한다.
 
-  `id="settings-detail-title"` — 모바일 BottomSheet가 `labelledById`로 참조하는
-  공용 id(item 6). Outlet은 한 번에 한 하위 페이지만 렌더하므로 모든 설정
-  하위 페이지가 같은 리터럴 id를 써도 충돌하지 않는다.
+  `id="settings-detail-title"` — 설정 하위 페이지 전체가 공유하는 리터럴 id
+  (item 6). Outlet은 한 번에 한 하위 페이지만 렌더하므로 모든 설정 하위
+  페이지가 같은 리터럴 id를 써도 충돌하지 않는다. (2026-10 구조 변경: 모바일
+  상세는 더 이상 BottomSheet가 아니라 전체화면 슬라이드 라우트라, 이 id를
+  읽는 쪽은 이제 없다 — SettingsLayout.jsx는 경로→제목 맵에서 헤더 제목을
+  따로 가져온다. id 자체는 다른 설정 페이지들과의 관례를 깨지 않도록 남겨
+  둔다.)
 */
 function SettingsCalendarPage() {
   return (
