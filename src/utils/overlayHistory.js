@@ -121,6 +121,25 @@ import { getOverlayStackSnapshot, subscribeOverlayStack } from './overlayStack'
   머물러도(스택이 비어 있으니 어떤 오버레이도 안 보인다) 무해하므로, forward()로
   한 번 더 트래버설을 일으키는 복잡함을 피하는 쪽을 택했다.
 
+  보호 엔트리 재보장 (PR #81 AI 리뷰 "확인 필요" #2) — self-back()은 `history.back()`
+  호출과 실제 트래버설(popstate 도착) 사이에 매크로태스크 하나만큼 간격이 있다(위
+  "자기 back()" 단락). 그 짧은 틈에 **다른 오버레이가 새로 열리면** 사고가 난다:
+  `ensureOverlayEntry`는 `isOurEntry()`만 보고 "이미 보호돼 있다"고 판단하는데, 그
+  시점엔 아직 트래버설 전이라 `window.history.state`가 여전히 **곧 소비될 우리
+  마커**를 가리키고 있다 — 그래서 아무것도 새로 push하지 않는다. 그 직후 미뤄 뒀던
+  back()이 실제로 그 마커를 가져가 버리면, 방금 열린 오버레이에는 보호 엔트리가
+  하나도 없는 상태가 된다(그 상태에서 하드웨어 뒤로 가기를 누르면 이 오버레이를
+  건너뛰고 더 뒤로 가 버린다).
+
+  고친 버전은 "재-push를 미리 막는" 쪽(`ensureOverlayEntry`가 self-back 진행 중엔
+  마커를 불신하게 만드는 안) 대신 **도착 후 재보장**을 택했다 — 더 단순하고, "그
+  사이 무엇이 열렸는지"를 추측할 필요 없이 **도착 시점의 실제 스택 상태**를 그대로
+  읽으면 되기 때문이다. `handleGlobalPopstate`가 이 popstate를 self-initiated로
+  확인한 바로 그 자리에서, 그 순간 오버레이 스택이 비어 있지 않으면(= 바로 그 경합이
+  일어난 경우) `ensureOverlayEntry()`로 마커를 즉시 다시 세운다. 경합이 없었던
+  평범한 경우(스택이 실제로 비어 있다)는 그 조건이 거짓이라 아무 일도 하지 않는다 —
+  기존 "닫기 → back()" 흐름과 똑같다.
+
   react-router 와의 공존 — 이 저장소는 데이터 라우터(`createBrowserRouter`)를 쓰고
   `useBlocker`(미저장 가드)가 걸려 있다. 그래서 두 가지를 지킨다.
   ① **같은 URL** 로만 push 한다 — 로케이션이 바뀌지 않으니 라우트 재평가·loader 재실행이
@@ -333,16 +352,30 @@ function handleGlobalPopstate(event) {
   // 우리만의 부기용 필드를 보지 않게 한다.
   Object.defineProperty(event, SELF_INITIATED_FLAG, { value: selfInitiated })
 
+  // 방향 판정(S1)은 "방금 도착한" idx를 봐야 하므로 lastKnownIdx를 갱신하기 전에
+  // 먼저 계산한다 — 아래에서 쓰고 나면 바로 갱신한다(이후 분기들은 전부 "지금"의
+  // 최신 idx를 기준으로 동작해야 하므로).
+  const movedBackward = typeof idx === 'number' && typeof lastKnownIdx === 'number' && idx < lastKnownIdx
+  if (typeof idx === 'number') lastKnownIdx = idx
+
   // 버려진 엔트리 건너뛰기 — "뒤로 이동해서"(idx가 작아져서) 우리 마커에 도착했고,
   // 그 시점에 열린 오버레이가 하나도 없을 때만. 앞으로 이동해서 도착한 경우(S1)는
   // 그대로 둔다 — 마커 엔트리에 머물러도 무해하다(위 헤더 참고).
-  const movedBackward = typeof idx === 'number' && typeof lastKnownIdx === 'number' && idx < lastKnownIdx
   if (event.state?.[MARK] && movedBackward && getOverlayStackSnapshot().length === 0) {
     recordExpectedSelfBackTarget()
     window.history.back()
+    // 스택이 비어 있음을 이미 확인했으니 아래 "보호 엔트리 재보장"은 대상이
+    // 아니다(재보장은 "지금 뭔가 열려 있는가"를 묻는다) — 여기서 끝낸다.
+    return
   }
 
-  if (typeof idx === 'number') lastKnownIdx = idx
+  // 보호 엔트리 재보장 (PR #81 AI 리뷰 "확인 필요" #2, 설계 헤더 "보호 엔트리
+  // 재보장" 단락) — self-back()이 실제로 착지했는데, 그 사이 다른 오버레이가 열려
+  // 지금 스택이 비어 있지 않다면 보호 엔트리를 다시 세운다. `pushEntry()`(내부에서
+  // 불림)가 `lastKnownIdx`도 새 idx로 갱신해 주므로 여기서 다시 손댈 필요는 없다.
+  if (selfInitiated && getOverlayStackSnapshot().length > 0) {
+    ensureOverlayEntry()
+  }
 }
 
 let installed = false

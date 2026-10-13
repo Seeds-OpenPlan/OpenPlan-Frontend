@@ -42,8 +42,25 @@ export function useTutorialRestart() {
   // 없어 이 스토리 범위에서 안전하게 식별·삭제할 방법이 없다(오탐으로
   // 사용자의 실제 프로젝트를 지울 위험). 문구(restartBody)는 이 한계에 맞춰
   // 이미 정정되어 있다(onboardingCopy.js 자신의 주석 참고).
+  /*
+    [PR #81 AI 리뷰 "확인 필요" #1] 이전 버전은 PATCH를 시작하기 **전에**
+    `setConfirmOpen(false)`로 다이얼로그부터 닫고, `suppressPendingSelfBack()`은
+    PATCH가 성공한 뒤에야 불렀다 — "닫기"(그래서 스택이 0이 되어 재확인이 예약됨)와
+    "억제 신호"(navigate 직전) 사이에 실 네트워크 왕복만큼의 간격이 생긴 것이다.
+    overlayHistory.js의 더블 rAF 재확인은 그 네트워크 왕복보다 훨씬 먼저 끝나므로,
+    억제가 걸리기도 전에 이미 self-back()이 불려 버렸다 — `suppressPendingSelfBack`의
+    "navigate() 바로 앞에서 호출"이라는 계약이 이 호출부에서는 보호가 되지 못했다는
+    뜻이다(리뷰에서 지적된 S2 재발 변형).
+
+    고친 버전은 다른 "닫기+이동" 호출부(SettingsAccountPage 로그아웃,
+    SessionExpiredOverlay, NotificationBell, SettingsLayout — 전부 "닫는 상태 갱신 →
+    suppress → navigate"가 **같은 동기 콜백 안**에서 일어난다)와 같은 모양으로
+    맞춘다 — 다이얼로그는 PATCH가 성공할 때까지 열어 두고(확인 버튼에 loading/disabled
+    상태만 보여 준다, 아래 dialogBody의 `loading={updateOnboardingProgress.isPending}`),
+    onSuccess 한 곳에서 "닫기 → 억제 → 이동"을 순서대로, 같은 틱에 처리한다. 이러면
+    "닫기"가 실제로 일어나는 시점과 "억제 신호"가 항상 함께 붙어 있어 저 계약이 성립한다.
+  */
   const confirmRestart = () => {
-    setConfirmOpen(false)
     /*
       The FE-only step cursor (tutorialProgressStore.js) is reset in onSuccess,
       AFTER the server PATCH confirms `tutorialCompleted:false` — not before,
@@ -76,14 +93,15 @@ export function useTutorialRestart() {
       {
         onSuccess: () => {
           resetTutorialStep(sessionQuery.data?.userId)
-          // 이 다이얼로그를 닫은 것(맨 위 setConfirmOpen(false))과 PATCH 성공 뒤의 이동이
-          // 겹치는 경우다 — overlayHistory.js의 self-back() 지연 재확인 창(두 프레임)보다
-          // 이 PATCH가 더 오래 걸리면(실 네트워크 왕복) 재확인이 먼저 self-back()을 불러
-          // 버려, 뒤이은 이 navigate('/')가 그 back()과 경합해 킥오프 다이얼로그가 0.1초
-          // 보였다가 사라지는 사고(TUT-09, owner 리뷰 S2)로 이어질 수 있다. navigate()
-          // 바로 앞에서 알려 그 재확인이 포기하게 한다.
+          // 닫기 → 억제 신호 → 이동, 이 순서로 같은 동기 콜백 안에서 — 위 함수 헤더 참고.
+          setConfirmOpen(false)
           suppressPendingSelfBack()
           navigate('/')
+        },
+        onError: () => {
+          // 실패하면 이동하지 않으므로 억제도 필요 없다 — 그냥 닫는다. 에러 토스트는
+          // useUpdateOnboardingProgress 공통 onError(useOnboarding.js)가 이미 띄운다.
+          setConfirmOpen(false)
         },
       },
     )
@@ -99,7 +117,14 @@ export function useTutorialRestart() {
         <Button type="button" variant="secondary" size="md" onClick={() => setConfirmOpen(false)}>
           {onboardingCopy.tutorial.restartCancel}
         </Button>
-        <Button ref={confirmBtnRef} type="button" variant="primary" size="md" onClick={confirmRestart}>
+        <Button
+          ref={confirmBtnRef}
+          type="button"
+          variant="primary"
+          size="md"
+          loading={updateOnboardingProgress.isPending}
+          onClick={confirmRestart}
+        >
           {onboardingCopy.tutorial.restartConfirm}
         </Button>
       </div>
