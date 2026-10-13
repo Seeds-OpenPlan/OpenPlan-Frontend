@@ -131,11 +131,29 @@ export const onboardingCopy = {
     // two buttons any step still shows.
     skip: '건너뛰기',
     done: '완료',
-    // 자동으로 연 창(폼/패널)을 사용자가 닫았을 때의 복구 버튼 — 같은 요청을
-    // 다시 보낼 뿐이라 이미 열려 있어도 눌러도 무해하다(Coachmark 자신의
-    // showReopen 주석 참고).
-    reopen: '다시 열기',
-    progressLabel: (n, total) => `${n}/${total}`,
+    // `reopen`/`progressLabel` removed (owner decision, 2026-10, ring-based
+    // redesign — see Coachmark.jsx's own header): [다시 열기] no longer
+    // exists (nothing left to re-open once no step auto-opens anything),
+    // and the progress label is now a plain pre-formatted string
+    // TutorialOverlay builds itself ("2-1/5" — sub-step numbering lives
+    // there, not in a copy-table function).
+    //
+    // OFF-ROUTE prompt (owner decision, 2026-10) — shown when the current
+    // route no longer matches the active step's own `route` (navigated to
+    // a DIFFERENT app tab mid-run, e.g. 대시보드/통계/설정 — see
+    // TutorialOverlay.jsx's own header for the full flow, including why
+    // CLOSING this via Esc/backdrop is NEITHER button below).
+    offRouteTitle: '튜토리얼을 종료할까요?',
+    offRouteBody: '다른 화면으로 이동했습니다. 튜토리얼을 계속하거나 종료할 수 있습니다.',
+    offRouteReturn: '튜토리얼로 돌아가기',
+    offRouteExit: '종료',
+    // RESUME prompt (owner decision, 2026-10) — shown ONCE per session on
+    // mount when a PREVIOUS run's cursor is still mid-progress (see
+    // TutorialOverlay.jsx's own header on the sessionStorage gate).
+    resumeTitle: '진행 중이던 튜토리얼이 있습니다',
+    resumeBody: '이어서 진행하거나 처음부터 다시 시작할 수 있습니다.',
+    resumeContinue: '이어서 하기',
+    resumeRestart: '처음부터 다시',
     // PRACTICE-DATA CLEANUP confirm (owner decision, 2026-10) — shown from
     // [완료]/[건너뛰기] (TutorialOverlay.jsx's own `exitWithCleanupCheck`)
     // ONLY when something this run created is CONFIRMED to still exist.
