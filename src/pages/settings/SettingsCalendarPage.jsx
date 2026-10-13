@@ -10,11 +10,12 @@ import { CalendarConnectionSection } from '../../components/settings/CalendarCon
 
   `id="settings-detail-title"` — 설정 하위 페이지 전체가 공유하는 리터럴 id
   (item 6). Outlet은 한 번에 한 하위 페이지만 렌더하므로 모든 설정 하위
-  페이지가 같은 리터럴 id를 써도 충돌하지 않는다. (2026-10 구조 변경: 모바일
-  상세는 더 이상 BottomSheet가 아니라 전체화면 슬라이드 라우트라, 이 id를
-  읽는 쪽은 이제 없다 — SettingsLayout.jsx는 경로→제목 맵에서 헤더 제목을
-  따로 가져온다. id 자체는 다른 설정 페이지들과의 관례를 깨지 않도록 남겨
-  둔다.)
+  페이지가 같은 리터럴 id를 써도 충돌하지 않는다. (PR #82 AI 리뷰 Blocking
+  fix, 2026-10: 모바일 상세 헤더가 한때 경로→제목 맵에서 따로 가져온 문구를
+  동시에 그려 제목이 두 번 보였다 — 지금은 헤더가 「← 설정」만 그리고, 제목의
+  유일한 출처는 이 h2다. SettingsLayout.jsx가 라우트 전환 시 바로 이 id를
+  찾아 포커스를 옮긴다 — 그래서 이 id는 여전히 살아 있는, 오히려 전보다 더
+  중요해진 계약이다.)
 */
 function SettingsCalendarPage() {
   return (

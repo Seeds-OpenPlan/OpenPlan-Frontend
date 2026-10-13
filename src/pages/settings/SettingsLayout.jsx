@@ -3,8 +3,15 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { SettingsNavList } from '../../components/settings/SettingsNavList'
 import { ChevronLeftIcon } from '../../components/settings/settingsIcons'
 import { useIsDesktop, useMediaQuery } from '../../hooks/useMediaQuery'
-import { SETTINGS_FIRST_DETAIL_PATH, resolveSettingsDetailTitle } from '../../features/settings/settingsNavOrder'
+import { SETTINGS_FIRST_DETAIL_PATH } from '../../features/settings/settingsNavOrder'
 import { useTutorialRestart } from '../../features/onboarding/useTutorialRestart'
+
+// 설정 하위 페이지 9개 모두가 자신의 제목 `<h2>`에 공통으로 붙이는 리터럴 id
+// (각 페이지 자신의 헤더 주석 참고). 이 레이아웃은 그 id로 "지금 열린 상세의
+// 제목이 어디 있는지"만 찾는다 — 제목 **문구**는 절대 여기서 다시 선언하지
+// 않는다(PR #82 AI 리뷰 Blocking fix: 한때 레이아웃이 경로→제목 맵으로 같은
+// 문구를 또 그려 제목이 화면에 두 번 보였다).
+const DETAIL_TITLE_ID = 'settings-detail-title'
 
 // Sidebar width once a detail screen is open (desktop). Named so the list
 // pane's and the detail pane's width classes below both read off the SAME
@@ -99,23 +106,64 @@ function SettingsLayout() {
     }
   }, [isDesktop, atHub, navigate])
 
-  // 모바일 슬라이드 상세가 열리면 그 제목으로 포커스를 옮긴다
-  // (NotFoundPage.jsx의 "라우트 진입 시 제목에 포커스" 패턴과 동일) — 그래야
-  // 스크린리더 사용자가 방금 inert 처리된 허브 행에 포커스가 멈춰 있지 않고
-  // "무엇이 열렸는지"를 바로 듣는다. 데스크톱(2단, 허브가 inert되지 않음)과
-  // 허브 자체(상세가 없음)에서는 옮길 포커스가 없다.
-  const titleRef = useRef(null)
+  // 모바일 슬라이드 상세가 열리면 그 "하위 페이지 자신의" 제목(#settings-
+  // detail-title)으로 포커스를 옮긴다(NotFoundPage.jsx의 "라우트 진입 시
+  // 제목에 포커스" 패턴과 동일) — 그래야 스크린리더 사용자가 방금 inert
+  // 처리된 허브 행에 포커스가 멈춰 있지 않고 "무엇이 열렸는지"를 바로 듣는다.
+  // 데스크톱(2단, 허브가 inert되지 않음)과 허브 자체(상세가 없음)에서는 옮길
+  // 포커스가 없다.
+  //
+  // contentPaneRef: Outlet을 담은 div(아래 렌더 참고) — 그 id를 가진 heading은
+  // 이 서브트리 안에만 나타날 수 있으므로 관찰 범위를 여기로 좁힌다(문서
+  // 전체를 관찰하면 react-query 캐시 갱신·토스트 등 무관한 변이에도 콜백이
+  // 돈다).
+  const contentPaneRef = useRef(null)
   useEffect(() => {
     if (isDesktop || atHub) return
-    titleRef.current?.focus()
+    const container = contentPaneRef.current
+    if (!container) return undefined
+
+    // 설정 하위 페이지 중 절반 가까이(계정·가용시간·기본값·고정일정·알림·
+    // 카테고리)는 쿼리가 끝나기 전엔 로딩 스켈레톤만 그리고, 그 h2는 데이터가
+    // 도착한 "다음" 렌더에야 DOM에 나타난다 — 라우트가 막 바뀐 이 시점엔
+    // 아직 없을 수 있다는 뜻. 타이머로 추측해 재시도하는 대신,
+    // MutationObserver로 그 heading이 실제로 "생기는" 순간 자체를 구독한다
+    // (캐시 히트로 즉시 나타나도, 느린 네트워크로 늦게 나타나도 똑같이
+    // 맞는다 — PR #82 AI 리뷰 Blocking fix의 "렌더 타이밍을 안전하게 잡으라"
+    // 요구사항).
+    const focusTitle = () => {
+      const node = container.querySelector(`#${DETAIL_TITLE_ID}`)
+      if (!node) return false
+      // 9개 하위 페이지의 h2는 평소 포커스 대상이 아니라 tabIndex가 없다 —
+      // 그 페이지들을 하나도 고치지 않고 포커스만 가능하게 만들려고 레이아웃
+      // 쪽에서 속성을 얹는다. setAttribute는 멱등이라 이미 -1이어도 무해하다.
+      if (!node.hasAttribute('tabindex')) node.setAttribute('tabindex', '-1')
+      node.focus()
+      return true
+    }
+
+    // 로딩 상태 없이 h2가 바로 그려지는 페이지(캘린더·지원·공지)는 여기서
+    // 바로 성공하고 끝 — observer를 만들 필요가 없다.
+    if (focusTitle()) return undefined
+
+    // google-callback처럼 h2가 끝내 나타나지 않는 페이지(ErrorState/
+    // LoadingSkeleton만 렌더)도 있다 — 그런 경우 이 observer는 다음 라우트
+    // 전환까지 조용히 대기하다 아래 cleanup에서 disconnect되고, 포커스는
+    // 그냥 생략된다(지시 사항이 허용한 두 선택지 중 "생략" 쪽).
+    const observer = new MutationObserver(() => {
+      if (focusTitle()) observer.disconnect()
+    })
+    observer.observe(container, { childList: true, subtree: true })
+    return () => observer.disconnect()
   }, [isDesktop, atHub, location.pathname])
 
   // ← 버튼 (PR #82 AI 리뷰 Blocking fix): "허브에서 들어왔는지"를
   // `window.history.length`가 아니라 location.state로 명시적으로 추적한다.
   //
   // 이전 가드(`window.history.length > 1`)의 전제가 틀렸었다 — 데스크톱
-  // 자동 리다이렉트(95-99행, `/settings`→첫 상세, `replace: true`)가 허브
-  // 엔트리를 히스토리에서 지우고 나면, 그 뒤 창을 좁혀 모바일로 바뀌어도
+  // 자동 리다이렉트(위 useLayoutEffect, `/settings`→첫 상세, `replace:
+  // true`)가 허브 엔트리를 히스토리에서 지우고 나면, 그 뒤 창을 좁혀 모바일로
+  // 바뀌어도
   // `history.length`는 여전히 1보다 커서(설정에 들어오기 전의 다른 페이지들
   // 때문에) navigate(-1)이 실행됐다 — 그 결과 ← 버튼이 허브를 건너뛰고
   // 설정에 들어오기 전 화면으로 나가 버렸다.
@@ -202,39 +250,40 @@ function SettingsLayout() {
                 ].join(' ')
           }
         >
-          {/* 모바일 전용 헤더(← 뒤로 + 제목) — ProjectWbsDrawer.jsx의 같은
-              모양(back button + h2)을 그대로 따른다. 허브에 있을 때는 아예
-              렌더하지 않는다(보여줄 제목이 없고, 어차피 전체가 inert+
-              화면 밖이다) — 이 조건이 아래 `contentPane`의 children 배열
-              위치를 바꾸지 않는 것이 핵심이다(React가 조건식 자체를 항상
-              같은 슬롯에 두므로 Outlet의 부모는 흔들리지 않는다). */}
+          {/* 모바일 전용 헤더 — 뒤로가기 버튼뿐이다(PR #82 AI 리뷰 Blocking
+              fix: 예전엔 여기 h2로 제목을 또 그려서, 아래 contentPane 안의
+              하위 페이지 자신의 h2와 제목이 두 번 보였다). 제목의 유일한
+              출처는 이제 그 h2 하나뿐 — 이 헤더는 "[← 설정]"만 그려 허브로
+              돌아간다는 목적만 전달한다. `sticky top-0`로 스크롤 중에도 항상
+              맨 위에 고정한다(현재 구조에서 contentPane이 이미 별도로
+              스크롤되므로 시각적으로는 이전과 같지만, 명시적으로 고정해
+              둔다). 허브에 있을 때는 아예 렌더하지 않는다(어차피 전체가
+              inert+화면 밖이다) — 이 조건이 아래 `contentPane`의 children
+              배열 위치를 바꾸지 않는 것이 핵심이다(React가 조건식 자체를
+              항상 같은 슬롯에 두므로 Outlet의 부모는 흔들리지 않는다). */}
           {!isDesktop && !atHub && (
-            <div className="flex items-center gap-2 border-b border-border p-3">
+            <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-surface p-3">
               <button
                 type="button"
                 onClick={handleBack}
-                aria-label="설정 목록으로 돌아가기"
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-control text-text-muted transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                aria-label="설정 목록으로"
+                className="flex h-11 items-center gap-1 rounded-control px-2 text-text-muted transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
                 <ChevronLeftIcon className="text-xl" />
+                <span className="text-label font-medium">설정</span>
               </button>
-              {/* tabIndex={-1} — 일반 탐색 탭 순서에는 끼지 않지만(제목은 탭
-                  스톱이 아니다) 위 focus 이펙트가 JS로 직접 포커스를 옮길 수
-                  있게 한다. NotFoundPage.jsx의 heading과 같은 패턴. */}
-              <h2
-                ref={titleRef}
-                tabIndex={-1}
-                className="truncate text-title font-semibold text-text outline-none"
-              >
-                {resolveSettingsDetailTitle(location.pathname)}
-              </h2>
             </div>
           )}
           {/* contentPane: Outlet의 실제 부모. 데스크톱/모바일 모두에서 항상
               이 자리, 이 타입(div)에 산다 — 위 헤더가 있다/없다로 바뀌는 건
               이 div "앞"의 형제뿐이라 Outlet 자신의 부모 Fiber 위치는 전혀
-              흔들리지 않는다(셸 리마운트가 없다는 이 파일의 핵심 불변 조건). */}
-          <div className={isDesktop ? 'p-4 md:p-6' : 'flex-1 overflow-y-auto p-4'}>
+              흔들리지 않는다(셸 리마운트가 없다는 이 파일의 핵심 불변 조건).
+              `contentPaneRef`는 위 focus 이펙트가 하위 페이지의
+              `#settings-detail-title`을 찾는 관찰 범위다. */}
+          <div
+            ref={contentPaneRef}
+            className={isDesktop ? 'p-4 md:p-6' : 'flex-1 overflow-y-auto p-4'}
+          >
             <Outlet />
           </div>
         </div>

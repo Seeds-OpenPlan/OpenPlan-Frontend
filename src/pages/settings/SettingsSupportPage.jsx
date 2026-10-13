@@ -11,8 +11,10 @@ import { Button } from '../../components/common/Button'
   pane에 뜨도록 재구성). `settings-detail-title` id는 다른 설정 하위 화면과
   동일한 규약(SettingsLayout.jsx 자신의 헤더 참고). 2026-10 구조 변경으로
   모바일 상세가 BottomSheet에서 전체화면 슬라이드 라우트로 바뀌면서 이 id를
-  읽던 labelledById는 없어졌다 — SettingsLayout.jsx가 경로→제목 맵에서 헤더
-  제목을 따로 가져온다.
+  읽던 labelledById는 없어졌지만(PR #82 AI 리뷰), 대신 SettingsLayout.jsx가
+  라우트 전환 시 이 id로 포커스를 옮기는 용도로 계속 쓴다 — 모바일 헤더
+  자신은 이제 제목을 그리지 않는다(한때 헤더와 이 h2가 같은 제목을 두 번
+  그렸던 것의 수정).
 
   FAQ/내 문의 전환은 이제 라우트가 아니라 이 페이지 하나 안의 로컬 상태다
   (HelpTabs.jsx 자신의 헤더 참고) — 기본값은 'faq'(owner feedback #7 "지원
