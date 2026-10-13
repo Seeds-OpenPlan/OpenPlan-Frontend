@@ -77,16 +77,31 @@ const MAIN_STEP_LABELS = ['1', '2', '3', '4', '5']
   described below, which read the SAME shared cache WeeklyPage itself reads,
   not a parallel one).
 
-  ONE EXCEPTION navigates automatically: entering PLACE_TASK (TUT-05, "3-1")
-  still moves the user from /projects to /weekly on its own (owner's own
-  wording: "3-1: /weekly로 이동(이 이동만 허용)") — there is no on-screen
-  "go to weekly" control for this flow to point a ring at instead. The
-  combined effect below performs this ONCE per step-entry (`enteredStepKeyRef`
-  — a step key the effect has already processed once never re-triggers it,
-  even if the user later navigates away and the OFF-ROUTE flow brings them
-  back) and otherwise never calls `navigate()` for a step change at all —
-  every other transition already leaves the user exactly where they already
-  are (step1→2 stays on /projects; step3→4→5→6 all stay on /weekly).
+  EVERY step's own entry navigates to its `route` if the user isn't already
+  there (owner BLOCKER fix, 2026-10, dev repro: 설정 → 튜토리얼 다시 실행 →
+  [시작하기] immediately flashed the OFF-ROUTE ask and exited). An EARLIER
+  version of this effect only auto-navigated for PLACE_TASK specifically
+  (reasoning: "3-1: /weekly로 이동(이 이동만 허용)" — every OTHER transition
+  was ASSUMED to already leave the user on the right route, since step1→2
+  stays on /projects and step3→4→5→6 all stay on /weekly). That assumption
+  missed ONE transition: kickoff shows on the DASHBOARD (it is not
+  route-locked — it can show on any screen), but [시작하기] jumps straight
+  to CREATE_PROJECT, whose own route is /projects — nothing navigated there,
+  so the very next tick's off-route check read the mismatch as a genuine
+  excursion and armed the ask. Generalizing to EVERY step's own entry (not
+  just PLACE_TASK) fixes this structurally rather than special-casing
+  kickoff→CREATE_PROJECT on top of the existing PLACE_TASK case: a step
+  ALREADY on its own route (every "same route as before" transition) simply
+  skips navigating (`pathname !== route` guard, unchanged in spirit), so
+  this generalization adds exactly ONE new real navigation (kickoff→
+  CREATE_PROJECT, dashboard→/projects) without changing behavior for any
+  transition that already worked. The combined effect below performs this
+  ONCE per step-entry (`enteredStepKeyRef` — a step key it has already
+  processed once never re-triggers it, even if the user later navigates away
+  and the OFF-ROUTE flow brings them back) and otherwise never calls
+  `navigate()` for a step change at all — this is a plain SCREEN move for
+  the ring to land on the right page, never a form-opening request (no
+  query param is ever sent — see "RING-BASED REDESIGN" above).
 
   DELETE_SAMPLE (TUT-07) completion — STATE, not an event log (Thomas code
   review BLOCKER, fixed 2026-10). The ORIGINAL version accumulated
@@ -151,11 +166,14 @@ const MAIN_STEP_LABELS = ['1', '2', '3', '4', '5']
   no further action needed (`offRouteState` below resets to `null` the
   moment `location.pathname` matches `activeStep.route` again, regardless of
   how it got there). The combined effect below deliberately does NOT treat
-  the one-time PLACE_TASK auto-navigate (above) as an off-route excursion —
-  without that exclusion, the single render between "step advanced to
-  PLACE_TASK" and "the auto-navigate's own `navigate()` call lands" would
-  misread as a real excursion and flash the ask dialog for a frame before
-  immediately un-asking it.
+  a step's own entry-tick auto-navigate (above) as an off-route excursion —
+  without that exclusion, the single render between "a NEW step became
+  active" and "its own auto-navigate's `navigate()` call lands" would
+  misread the still-stale `location.pathname` as a real excursion and flash
+  the ask dialog for a frame before immediately un-asking it (this is
+  exactly the BLOCKER the "EVERY step's own entry navigates" fix above
+  closes — kickoff→CREATE_PROJECT is the same shape as PLACE_TASK's own
+  /projects→/weekly move, just not special-cased before).
 
   RESUME PROMPT (owner decision, 2026-10) — a FRESH MOUNT (refresh,
   re-login, app restart; TutorialOverlay itself otherwise stays mounted for
@@ -512,7 +530,19 @@ export function TutorialOverlay() {
     const isEntryTick = enteredStepKeyRef.current !== activeStep.key
     if (isEntryTick) {
       enteredStepKeyRef.current = activeStep.key
-      if (activeStep.key === 'PLACE_TASK' && navLocation.pathname !== activeStep.route) {
+      // EVERY step's own entry navigates to its `route` if not already
+      // there (owner BLOCKER fix, 2026-10 — dev repro: kickoff shows on the
+      // dashboard, but CREATE_PROJECT's own route is /projects; with only
+      // PLACE_TASK auto-navigating, [시작하기] left `activeStep` truthy and
+      // `navLocation.pathname` still `/` for one tick, which this effect's
+      // OWN off-route check below misread as a genuine excursion and armed
+      // the ask immediately). This is a plain SCREEN move for the ring to
+      // land on the right page — it never opens a form (no query param is
+      // ever sent, see this file's own header on the RING-BASED REDESIGN).
+      // A step already on its own route (1→2 staying on /projects, 3→4→5→6
+      // staying on /weekly) hits the `pathname !== route` check below and
+      // simply skips navigating — unchanged from before this fix.
+      if (navLocation.pathname !== activeStep.route) {
         navigate(activeStep.route, { replace: true })
         return // This tick's mismatch is already being corrected — never ask.
       }
