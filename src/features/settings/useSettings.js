@@ -36,6 +36,7 @@ import {
   applyExternalEvent,
   getAccount,
   updateAccount,
+  changePassword,
   deactivateAccount,
   reactivateAccount,
   getNotificationSettings,
@@ -375,6 +376,23 @@ export function useUpdateAccount() {
     onSuccess: (data) => queryClient.setQueryData(accountKey(), data),
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })
+}
+
+/**
+ * ACCT-02 비밀번호 변경. 공통 onError 토스트를 걸지 않는다 —
+ * PasswordChangeDialog가 E-USER-001(현재 비밀번호 칸)·E-COM-001(새 비밀번호
+ * 칸)을 인라인으로 직접 분기해야 하므로(위 settingsApi.changePassword 헤더
+ * 참조), 여기서 토스트 하나로 뭉개면 그 구분이 사라진다 — useCreateAppleConnection
+ * 과 같은 선택.
+ *
+ * onSuccess에서도 아무것도 하지 않는다(캐시 무효화·토스트 전부 없음) — 성공
+ * 뒤의 유일한 다음 동작은 "로그아웃하고 재로그인 안내"이고, 그건 세션
+ * 캐시(['auth','session'])와 라우팅(navigate)을 함께 다뤄야 해서 이 훅의
+ * 책임 범위(서버 상태 하나) 밖이다. 호출부(SettingsAccountPage)가
+ * useLogout()과 조합해서 처리한다.
+ */
+export function useChangePassword() {
+  return useMutation({ mutationFn: changePassword })
 }
 
 /**

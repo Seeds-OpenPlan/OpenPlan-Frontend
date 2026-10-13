@@ -125,12 +125,26 @@ let account = {
   // 이 필드가 없어 실서버는 항상 값을 주지 않는다(오너 결정: BE를 바꾸지
   // 않고 화면에서 가입일 항목 자체를 숨긴다, SettingsAccountPage.jsx 참고).
   // mock도 계약과 다른 필드를 들고 있으면 안 되므로 함께 제거했다.
+  //
+  // loginType은 계약 UserProfile에 실제로 있는 필드다(REAL, [가정-확장]
+  // 아님) — ACCT-02가 이 값으로 "비밀번호 변경" 버튼을 숨길지 판단한다
+  // (SettingsAccountPage). 소셜 분기를 dev에서 눈으로 보려면 이 값을
+  // 'SOCIAL'로 바꿔 보면 된다.
+  loginType: 'LOCAL', // 'LOCAL' | 'SOCIAL'
   status: 'ACTIVE', // 'ACTIVE' | 'DEACTIVATED'
   deactivatedAt: null,
   // ACCT-04/05가 다루는 "복구 기한"의 자리만 잡아 둠 — 실제 문구/일수는 ST-F1-14
   // 확정 시 이 필드 하나만 바뀌면 되게.
   reactivationDeadlineDays: 30,
 }
+
+// ACCT-02 전용 — account 객체 밖에 따로 둔다. getAccount()가 `{...account}`를
+// 그대로 돌려주는데, 비밀번호 원문이 그 스프레드를 타고 화면까지 새면 안
+// 된다(실서버도 해시만 가지고 있을 뿐 원문을 절대 돌려주지 않는다). 값은
+// authFixtures.js 데모 계정들과 같은 'password123' — 로그인 mock과 같은
+// 값을 써야 "다른 화면에서 쓰던 비밀번호로 현재 비밀번호 칸을 채워 보면
+// 통과한다"는 느낌이 자연스럽다.
+let mockPassword = 'password123'
 
 // --- 알림 (NOTI-01, 확정 계약): 5종 즉시저장 토글 ----------------------------------
 // 2026-10-08 계약 대조 수정 — 과거 masterEnabled는 "전체 알림"을 서버에 독립
@@ -376,6 +390,24 @@ export const mockBackend = {
     await delay()
     account = { ...account, ...patch }
     return { ...account }
+  },
+
+  // ACCT-02 비밀번호 변경. 실서버와 같은 오류 분기 — 현재 비밀번호 불일치와
+  // 소셜 계정(비밀번호 없음)을 같은 코드(E-USER-001)로 합친다
+  // (PasswordChangeService.java javadoc — 계정 존재 비노출). 새 비밀번호
+  // 자체의 8~72자 검증은 여기서 흉내내지 않는다 — 화면(PasswordChecklist)이
+  // 이미 그보다 엄격한 규칙으로 제출을 막으므로, 이 mock까지 중복 검증하면
+  // "화면이 막는 경로"와 "서버가 막는 경로"가 뭘 의미하는지 헷갈린다.
+  async changePassword({ currentPassword, newPassword }) {
+    await delay()
+    if (account.loginType === 'SOCIAL' || currentPassword !== mockPassword) {
+      const err = new Error('mock: E-USER-001 현재 비밀번호 불일치')
+      err.code = 'E-USER-001'
+      err.status = 400
+      throw err
+    }
+    mockPassword = newPassword
+    return null
   },
 
   // ACCT-01 비활성화 진입의 실제 동작. 실제 OVL-ACCT-DEACT(ST-F1-14)가 아직 없어

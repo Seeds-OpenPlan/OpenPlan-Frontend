@@ -8,6 +8,7 @@ import { LoadingSkeleton } from '../../components/common/LoadingSkeleton'
 import { ErrorState } from '../../components/common/ErrorState'
 import { OvlAccountDeactivate } from '../../components/auth/OvlAccountDeactivate'
 import { OvlAccountReactivate } from '../../components/auth/OvlAccountReactivate'
+import { PasswordChangeDialog } from '../../components/settings/PasswordChangeDialog'
 import { deriveReactivationInfo } from '../../features/auth/reactivationInfo'
 import { useLogout } from '../../features/auth/useAuth'
 import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
@@ -114,13 +115,21 @@ function NameEditDialog({ currentName, onClose, onSubmit, submitting }) {
   재활성화 진입") + 오너 리뷰 3차(item 5) 로그아웃·이름 변경. [가정-확장]
   account 리소스 (settingsApi.js 헤더).
 
-  "비밀번호 변경"(로그인 상태에서 현재+새 비밀번호로 바꾸는 ACCT-02)은 여전히
-  DISABLED — ST-F1-14가 만든 건 AUTH-06(이메일로 받은 링크로 재설정)이라 다른
-  스토리다. 로그인이 안 될 때의 "비밀번호를 잊으셨나요?"는 이제
-  `/reset-password`로 실제로 존재하니, 이 화면의 비활성 버튼은 그 대체 경로가
-  아니라 ACCT-02 자체가 아직 없다는 뜻이다. disabledReason 문구는 오너 리뷰
-  2026-09-05로 제거했다("별도 스토리에서 지원 예정"이 오해 소지가 있다는
-  지적) — 버튼은 여전히 disabled, 이유 캡션만 없앤 것.
+  "비밀번호 변경"(로그인 상태에서 현재+새 비밀번호로 바꾸는 ACCT-02)은 이제
+  실제로 동작한다 — PATCH /users/me/password(계약 openapi.yaml ~362행,
+  PasswordChangeService.java). AUTH-06(이메일로 받은 링크로 재설정,
+  `/reset-password`)과는 다른 경로다 — 이쪽은 로그인된 상태에서 본인이
+  현재 비밀번호로 재확인한다. 소셜 가입 계정(loginType===SOCIAL)은 비밀번호
+  자체가 없어 버튼을 보여주지 않고 안내 문구로 대신한다(아래 렌더 분기
+  참조) — 서버가 "현재 비밀번호 불일치"와 "비밀번호 없음"을 같은 코드
+  (E-USER-001)로 합쳐 응답하므로(PasswordChangeService.java javadoc — 계정
+  존재 비노출), 화면이 먼저 걸러 주지 않으면 소셜 계정 사용자는 매번
+  "비밀번호가 틀렸다"는 오해를 사는 오류만 받는다.
+
+  폼·오류 분기는 components/settings/PasswordChangeDialog.jsx가 갖고 있다
+  (AppleConnectDialog와 같은 모양 — 다이얼로그가 자기 mutation을 직접 들고
+  인라인 오류를 스스로 그린다). 이 페이지는 성공 뒤의 다음 동작만 책임진다
+  — 아래 handlePasswordChangeSuccess 참조.
 
   "캘린더 연동"은 더 이상 여기 없다 — 오너 리뷰 3차(item 4)로 독립 하위 화면
   (SettingsCalendarPage)으로 다시 분리됐다(라운드 2에서 여기 섹션으로 합쳤던
@@ -147,6 +156,7 @@ function SettingsAccountPage() {
   const logoutMutation = useLogout()
   const [confirmAction, setConfirmAction] = useState(null) // 'deactivate' | 'reactivate' | 'logout' | null
   const [nameEditOpen, setNameEditOpen] = useState(false)
+  const [passwordChangeOpen, setPasswordChangeOpen] = useState(false)
 
   if (accountQuery.isLoading) return <LoadingSkeleton preset="card" />
   if (accountQuery.isError) return <ErrorState variant="section" onAction={() => accountQuery.refetch()} />
@@ -186,6 +196,25 @@ function SettingsAccountPage() {
     })
   }
 
+  // ACCT-02 성공 뒤의 다음 동작. PasswordChangeDialog의 PATCH 200 자체는
+  // "지금 쥔 access 토큰을 끊지 않는다"(settingsApi.changePassword 헤더 참조)
+  // — 서버가 즉시 폐기하는 것은 refresh 세션뿐이라, 아무것도 안 하면 사용자는
+  // 최대 30분 동안 "로그인된 것처럼" 화면에 남아 있다가, 다음 토큰 갱신
+  // 시점에야 영문 모를 타이밍으로 OVL-SESSION("세션이 만료되었습니다")을
+  // 보게 된다 — 방금 스스로 한 일과 연결되지 않는 문구다. 그래서 여기서
+  // 먼저 기존 로그아웃 경로(위 handleLogout과 같은 useLogout())로 나가,
+  // "비밀번호를 바꿨으니 다시 로그인하라"는 의도가 분명한 안내를 보여준다
+  // — 서버의 지연된 세션 정리를 기다리지 않고 화면이 선제적으로 정리한다.
+  const handlePasswordChangeSuccess = () => {
+    setPasswordChangeOpen(false)
+    logoutMutation.mutate(undefined, {
+      onSettled: () => {
+        toast({ tone: 'success', message: '비밀번호를 변경했습니다. 새 비밀번호로 다시 로그인해 주세요' })
+        navigate('/login', { replace: true })
+      },
+    })
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <h2 id="settings-detail-title" className="text-title font-semibold text-text">
@@ -209,9 +238,16 @@ function SettingsAccountPage() {
       </section>
 
       <div>
-        <Button variant="secondary" size="md" disabled>
-          비밀번호 변경
-        </Button>
+        {account.loginType === 'SOCIAL' ? (
+          // 소셜 가입 계정엔 비밀번호 자체가 없다 — 위 페이지 헤더 참조.
+          // 버튼 대신 안내만 보여줘 "비활성 버튼을 눌러도 아무 반응 없음"
+          // 같은 막다른 상호작용을 만들지 않는다.
+          <p className="text-caption text-text-muted">소셜 로그인 계정은 비밀번호가 없습니다</p>
+        ) : (
+          <Button variant="secondary" size="md" onClick={() => setPasswordChangeOpen(true)}>
+            비밀번호 변경
+          </Button>
+        )}
       </div>
 
       <div className="h-px bg-border" />
@@ -267,6 +303,13 @@ function SettingsAccountPage() {
               },
             )
           }
+        />
+      )}
+
+      {passwordChangeOpen && (
+        <PasswordChangeDialog
+          onClose={() => setPasswordChangeOpen(false)}
+          onSuccess={handlePasswordChangeSuccess}
         />
       )}
 
