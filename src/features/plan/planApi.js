@@ -14,6 +14,16 @@ import { apiClient } from '../../api/client'
 import { mockBackend } from './planFixtures'
 import { clampPriority } from './planPlacement'
 import { UNSPECIFIED_CONFLICT_CODE, violationCatalog, violationSeverity } from './violationMessages'
+// minutesFromTime/timeFromMinutes now live in planTime.js (moved there so this
+// module and fixedScheduleShape.js below can share them without an import
+// cycle — see planTime.js's own header on these two).
+import { minutesFromTime, timeFromMinutes } from './planTime'
+import { activeInWeek, normalizeFixedSchedule } from './fixedScheduleShape'
+// getFixedSchedules 폴백 전용 (아래 getWeek의 BE #90 전환기 처리 참조). 이 모듈은
+// 보통 fixedScheduleApi.js가 `withDevFallback`을 가져다 쓰는 "기반" 쪽이라 방향이
+// 거꾸로지만, 둘 다 모듈 최상단이 아니라 함수 안에서만 서로의 값을 쓰므로(순환
+// import라도 평가 시점에는 안전) 로직을 두 곳에 중복시키는 것보다 이 쪽을 택했다.
+import { getFixedSchedules } from './fixedScheduleApi'
 
 // Run the real call; in DEV, fall back to the mock for (a) a genuine network
 // failure (no server) or (b) a 404 with code E-COM-004 — Spring's generic
@@ -103,12 +113,30 @@ function normalizeBlock(b) {
  * nullness directly (not through this function) — untouched by this change,
  * still the correct way to detect a genuinely empty week before this
  * function is ever called with one.
+ *
+ * `fixedSchedules` (BE #90) — 계약(openapi WeeklyPlanView, 2823행 부근)상
+ * `blocks`처럼 `plan` 밑이 아니라 **봉투 최상위**에 있고, `plan`이 null인
+ * 주(계획이 아직 없는 주)에도 채워진다 — "이 주에 뭘 배치할 수 없는가"는 계획의
+ * 존재 여부와 무관한 질문이기 때문이다. **필드가 배열로 와 있을 때만** 여기서
+ * map+필터한다 — 배열이 아니면(아직 이 필드를 안 주는 서버) `undefined`를 그대로
+ * 둬서, 호출부(getWeek)가 "필드가 없다"와 "고정 일정이 0개다"(빈 배열, 정상)를
+ * 구별해 전자에서만 폴백하게 한다.
+ *
+ * `requestedWeekStartDate` (Thomas SHOULD-FIX) — `plan`이 null인 응답에는
+ * `weekStartDate`가 어디에도 없다(WeeklyPlanView 최상위 스키마에 그런 필드가
+ * 없고, `plan` 밑에서도 읽을 수 없다 — plan 자체가 null이므로). 그 경우
+ * `plan.weekStartDate ?? plan.week_start_date`가 둘 다 undefined로 떨어져
+ * 아래 `activeInWeek` 날짜 필터가 `!weekStartISO` 분기를 타 사실상 꺼져
+ * 버렸다 — getWeek가 이미 알고 있는, 이 응답을 요청할 때 쓴 `weekStartDate`로
+ * 폴백한다(실제로 이 함수가 plan:null인 `w`로 불리는 경로는 getWeek의 get-or-
+ * create 레이스 노트 참조 — 드물지만 존재한다).
  */
-function normalizeWeek(w) {
+function normalizeWeek(w, requestedWeekStartDate) {
   const plan = w.plan ?? w
+  const weekStartDate = plan.weekStartDate ?? plan.week_start_date ?? requestedWeekStartDate
   return {
     weeklyPlanId: plan.weeklyPlanId ?? plan.weekly_plan_id,
-    weekStartDate: plan.weekStartDate ?? plan.week_start_date,
+    weekStartDate,
     weekEndDate: plan.weekEndDate ?? plan.week_end_date,
     status: plan.status ?? 'DRAFT',
     version: plan.version ?? 1,
@@ -127,6 +155,9 @@ function normalizeWeek(w) {
     unplacedCount: w.unassignedCount ?? w.unplacedCount ?? w.unplaced_count ?? 0,
     validation: w.validationSummary ?? w.validation ?? { blockCount: 0, warningCount: 0 },
     blocks: (w.blocks ?? []).map(normalizeBlock),
+    fixedSchedules: Array.isArray(w.fixedSchedules)
+      ? w.fixedSchedules.map(normalizeFixedSchedule).filter((f) => activeInWeek(f, weekStartDate))
+      : undefined,
   }
 }
 
@@ -149,20 +180,11 @@ function normalizeWeek(w) {
   `weekday` needs no translation: both sides use the same 'MON'…'SUN' keys.
   The DEV mock still answers in the FE's own shape (a bare array of minutes),
   so both directions accept either and only convert what's actually foreign.
-*/
-export function minutesFromTime(value) {
-  if (typeof value !== 'string') return null
-  const [h, m] = value.split(':').map(Number)
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return null
-  return h * 60 + m
-}
 
-export function timeFromMinutes(minutes) {
-  const total = Number.isFinite(minutes) ? minutes : 0
-  const h = Math.floor(total / 60)
-  const m = total % 60
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`
-}
+  (minutesFromTime/timeFromMinutes themselves now live in planTime.js and are
+  imported above — this comment stays here since it documents WHY this
+  adapter needs them, not what they do.)
+*/
 
 function normalizeAvailability(payload) {
   const patterns = Array.isArray(payload) ? payload : (payload?.patterns ?? [])
@@ -230,6 +252,45 @@ function isEmptyWeekView(raw) {
   return raw != null && Object.prototype.hasOwnProperty.call(raw, 'plan') && raw.plan === null
 }
 
+/**
+ * BE #90 전환기 호환. 정본은 `GET /weekly-plans`가 `fixedSchedules`를 직접
+ * 내려주는 것(normalizeWeek가 이미 처리)인데, 이 FE가 BE #90보다 먼저 배포되면
+ * (배포 순서는 PR에 BE 선행으로 적어 두지만, 순서 사고를 완전히 막지는 못한다)
+ * 그 필드 자체가 응답에 없다 — 빈 배열(`[]`, 고정 일정이 실제로 0개)과는 달리
+ * `undefined`일 때만 이 분기를 탄다(normalizeWeek의 필드 보존 참조).
+ *
+ * 폴백 경로는 예전 `GET /fixed-schedules`(getFixedSchedules, weekStartDate
+ * 쿼리 파라미터 없이 — fixedScheduleApi.js 참조)로, **주차 예외를 모른다** —
+ * `activeThisWeek`는 여전히 항상 true로 보인다. 즉 "이번 주만 비활성화"가
+ * 반영 안 되는 이 기능의 원래 버그는 이 전환 창 동안 그대로 남지만, 적어도
+ * 고정 일정 자체가 화면에서 통째로 사라지는(더 나쁜) 회귀는 막는다.
+ *
+ * 이 폴백 GET 자체가 실패할 수도 있다(#70 리뷰 Should-fix) — 네트워크 오류나
+ * E-COM-004는 withDevFallback이 DEV에서만 흡수하고, prod에서 만나는 5xx 등은
+ * 그대로 reject된다. 그걸 그대로 흘려보내면 getWeek 전체가 reject되어
+ * useWeekPlan의 isError가 true가 되고 WeeklyPage.jsx의 ErrorState가 뜬다 —
+ * **이미 200으로 받은 plan·blocks까지** 화면에서 통째로 사라진다. "순서 사고가
+ * 나도 고정 일정이 사라지지 않는다"던 이 함수의 원래 취지가 바로 이 경로에서
+ * 깨지는 셈이라, 빈 배열로 흡수하고 화면은 유지한다. 조용히 숨기지는 않는다 —
+ * `console.error`로 loud하게 남긴다(이 파일의 다른 부분적 실패 처리와 같은
+ * 관례: paging.js의 "Loud, not silent" 페이지 상한 경고 참조). 여기서 저장하는
+ * 상태는 없으므로 다음 refetch(수동 새로고침·staleTime 만료·다른 뮤테이션의
+ * invalidate)가 이 함수를 처음부터 다시 돌려 자연히 회복을 재시도한다.
+ */
+function withFixedSchedulesFallback(normalized, weekStartDate) {
+  if (normalized.fixedSchedules !== undefined) return normalized
+  return getFixedSchedules(weekStartDate)
+    .then((fixedSchedules) => ({ ...normalized, fixedSchedules }))
+    .catch((error) => {
+      console.error(
+        `[plan] getFixedSchedules fallback failed for week=${weekStartDate}: ` +
+          `${error?.code ?? error?.message ?? error}; degrading to an empty ` +
+          'fixedSchedules list instead of failing the whole week.',
+      )
+      return { ...normalized, fixedSchedules: [] }
+    })
+}
+
 export function getWeek(weekStartDate) {
   const fetchWeekView = () =>
     withDevFallback(
@@ -237,8 +298,12 @@ export function getWeek(weekStartDate) {
       () => mockBackend.getWeek(weekStartDate),
     )
 
+  // raw → normalizeWeek(raw) → (필요하면) 폴백 GET으로 fixedSchedules 보강,
+  // 이 순서 그대로를 두 반환 경로(빈 주/채워진 주) 모두가 거친다.
+  const finalize = (raw) => withFixedSchedulesFallback(normalizeWeek(raw, weekStartDate), weekStartDate)
+
   return fetchWeekView().then((raw) => {
-    if (!isEmptyWeekView(raw)) return normalizeWeek(raw)
+    if (!isEmptyWeekView(raw)) return finalize(raw)
 
     // Empty week: create the draft, then RE-FETCH THE FULL VIEW — do not
     // normalize the create response directly. `POST /weekly-plans` only ever
@@ -264,7 +329,7 @@ export function getWeek(weekStartDate) {
       // so a real POST 404 (endpoint not yet live while GET already is)
       // still resolves instead of throwing.
       () => mockBackend.getWeek(weekStartDate),
-    ).then(fetchWeekView).then(normalizeWeek)
+    ).then(fetchWeekView).then(finalize)
   })
 }
 

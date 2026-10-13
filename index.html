@@ -2,14 +2,49 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
+    <!-- C3: viewport-fit=cover — Android 15+의 edge-to-edge 강제(그리고 일부
+         제스처 내비게이션 기기)에서는 WebView가 시스템 바 뒤까지 그려지므로,
+         env(safe-area-inset-*)가 실제 값을 돌려주려면 이게 있어야 한다(없으면
+         항상 0). 데스크톱/구형 Android는 영향 없음 — env()가 그냥 0으로
+         떨어진다. 실제 패딩 적용은 BottomTabBar/AppLayout/Toaster/WeeklyPage
+         쪽(각자의 C3 주석 참고). -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>OpenPlan</title>
+    <!-- 설명 문구는 manifest.webmanifest의 description과 같은 계열(사실 그대로,
+         과장 없음)로 맞춘다 — 한 곳에서만 바뀌고 다른 곳은 안 따라가는 드리프트를
+         줄이려고 아예 동일 문구를 쓴다. 이 문구를 바꾸면 manifest.webmanifest도
+         함께 확인할 것. -->
+    <meta name="description" content="OpenPlan — 일정과 계획을 한 곳에서 관리하는 앱" />
     <!-- PWA/TWA 설치 메타데이터: Bubblewrap이 빌드 입력값으로 참조한다
          (public/manifest.webmanifest, scripts/generate-icons.mjs 참고). -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#2563eb" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!--
+      링크 미리보기(카카오톡/슬랙/디스코드 등)용 Open Graph + Twitter 카드 메타.
+      이 태그들은 각 서비스의 서버 측 크롤러가 읽는 것이라 og:image는 반드시
+      절대 URL이어야 한다(상대 경로는 크롤러 기준 origin을 알 수 없어 깨진다).
+      이미지는 플레이스토어 피처 그래픽을 재사용한 public/og-image.png
+      (1024x500 — OG 권장 비율 1.91:1에 가까움, 별도 자산을 새로 만들지 않음).
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="OpenPlan" />
+    <meta property="og:title" content="OpenPlan" />
+    <meta property="og:description" content="OpenPlan — 일정과 계획을 한 곳에서 관리하는 앱" />
+    <meta property="og:url" content="https://openplan.services/" />
+    <meta property="og:image" content="https://openplan.services/og-image.png" />
+    <meta property="og:image:width" content="1024" />
+    <meta property="og:image:height" content="500" />
+    <meta property="og:locale" content="ko_KR" />
+    <!-- twitter:card만으로는 X(트위터) 전용이지만, Discord 등 일부 크롤러가
+         og: 태그 대신 twitter: 네임스페이스를 먼저 찾는 경우가 있어 title/
+         description/image도 OG와 동일 값으로 같이 채운다(요구 없는 "과장" 추가가
+         아니라 OG 값의 단순 중복). -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="OpenPlan" />
+    <meta name="twitter:description" content="OpenPlan — 일정과 계획을 한 곳에서 관리하는 앱" />
+    <meta name="twitter:image" content="https://openplan.services/og-image.png" />
     <!--
       Pretendard. src/index.css의 --font-sans가 이 폰트를 1순위로 지목해 왔지만
       정작 로드하는 곳이 없어서, 실제로는 계속 Segoe UI / 맑은 고딕 폴백으로

@@ -7,6 +7,7 @@ import { UnsavedGuard } from '../components/common/UnsavedGuard'
 import { Toaster } from '../components/common/Toaster'
 import { SessionExpiredOverlay } from '../components/auth/SessionExpiredOverlay'
 import { TutorialOverlay } from '../components/tutorial/TutorialOverlay'
+import { useCalendarSyncOnActive } from '../features/calendar/useCalendarSync'
 
 /*
   공통 반응형 셸: 연회색 배경 + 헤더(데스크톱/모바일) + 하단 탭 + 중앙 콘텐츠.
@@ -27,11 +28,6 @@ import { TutorialOverlay } from '../components/tutorial/TutorialOverlay'
   by breakpoint, because that difference is real: BottomTabBar exists below
   md, not above it.
 
-  Edge-to-edge (Android 15+ TWA): the bar itself grows by the gesture-bar
-  inset, so the same 96px/40px literals now ride on calc(<literal> +
-  var(--spacing-safe-bottom)). The literal part is unchanged; the inset is 0
-  wherever there is no system bar to clear (desktop, older browsers).
-
   This shell hosts the app-wide common-state surfaces once each:
   - OfflineBanner sits directly under the header and pushes content down (not an
     overlay), so the offline warning is visible on every page (SYS-07).
@@ -49,15 +45,31 @@ import { TutorialOverlay } from '../components/tutorial/TutorialOverlay'
     self-gating shape OfflineBanner already has for "not offline".
   These are placement-only; all surface logic lives in components/common
   (components/auth for the session overlay, components/tutorial for the tutorial).
+
+  useCalendarSyncOnActive() (fix/calendar-outbound-sync, 2026-10-11) is the one
+  entry/visibility trigger for the outbound-calendar push (GET
+  .../events — see useCalendarSync.js's own header for why that GET exists at
+  all). Called here, not rendered, because it has no markup of its own — same
+  "logic-only hook mounted once at the shell" shape as nothing else in this
+  file needs a JSX host, it just needs to run once per app lifetime plus on
+  every tab refocus.
 */
 function AppLayout() {
+  useCalendarSyncOnActive()
+
   return (
     <div className="min-h-screen bg-surface-sunken text-text">
       <TopNav />
       <MobileTopBar />
       <OfflineBanner />
 
-      <main className="mx-auto max-w-page px-page-x py-6 pb-[calc(6rem+var(--spacing-safe-bottom))] md:pb-[calc(2.5rem+var(--spacing-safe-bottom))]">
+      {/* C3: pb-24(96px) was 56px bar + 40px buffer, measured from the viewport
+          bottom. BottomTabBar now grows TALLER by env(safe-area-inset-bottom)
+          on devices whose gesture bar overlaps the WebView (that file's own
+          C3 comment) — its top edge moves up by that same amount, so this
+          reservation has to grow with it or the 40px buffer silently shrinks
+          (and could let content sit under the bar on a large inset). */}
+      <main className="mx-auto max-w-page px-page-x py-6 pb-[calc(6rem+env(safe-area-inset-bottom))] md:pb-10">
         <Outlet />
       </main>
 

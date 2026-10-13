@@ -349,7 +349,10 @@ function ProjectsPage() {
     <div className="flex flex-col gap-4 pb-16 md:pb-0">
       <PageHeader onCreate={() => setOverlay({ type: 'create' })} canWrite={canWrite} offlineReason={offlineReason} />
 
-      <div className="flex gap-2">
+      {/* B4: 필터 pill 3개가 줄바꿈 없이 한 줄을 고집해, 좁은 화면에서는 긴
+          라벨(진행 중/일시중지/종료 + 개수)이 서로 밀며 넘쳤다. flex-wrap로
+          안 맞으면 둘째 줄로 내려가게 한다. */}
+      <div className="flex flex-wrap gap-2">
         <FilterPill
           active={tab === 'IN_PROGRESS'}
           label={`${PROJECT_STATUS_LABELS.IN_PROGRESS} ${inProgress.length}`}
@@ -417,8 +420,26 @@ function ProjectsPage() {
               was a second hand-rolled copy of Button's primary/lg styling.
               No `disabledReason` here: OfflineBanner (mounted once, globally)
               already states the "why"; repeating it under a FAB this close to
-              the viewport edge risks the caption clipping under BottomTabBar. */}
-          <Button variant="primary" size="lg" onClick={() => setOverlay({ type: 'create' })} disabled={!canWrite} className="shadow-popover">
+              the viewport edge risks the caption clipping under BottomTabBar.
+
+              `data-tut-id` matches PageHeader's desktop button (below) — this
+              IS the mobile viewport's version of the SAME "+ 새 프로젝트"
+              affordance (that one is `hidden` below `md`). TUT-03's coachmark
+              used to only find the hidden desktop button on a phone — a
+              `display:none` element still returns a (zero-size) rect, not
+              null, so the ring rendered at the viewport's top-left corner
+              instead of highlighting this real button (owner report, mobile).
+              Coachmark.jsx's own anchor lookup now picks whichever element
+              sharing this id is actually visible, so duplicating the id here
+              is what makes that resolve correctly instead of only desktop. */}
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={() => setOverlay({ type: 'create' })}
+            disabled={!canWrite}
+            className="shadow-popover"
+            data-tut-id="tut-create-project"
+          >
             + 새 프로젝트
           </Button>
         </div>

@@ -9,7 +9,7 @@ import { SkeletonListRow, SkeletonText } from '../common/Skeleton'
 import { AlertTriangleIcon } from '../common/statusIcons'
 import { MinuteStepper } from '../plan/MinuteStepper'
 import { TaskEditPreview } from './TaskEditPreview'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useAppStore } from '../../store/useAppStore'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
@@ -81,7 +81,8 @@ const PRIORITIES = [1, 2, 3] // 높음·보통·낮음 (priorityLabelKO)
 const TITLE_ID = 'task-edit-modal-title'
 
 export function TaskEditModal({ taskId, onClose }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const taskQuery = useTask(taskId)
   const titleFieldRef = useRef(null)
   // This modal's own rendered box (Dialog/BottomSheet's `boxRef` — see that
@@ -354,7 +355,9 @@ function TaskEditPreviewTrigger({ taskId, title, estimatedMinutes, editModalBoxR
 }
 
 function TaskEditPreviewOverlay({ taskId, title, estimatedMinutes, onClose, editModalBoxRef }) {
-  const isDesktop = useIsDesktop()
+  // D1: 이 오버레이도 `{open && <TaskEditPreviewOverlay/>}`로 열릴 때만
+  // 새로 마운트된다(TaskEditPreviewTrigger) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const closeRef = useRef(null)
   // The edit modal's OWN rendered height, measured live — null until the

@@ -112,8 +112,16 @@ export function ProjectAccordionRow({
             expanded ? 'rotate-90' : '',
           ].join(' ')}
         />
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="static shrink-0 text-body font-semibold text-text">{name}</span>
+        {/* B1: 이름 span이 `shrink-0`였다 — 부모가 `min-w-0`로 줄어들 길을
+            터 줬는데 이름 자신이 "나는 안 줄어든다"고 버티니, 긴 이름은 원래
+            크기 그대로 밀고 나가 **페이지 전체**가 가로로 스크롤됐다(오너
+            화면이 아니라 조상 쪽 min-w-0는 이미 있었다 — 문제는 이 span 하나).
+            `min-w-0 truncate`로 뒤집어 정말 줄어들고 말줄임표로 끝나게 하고,
+            `flex-wrap`을 추가해 아주 좁은 화면에서는 마감 줄이 그 아래로
+            내려갈 여지도 둔다(이름이 말줄임되는데 마감까지 쥐어짜이는 것보다
+            낫다). */}
+        <div className="flex min-w-0 flex-wrap items-baseline gap-2">
+          <span className="min-w-0 truncate text-body font-semibold text-text">{name}</span>
           <span className="shrink-0 text-caption text-text-muted">마감 {dueDate ?? '없음'}</span>
         </div>
       </div>

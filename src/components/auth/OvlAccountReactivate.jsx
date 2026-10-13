@@ -4,7 +4,7 @@ import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { Banner } from '../common/Banner'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 
 /*
   OVL-ACCT-REACT (ACCT-05, + ACCT-06's "삭제 안내" sub-state — that user
@@ -27,7 +27,9 @@ import { useIsDesktop } from '../../hooks/useMediaQuery'
   file can stay component-only — react-refresh/only-export-components).
 */
 export function OvlAccountReactivate({ open, onClose, onReactivate, submitting = false, info }) {
-  const isDesktop = useIsDesktop()
+  // D1: open prop으로 상시 마운트된 채 토글됨 — 열리는 시점에 셸을 고정한다
+  // (OvlAccountDeactivate.jsx와 동일한 이유).
+  const isDesktop = useLockedIsDesktop(open)
   const navigate = useNavigate()
   const titleId = useId()
   const primaryRef = useRef(null)

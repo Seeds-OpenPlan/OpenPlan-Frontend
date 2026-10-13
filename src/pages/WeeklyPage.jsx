@@ -48,6 +48,7 @@ import {
 } from '../features/plan/usePlanHistory'
 import { usePlacementDrag } from '../features/plan/usePlacementDrag'
 import { useHourScale } from '../features/plan/useHourScale'
+import { useMediaQuery } from '../hooks/useMediaQuery'
 import {
   availabilityForColumn,
   fitHourPx,
@@ -115,6 +116,11 @@ function WeeklyPage() {
 
   const [weekStartISO, setWeekStartISO] = useState(() => currentWeekStartISO())
   const [mode, setMode] = useState('focus')
+  // D4: 가로 모드(높이 360~420px대)에서는 모바일 셸의 플로팅 바들(아래
+  // floatingControlsRef/autoDraft 배너)이 쌓인 높이가 뷰포트 자체를 거의
+  // 다 차지한다 — 짧은 높이에서는 그 바들의 바닥 간격을 줄여 달력이 조금이라도
+  // 더 보이게 한다(완전히 없애지는 않는다 — 접근은 여전히 가능해야 한다).
+  const shortViewport = useMediaQuery('(max-height: 480px)')
   const [menu, setMenu] = useState({ open: false, block: null, position: null })
   const [reviewOpen, setReviewOpen] = useState(false)
 
@@ -255,9 +261,17 @@ function WeeklyPage() {
       }
       // 서브픽셀 반올림으로 1~2px이 넘쳐 스크롤바만 생기는 일이 없도록 한 숨.
       const BREATHING = 8
-      // 240px 바닥: 세로가 극단적으로 짧은 창(또는 측정 레이스)에서 달력이
+      // 바닥값: 세로가 극단적으로 짧은 창(또는 측정 레이스)에서 달력이
       // 한 줄로 찌부러지지 않게 한다. 그런 창에서는 스크롤이 생기는 게 맞다.
-      setGridMaxHeight(Math.max(240, Math.round(window.innerHeight - top - below - BREATHING)))
+      //
+      // D4: 가로 모드(360~420px대 높이)에서는 위아래로 쌓인 다른 요소들
+      // (상단바·요약줄·플로팅 바들)만으로도 240px보다 더 많이 먹어, 이 바닥값
+      // 자체가 "달력이 거의 안 보이고 페이지가 더 스크롤되는" 상태를 강제했다
+      // — 짧은 뷰포트에서는 160으로 낮춰 조금이라도 더 양보한다. 보통
+      // 높이에서는 실측값이 어차피 240을 넉넉히 넘으므로 이 분기가 결과에
+      // 영향을 주지 않는다.
+      const floor = window.matchMedia('(max-height: 480px)').matches ? 160 : 240
+      setGridMaxHeight(Math.max(floor, Math.round(window.innerHeight - top - below - BREATHING)))
     }
     measure()
     // Resize is the only thing that can move these landmarks without this
@@ -1169,6 +1183,29 @@ function WeeklyPage() {
       // A weekly exception is a plan change, and FIXED has no 완료/기록
       // equivalent — nothing is exempt here.
       if (planLocked) return []
+      // INACTIVE(외부 캘린더 연동이 꺼져 FIX-16로 서버가 미러링한 상태)는
+      // week-exception 유무와 무관하게 우선한다 (Thomas BLOCKER, BE #90 전환으로
+      // 처음 노출됨). `activeThisWeek=false`는 "주차 예외"와 "INACTIVE" 두
+      // 원인을 응답만으로 구분 못 하는데(BE 스키마 설명: "주차 예외 PLAN-33 또는
+      // INACTIVE"), 이전엔 GET /fixed-schedules?status=ACTIVE가 INACTIVE를 아예
+      // 걸러서 이 구분이 필요 없었다. INACTIVE에 "다시 활성화"(week-exception
+      // DELETE)를 띄우면 서버가 멱등 204를 돌려줘 성공 토스트까지 뜨지만 실제로는
+      // 아무 효과가 없다 — 연동 자체가 꺼져 있어 DELETE할 예외가 있든 없든
+      // 무관하기 때문. 그래서 이 상태에선 토글 자체를 숨기고 원인·조치만 안내한다.
+      if (block.status === 'INACTIVE') {
+        return [
+          {
+            key: 'inactive-info',
+            type: 'info',
+            label: '캘린더 연동이 꺼져 있어 쉬고 있는 일정입니다',
+          },
+          {
+            key: 'go-calendar-settings',
+            label: '설정에서 캘린더 연동 다시 켜기',
+            onSelect: () => navigate('/settings/calendar'),
+          },
+        ]
+      }
       const active = block.activeThisWeek !== false
       return [
         {
@@ -1693,7 +1730,39 @@ function WeeklyPage() {
         {autoDraft && (
           <div
             role="status"
-            className="pointer-events-none fixed bottom-[calc(9rem+var(--spacing-safe-bottom))] left-4 right-4 z-30 md:absolute md:bottom-24 md:left-6 md:right-auto md:max-w-sm"
+            // C3: bottom-36(144px)에 env(safe-area-inset-bottom)을 더한다 —
+            // BottomTabBar(그 파일 C3 주석)가 커지는 기기에서 이 배너가 그
+            // 위로 쌓이는 간격 자체가 기준으로 삼는 "탭바 56px+16px" 아래
+            // 플로팅 컨트롤 줄(bottom-18, 바로 아래에서 같은 처리) 보다 더
+            // 낮아지면 안 되므로 같은 inset을 함께 더한다. md는 탭바가
+            // 없으니(bottom-24) 그대로.
+            // D4: 가로 모드처럼 세로가 짧을 때는 9rem(144px) 간격이 그 자체로
+            // 뷰포트의 상당 부분을 차지한다 — shortViewport에서는 줄인다.
+            //
+            // AI 리뷰 Should-fix (#68): 6rem(96px)으로 줄였더니 바로 아래
+            // floatingControls 줄(1793행)과 겹쳤다 — 그 줄의 윗경계는
+            // `bottom-[calc(4.5rem+env(...))]`(72px+inset) + 그 안에 들어가는
+            // 버튼의 실제 높이를 더한 자리다: UndoRedo는 `h-10`(명시 40px,
+            // UndoRedo.jsx), PlanFab은 `py-2.5`(위아래 10px×2=20px) + 1줄
+            // text-label(0.8125rem × line-height 1.4 ≈ 18px) + 테두리 1px×2
+            // ≈ 40px(PlanFab.jsx, 둘 다 측정해 확인) — 즉 72+40=112px(+inset).
+            // 배너 쪽 96px(+inset)은 거기보다 16px 모자라 겹쳤다. 112px 위에
+            // 8px 여유를 더해 7.5rem(120px)으로 올려 겹침을 없앤다.
+            //
+            // 달력이 보이는 실제 영역(gridMaxHeight, 위 measure() 참고)은 이
+            // 배너가 아니라 floatingControlsRef의 실측 bottom으로 정해지므로,
+            // 이 배너를 몇 rem 올리든 달력 높이 자체는 줄지 않는다 — 이
+            // 배너는 autoDraft 검토 중에만 뜨는 오버레이 카드라, 올라간
+            // 1.5rem(24px)만큼 그 검토 기간 동안 달력 아래쪽을 조금 더
+            // 덮을 뿐이다(일반 뷰포트의 9rem도 이미 6rem보다 더 덮고 있던
+            // 것과 같은 성격). 상시 손실이 아니므로 배너 기본 접힘이나
+            // floatingControls를 옆으로 옮기는 대안은 여기서는 과한 변경으로
+            // 보고 적용하지 않는다.
+            className={`pointer-events-none fixed left-4 right-4 z-30 md:absolute md:bottom-24 md:left-6 md:right-auto md:max-w-sm ${
+              shortViewport
+                ? 'bottom-[calc(7.5rem+env(safe-area-inset-bottom))]'
+                : 'bottom-[calc(9rem+env(safe-area-inset-bottom))]'
+            }`}
           >
             <div className="pointer-events-auto rounded-card shadow-modal">
               <AutoPlaceBar
@@ -1734,7 +1803,12 @@ function WeeklyPage() {
             the grid they act on. */}
         <div
           ref={floatingControlsRef}
-          className="pointer-events-none fixed inset-x-4 bottom-[calc(4.5rem+var(--spacing-safe-bottom))] z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6"
+          // C3: bottom-18(72px)에 env(safe-area-inset-bottom)을 더한다 — 이
+          // 72px은 "BottomTabBar 56px + 16px 틈"으로 정해진 값(헤더 주석)인데,
+          // 그 탭바가 제스처 영역을 피해 더 커지는 기기(BottomTabBar.jsx의 C3
+          // 주석)에서는 탭바의 새 윗경계가 이 72px보다 아래에 있지 않다는
+          // 보장이 깨진다 — 같은 inset을 더해 항상 탭바 위 16px을 유지한다.
+          className="pointer-events-none fixed inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30 flex items-center justify-between md:absolute md:inset-x-6 md:bottom-6"
         >
           <div className="pointer-events-auto">
             {/* fix G: an undo/redo IS a block move, so it's gated the same as
