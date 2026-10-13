@@ -67,6 +67,26 @@ export function CheckCircleIcon({ className, size = 24 }) {
   )
 }
 
+// EmptyState / DashboardEmptyState decorative mark (owner direction,
+// 2026-10-13: replaces the earlier generic "empty box" illustration with the
+// app's own brand mark — ring+check — rendered small and muted instead of
+// removed outright). Coordinates are lifted directly from the
+// design-of-record SVG (docs/플레이 출시 작업내용/스토어 그래픽/openplan-icon.svg,
+// 512 viewBox), same shape AppIcon.jsx (PR #75) renders — but outline-only:
+// no background square, no hardcoded white fill, so `currentColor` lets each
+// call site mute it via className (e.g. `text-text-disabled`) instead of
+// forcing the solid brand blue, since here it's a quiet watermark, not the
+// literal app icon. Named BrandMarkOutlineIcon (not AppIcon) to stay clear of
+// that component's name.
+export function BrandMarkOutlineIcon({ className, size = 24 }) {
+  return (
+    <svg {...base} width={size} height={size} viewBox="0 0 512 512" className={className}>
+      <circle cx="256" cy="256" r="148" strokeWidth="44" />
+      <path d="M190 262 L238 310 L324 218" strokeWidth="40" />
+    </svg>
+  )
+}
+
 // Button inline-loading spinner. Marked aria-hidden; the label text ("처리 중")
 // carries the state, and the button sets aria-busy (color/motion is secondary).
 export function SpinnerIcon({ className, size = 16 }) {
