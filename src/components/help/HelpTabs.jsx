@@ -4,7 +4,7 @@
   both into ONE settings sub-route (`/settings/support`), so switching tabs is
   no longer a navigation at all, just which content the caller renders; this
   is now a plain controlled pill toggle (`value`/`onChange`, same shape
-  stats/StatsToggle.jsx already uses) instead of NavLink.
+  common/FilterPill.jsx's group already uses) instead of NavLink.
 
   Owner feedback #B: FAQ는 항상 왼쪽(첫 번째) — "지원" 진입 시 FAQ가 먼저
   보이는 기본값(owner feedback #7)과 같은 순서로 통일.
@@ -17,9 +17,9 @@
   at all. Since the caller (SettingsSupportPage) only swaps which content
   renders via `value`/`onChange` — there's no real tabpanel structure here,
   this was never actually tabs — switched to the same `role="group"` +
-  `aria-pressed` pill-toggle pattern stats/StatsToggle.jsx already uses,
-  rather than building out a full tablist (no test suite in this repo to
-  guard a bigger, riskier change).
+  `aria-pressed` pill-toggle pattern common/FilterPill.jsx's group already
+  uses, rather than building out a full tablist (no test suite in this repo
+  to guard a bigger, riskier change).
 */
 const TABS = [
   { value: 'faq', label: '자주 묻는 질문' },

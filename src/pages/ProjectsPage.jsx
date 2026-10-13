@@ -9,6 +9,7 @@ import { EmptyState } from '../components/common/EmptyState'
 import { ErrorState } from '../components/common/ErrorState'
 import { SkeletonCard } from '../components/common/Skeleton'
 import { Button } from '../components/common/Button'
+import { FilterPill, FilterPillGroup } from '../components/common/FilterPill'
 import {
   useCreateProject,
   useDeleteProject,
@@ -351,8 +352,9 @@ function ProjectsPage() {
 
       {/* B4: 필터 pill 3개가 줄바꿈 없이 한 줄을 고집해, 좁은 화면에서는 긴
           라벨(진행 중/일시중지/종료 + 개수)이 서로 밀며 넘쳤다. flex-wrap로
-          안 맞으면 둘째 줄로 내려가게 한다. */}
-      <div className="flex flex-wrap gap-2">
+          안 맞으면 둘째 줄로 내려가게 한다(FilterPillGroup이 그 flex-wrap을
+          대신 든다). */}
+      <FilterPillGroup ariaLabel="프로젝트 상태 필터">
         <FilterPill
           active={tab === 'IN_PROGRESS'}
           label={`${PROJECT_STATUS_LABELS.IN_PROGRESS} ${inProgress.length}`}
@@ -368,7 +370,7 @@ function ProjectsPage() {
           label={`${PROJECT_STATUS_LABELS.CLOSED} ${closed.length}`}
           onClick={() => setTab('CLOSED')}
         />
-      </div>
+      </FilterPillGroup>
 
       {projectsQuery.isLoading ? (
         <div className="flex flex-col gap-4">
@@ -555,23 +557,6 @@ function PageHeader({ onCreate, canWrite, offlineReason }) {
         </Button>
       </div>
     </div>
-  )
-}
-
-function FilterPill({ active, label, onClick }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={[
-        'rounded-full px-3 py-1.5 text-label font-medium transition-colors',
-        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
-        active ? 'bg-brand-600 text-white font-semibold' : 'border border-border bg-surface text-text-muted',
-      ].join(' ')}
-    >
-      {label}
-    </button>
   )
 }
 
