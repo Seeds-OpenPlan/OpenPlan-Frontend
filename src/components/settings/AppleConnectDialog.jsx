@@ -2,7 +2,7 @@ import { useId, useRef, useState } from 'react'
 import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useCreateAppleConnection } from '../../features/settings/useSettings'
 
 const FIELD =
@@ -37,7 +37,8 @@ const FIELD =
   막기 위함이다.
 */
 export function AppleConnectDialog({ onClose }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const errorId = useId()
   const firstFieldRef = useRef(null)

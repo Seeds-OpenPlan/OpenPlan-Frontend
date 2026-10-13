@@ -20,7 +20,10 @@ import { Toaster } from '../components/common/Toaster'
 function OnboardingLayout() {
   return (
     <div className="min-h-screen bg-surface-sunken text-text">
-      <header className="border-b border-border bg-surface px-4 py-3">
+      {/* Thomas 리뷰 HIGH: AppLayout의 두 헤더와 같은 이유로 top safe-area를
+          반영한다 — py-3(0.75rem)은 그대로 아래쪽 패딩으로 남기고 위쪽만
+          env(safe-area-inset-top)을 더한다. */}
+      <header className="border-b border-border bg-surface px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
         <BrandLogo size="title" />
       </header>
       <main className="mx-auto flex max-w-2xl flex-col px-4 py-8 md:py-12">

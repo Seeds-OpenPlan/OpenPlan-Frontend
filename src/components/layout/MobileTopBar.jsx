@@ -6,7 +6,14 @@ import { BrandLogo } from '../common/BrandLogo'
 // 모바일 공통 상단 헤더 (로고 + 알림 + 프로필). md 이상에서는 숨김.
 function MobileTopBar() {
   return (
-    <header className="border-b border-border bg-surface md:hidden">
+    // Thomas 리뷰 HIGH: viewport-fit=cover(index.html) 추가로 env(safe-area-
+    // inset-top)이 실제 값을 돌려주는 기기(Android 15+ edge-to-edge 등)에서,
+    // 이 헤더가 문서 맨 위(스크롤 0)에서 상태 바 밑에 깔릴 수 있다. 이
+    // 헤더는 fixed/sticky가 아니라 일반 흐름이라 "진짜 높이"를 pt로 늘리면
+    // 로고/아이콘이 상태 바 아래로 밀려 내려온다(h-bar가 안쪽 div에 있어
+    // border-box 문제도 없다 — BottomTabBar.jsx의 C3 주석 참고). inset이
+    // 0인 기기는 렌더 결과가 기존과 같다.
+    <header className="border-b border-border bg-surface pt-[env(safe-area-inset-top)] md:hidden">
       <div className="flex h-bar items-center justify-between px-page-x">
         {/* 로고 클릭 시 대시보드로 이동 (데스크톱 TopNav와 동일). */}
         <BrandLogo to="/" />

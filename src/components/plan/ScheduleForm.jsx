@@ -3,7 +3,7 @@ import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { MinuteStepper } from './MinuteStepper'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { composeTimestamp, snapMinutes, MINUTES_PER_DAY, SNAP_MINUTES } from '../../features/plan/planTime'
 import { priorityLabelKO } from '../../features/plan/planPlacement'
 
@@ -61,7 +61,10 @@ function snapStartMinutes(minutes) {
 }
 
 export function ScheduleForm({ mode, initial, onClose, onSubmit, submitting = false }) {
-  const isDesktop = useIsDesktop()
+  // D1: 이 폼은 부모가 열릴 때만 새로 마운트한다(fresh per open) — 마운트
+  // 시점에 셸을 고정해 두면, 열려 있는 동안 폴드 펼침/접힘이 일어나도
+  // Dialog↔BottomSheet가 바뀌지 않는다.
+  const isDesktop = useLockedIsDesktop()
   const titleRef = useRef(null)
 
   const [title, setTitle] = useState(initial.title ?? '')
