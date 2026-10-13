@@ -136,7 +136,11 @@ export const onboardingCopy = {
     // exists (nothing left to re-open once no step auto-opens anything),
     // and the progress label is now a plain pre-formatted string
     // TutorialOverlay builds itself ("2-1/5" — sub-step numbering lives
-    // there, not in a copy-table function).
+    // there, not in a copy-table function). `completeProgressLabel` is the
+    // ONE exception — COMPLETE has no "n/5" to show (it sits outside the
+    // 5-step denominator, tutorialSteps.js's own header), so this is a
+    // fixed label rather than something TutorialOverlay computes.
+    completeProgressLabel: '완료',
     //
     // OFF-ROUTE prompt (owner decision, 2026-10) — shown when the current
     // route no longer matches the active step's own `route` (navigated to
