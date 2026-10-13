@@ -15,8 +15,9 @@ function MobileTopBar() {
     // 0인 기기는 렌더 결과가 기존과 같다.
     <header className="border-b border-border bg-surface pt-[env(safe-area-inset-top)] md:hidden">
       <div className="flex h-bar items-center justify-between px-page-x">
-        {/* 로고 클릭 시 대시보드로 이동 (데스크톱 TopNav와 동일). */}
-        <BrandLogo to="/" />
+        {/* 로고 클릭 시 대시보드로 이동 (데스크톱 TopNav와 동일).
+            showIcon: TopNav와 동일하게 상시 노출 셸이라 켠다. */}
+        <BrandLogo to="/" showIcon />
         {/* 알림(ST-F1-15, PNL-NOTI — 모바일은 NotificationBell 내부에서 자동으로
             BottomSheet 셸을 고른다) + 프로필(→ 설정 계정 관리). */}
         <div className="flex items-center gap-4 text-neutral-400">

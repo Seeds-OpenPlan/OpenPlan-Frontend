@@ -12,8 +12,10 @@ function TopNav() {
     // 무관하게 똑같이 일어날 수 있다.
     <header className="hidden border-b border-border bg-surface pt-[env(safe-area-inset-top)] md:block">
       <div className="mx-auto flex h-bar max-w-page items-center justify-between px-page-x">
-        {/* 로고 클릭 시 대시보드로 이동. 메뉴는 가운데 정렬(justify-between). */}
-        <BrandLogo to="/" />
+        {/* 로고 클릭 시 대시보드로 이동. 메뉴는 가운데 정렬(justify-between).
+            showIcon: 상단바는 상시 노출되는 셸이라 설치형 앱 아이콘과 같은
+            마크를 붙여 브랜드 인지를 강화한다(BrandLogo.jsx 주석 참고). */}
+        <BrandLogo to="/" showIcon />
 
         {/* Horizontal pill tabs: icon-only at rest, the label expands on hover
             (and stays open for the active tab so the current page is labeled). */}
