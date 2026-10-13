@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
@@ -11,10 +12,16 @@ import { useTutorialStep, useTutorialTargets } from '../../features/tutorial/tut
 import { useTutorialEvent } from '../../features/tutorial/tutorialEvents'
 import { TUTORIAL_STEPS } from '../../features/tutorial/tutorialSteps'
 import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
-import { useWeekPlan } from '../../features/plan/usePlanData'
+import { useWeekPlan, weekPlanKey } from '../../features/plan/usePlanData'
 import { useActiveWeekStartISO } from '../../features/plan/activeWeekStore'
+import { getWeek, deleteBlock } from '../../features/plan/planApi'
+import { getProject, deleteProject } from '../../features/project/projectApi'
+import { projectKey, projectsKey } from '../../features/project/useProjectData'
+import { toast } from '../../hooks/useToasts'
+import { systemMessages } from '../../constants/systemMessages'
 
 const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
+const CLEANUP_TITLE_ID = 'tutorial-cleanup-title'
 
 /*
   OVL-TUT host — mounted once in AppLayout (same placement class as
@@ -155,9 +162,61 @@ const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
   verify — DELETE_SAMPLE with BOTH ids missing — does bypass the gate
   outright (`deleteRequiredIds.length === 0` below): there is no real
   action left to require.
+
+  PRACTICE-DATA CLEANUP (owner decision, 2026-10) — DELETE_SAMPLE only ever
+  requires unplacing the sample TASK (its BLOCK, not the task record itself
+  — "배치 해제" returns it to the backlog, see PLAN-16) and deleting the
+  sample SCHEDULE (whose block DOES cascade-delete the underlying `schedules`
+  row — PLAN-18, confirmed against openapi.yaml's own `deletePlanBlock`
+  summary). The sample PROJECT (and its now-unplaced task) is NEVER required
+  to be deleted by ANY step, and [건너뛰기] can fire at ANY point BEFORE
+  DELETE_SAMPLE even runs — so a project (and sometimes a still-live
+  schedule, if skipped mid-way through TUT-06/07) can legitimately survive
+  to the END of a run. `finish`/`onComplete`'s own `exitWithCleanupCheck`
+  wrapper asks before EITHER ends the run (TUT-08's own [완료], or
+  [건너뛰기] from literally any step including kickoff) — but ONLY if
+  something recorded in `targets` is CONFIRMED to still exist (an async
+  check, `gatherRemainingPracticeData`): a project fetched by id (404 = already
+  gone, skip it), a schedule's own block found by `scheduleId` in a FRESH
+  weekPlan read (not found = already gone, same as DELETE_SAMPLE's own
+  completion check already treats it). Nothing recorded, or nothing
+  confirmed to still exist → the dialog never opens, same as before this
+  feature existed.
+
+  DELETE API CHOICE: `DELETE /projects/{id}` (cascades tasks → plan_blocks →
+  execution_logs, confirmed via the baseline schema's own `ON DELETE
+  CASCADE` chain, NOT re-verified assumption) for the project — ONE call,
+  no separate task/block cleanup needed. For the schedule, `DELETE
+  /plan-blocks/{blockId}` (the SAME endpoint TUT-07's own 일정 삭제 menu
+  action already calls) — there is no standalone `DELETE /schedules/{id}`
+  in the contract at all (only `PATCH`), so the block IS the delete path.
+  Both go through the RAW `deleteProject`/`deleteBlock` API functions
+  directly, NOT their own `useDeleteProject`/`useRemoveBlockWithUndo` hooks
+  — those hooks each show THEIR OWN toast/undo-toast, which would double up
+  against (and read confusingly next to) this feature's own single combined
+  "정리했습니다" toast below.
+
+  FAILURE HANDLING: a 404 on either delete (already gone — e.g. the user
+  deleted it by hand moments earlier through the real screen) counts as
+  success. Any OTHER failure shows the generic write-error toast and the
+  tutorial still ends exactly as if cleanup had been skipped — the owner's
+  own framing: "삭제가 일부 실패하면 토스트로 알리고, 튜토리얼 종료는 그대로
+  진행한다". The CLOSE action (Esc/backdrop/back) on the confirm dialog
+  itself is NEITHER button — it only dismisses the dialog and leaves the
+  tutorial exactly where it was (no PATCH, no delete, no navigation), per
+  the owner's own explicit instruction, so a user can never accidentally
+  end the tutorial by closing a dialog reflexively. Opening/closing this
+  dialog shares the exact same `utils/overlayHistory.js` bridge every other
+  Dialog/BottomSheet already does (including the self-initiated-back()
+  race that file's own header documents) — a kickoff-건너뛰기 that opens
+  this dialog right as the kickoff dialog itself closes is exactly the
+  "a new overlay opens between calling back() and it resolving" case that
+  bridge was already built to survive (see that file's header), so no
+  special-casing was needed here.
 */
 export function TutorialOverlay() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const sessionQuery = useSession()
   const progressQuery = useOnboardingProgress()
   const updateProgress = useUpdateOnboardingProgress()
@@ -165,6 +224,21 @@ export function TutorialOverlay() {
   const [targets, patchTargets] = useTutorialTargets(sessionQuery.data?.userId)
   const kickoffConfirmRef = useRef(null)
   const lastNavigatedStepRef = useRef(null)
+  // Practice-data cleanup confirm — null while not showing; otherwise
+  // `{ items, proceedFn }` (see this file's own header, "PRACTICE-DATA
+  // CLEANUP", for the full flow). `cleanupChecking` guards the brief async
+  // gap between clicking [건너뛰기]/[완료] and the dialog actually opening
+  // (or skipping straight through) against a second click re-starting the
+  // same check.
+  const [cleanupPrompt, setCleanupPrompt] = useState(null)
+  const [cleanupChecking, setCleanupChecking] = useState(false)
+  // Focuses the PRIMARY action (삭제하고 종료) on open — same convention as
+  // the kickoff dialog's own `kickoffConfirmRef` above (the emphasized,
+  // expected action gets initial focus).
+  const cleanupConfirmRef = useRef(null)
+  // Same D1 fold-safety reasoning as the kickoff dialog's own `isDesktop`
+  // below, scoped to exactly this dialog's own open window.
+  const isDesktopForCleanup = useLockedIsDesktop(Boolean(cleanupPrompt))
   // Monotonic counter, incremented on every REAL request (the step-change
   // effect below AND every [다시 열기] click) — see tutorialSteps.js's own
   // header on `buildSearch(targets, nonce)` for the bug this fixes (owner
@@ -405,6 +479,44 @@ export function TutorialOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDeleteStep, deleteSatisfied])
 
+  /*
+    DELETE_SAMPLE's own highlight, RECOMPUTED LIVE (owner report, 2026-10:
+    "자동 배치나 실행 취소 후 새 id인 경우에는 강조되지 않을 수 있다") —
+    `highlightIdsKey` is the join of every CURRENT block's `planBlockId`
+    that still carries `targets.taskId`/`targets.scheduleId` RIGHT NOW,
+    recomputed from `weekBlocks` every render exactly like `deleteSatisfied`
+    above does, so it self-heals the instant an undo recreates a block
+    under a new id or an auto-place path never had one to begin with — a
+    RECORDED block id (tutorialSteps.js's old `placedBlockId`/
+    `scheduleBlockId`) could go stale in either case; a resource id cannot.
+
+    The effect below only NAVIGATES when this joined string actually
+    CHANGES (`lastHighlightRef`) — not merely re-renders — so deleting ONE
+    of two blocks re-sends a highlight pointing at just the remaining one,
+    but an unrelated re-render (e.g. the banner's own viewport listener)
+    never re-fires it for no reason. Deliberately NOT routed through
+    `buildSearch`/`requestNonceRef` like every other step's own request
+    (tutorialSteps.js's own header) — this one's value is ALREADY guaranteed
+    distinct whenever it actually needs to re-fire (a different id set is a
+    different string), so a nonce would add nothing here.
+  */
+  const highlightIdsKey = isDeleteStep
+    ? (weekBlocks ?? [])
+        .filter((b) => (targets.taskId && b.taskId === targets.taskId) || (targets.scheduleId && b.scheduleId === targets.scheduleId))
+        .map((b) => b.planBlockId)
+        .join(',')
+    : null
+  const lastHighlightRef = useRef(null)
+  useEffect(() => {
+    if (!isDeleteStep) {
+      lastHighlightRef.current = null
+      return
+    }
+    if (!highlightIdsKey || highlightIdsKey === lastHighlightRef.current) return
+    lastHighlightRef.current = highlightIdsKey
+    navigate(`/weekly?highlightBlocks=${encodeURIComponent(highlightIdsKey)}`, { replace: true })
+  }, [isDeleteStep, highlightIdsKey, navigate])
+
   // PLACE_TASK's own STATE safety net (owner decision, 2026-10 — see this
   // file's own header) — fires the SAME `advance()` the matching TASK_PLACED
   // event already would, independently of whether that event ever arrives.
@@ -455,6 +567,114 @@ export function TutorialOverlay() {
     advance()
   })
 
+  /*
+    PRACTICE-DATA CLEANUP — see this file's own header ("PRACTICE-DATA
+    CLEANUP") for the full reasoning. `gatherRemainingPracticeData` is a
+    best-effort EXISTENCE check, never the thing that decides whether to
+    clean up — it only decides whether to ASK: a project fetched by id
+    (404 → already gone, drop it silently) and a schedule block found by
+    `scheduleId` in a freshly-read weekPlan (not found → same). Any OTHER
+    fetch error also drops that one item rather than guessing — asking about
+    something this check itself couldn't confirm would be worse than simply
+    not asking about it.
+
+    `queryClient.fetchQuery` (not the raw `getProject`/`getWeek` call) so a
+    STILL-FRESH cache entry (e.g. the user just LOOKED at this exact project
+    or week) skips a redundant round trip — same staleTime each query
+    already declares elsewhere (`useProject`/`useWeekPlan`).
+  */
+  const isNotFoundError = (err) => err?.status === 404
+
+  const gatherRemainingPracticeData = async () => {
+    const items = []
+    if (targets.projectId) {
+      try {
+        const project = await queryClient.fetchQuery({
+          queryKey: projectKey(targets.projectId),
+          queryFn: () => getProject(targets.projectId),
+        })
+        items.push({ kind: 'project', id: targets.projectId, label: project.name })
+      } catch (err) {
+        if (!isNotFoundError(err)) {
+          // 확인할 수 없는 에러(네트워크 등) — 묻는 대상이 불확실하면 묻지
+          // 않는 쪽이 안전하다(이 항목만 조용히 뺀다). 404는 이미 지워진
+          // 정상 경로라 경고조차 안 남긴다.
+          console.warn('[tutorial cleanup] 샘플 프로젝트 확인 실패', err)
+        }
+      }
+    }
+    if (targets.scheduleId) {
+      try {
+        const week = await queryClient.fetchQuery({
+          queryKey: weekPlanKey(weekStartISO),
+          queryFn: () => getWeek(weekStartISO),
+        })
+        const block = (week.blocks ?? []).find((b) => b.scheduleId === targets.scheduleId)
+        if (block) items.push({ kind: 'schedule', planBlockId: block.planBlockId, label: block.title })
+      } catch (err) {
+        console.warn('[tutorial cleanup] 샘플 일정 확인 실패', err)
+      }
+    }
+    return items
+  }
+
+  // Wraps EITHER exit path (`finish`/`onComplete`'s own `proceedFn`, below)
+  // with the cleanup check. `cleanupChecking` blocks a second click from
+  // re-starting the (brief, but real) async check while the first is still
+  // in flight — [건너뛰기]/[완료] stay clickABLE the whole time (no spinner
+  // UI — this codebase's own "no loading-spinner hell" budget, and the
+  // check is short enough that one is not worth the complexity), this guard
+  // just makes a double-click a no-op instead of two overlapping checks.
+  const exitWithCleanupCheck = async (proceedFn) => {
+    if (cleanupChecking) return
+    setCleanupChecking(true)
+    const items = await gatherRemainingPracticeData()
+    setCleanupChecking(false)
+    if (items.length === 0) {
+      proceedFn()
+      return
+    }
+    setCleanupPrompt({ items, proceedFn })
+  }
+
+  // [삭제하고 종료] — best-effort delete, THEN the original exit regardless
+  // of outcome (owner's own framing, this file's header). Raw API functions
+  // (`deleteProject`/`deleteBlock`), not their own `useDeleteProject`/
+  // `useRemoveBlockWithUndo` hooks — those each show THEIR OWN toast/undo
+  // affordance, which this feature's single combined toast below would
+  // otherwise duplicate or fight for the user's attention against.
+  const confirmCleanupAndExit = async () => {
+    const { items, proceedFn } = cleanupPrompt
+    setCleanupPrompt(null)
+    let anyFailed = false
+    for (const item of items) {
+      try {
+        if (item.kind === 'project') await deleteProject(item.id)
+        else await deleteBlock(item.planBlockId)
+      } catch (err) {
+        if (!isNotFoundError(err)) anyFailed = true
+      }
+    }
+    // Best-effort cache tidy-up — not load-bearing for THIS run (which is
+    // about to end regardless), just so a LATER visit to /projects or
+    // /weekly doesn't show a stale row for something that is actually gone.
+    queryClient.invalidateQueries({ queryKey: projectsKey() })
+    queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
+    toast(
+      anyFailed
+        ? { tone: 'error', message: systemMessages.error.writeTitle }
+        : { tone: 'success', message: '연습 데이터를 정리했습니다' },
+    )
+    proceedFn()
+  }
+
+  // [남기고 종료] — skip deletion, run the original exit as-is.
+  const keepPracticeDataAndExit = () => {
+    const { proceedFn } = cleanupPrompt
+    setCleanupPrompt(null)
+    proceedFn()
+  }
+
   // Completion and skip both PATCH the one server field the contract has
   // (`tutorialDone`). The LOCAL step cursor is reset ONLY in onSuccess, never
   // before the mutate call (Thomas code review BLOCKER, fixed 2026-10): an
@@ -473,8 +693,16 @@ export function TutorialOverlay() {
   // whatever step/kickoff they were already on and can press the same button
   // again, rather than being silently reset to a kickoff state the server
   // never actually confirmed.
+  //
+  // Both now go through `exitWithCleanupCheck` FIRST (this file's own
+  // header, "PRACTICE-DATA CLEANUP") — the PATCH itself, and the ordering
+  // guarantees above, are otherwise UNCHANGED: cleanup (if any) happens
+  // BEFORE this mutate call even starts, and the step cursor still only
+  // resets in onSuccess, after the server confirms.
   const finish = () => {
-    updateProgress.mutate({ tutorialCompleted: true }, { onSuccess: () => resetTutorialStep() })
+    exitWithCleanupCheck(() => {
+      updateProgress.mutate({ tutorialCompleted: true }, { onSuccess: () => resetTutorialStep() })
+    })
   }
 
   if (!progress || !running) return null
@@ -487,6 +715,19 @@ export function TutorialOverlay() {
   // better than any flash of stale UI while a real network round-trip is
   // pending.
   if (updateProgress.isPending) return null
+
+  /*
+    `mainContent` (not an early `return` per branch, unlike before this
+    feature) — the cleanup confirm dialog below can need to show up WHILE
+    EITHER the kickoff dialog or a coachmark step would otherwise be
+    rendering (it opens from either's own [건너뛰기], or the last step's
+    own [완료]). Deferring to one `return` at the bottom, with
+    `mainContent` suppressed entirely while `cleanupPrompt` is open (see
+    there), keeps exactly ONE confirm-shaped surface on screen at a time —
+    simpler than reasoning about a stacked kickoff/coachmark UNDER this
+    dialog for no benefit (neither is interactive once the question is up).
+  */
+  let mainContent
 
   // tutorialStep 0 — TUT-01 kickoff.
   if (!activeStep) {
@@ -509,7 +750,7 @@ export function TutorialOverlay() {
         </div>
       </div>
     )
-    return isDesktop ? (
+    mainContent = isDesktop ? (
       <Dialog open onClose={finish} labelledById={KICKOFF_TITLE_ID} initialFocusRef={kickoffConfirmRef}>
         {body}
       </Dialog>
@@ -518,74 +759,135 @@ export function TutorialOverlay() {
         {body}
       </BottomSheet>
     )
+  } else {
+    // Resolve a dynamic (per-run) anchor — see tutorialSteps.js's own header
+    // on why TUT-05's `targetId` is a function of `targets` rather than a
+    // fixed id.
+    const resolvedTargetId =
+      typeof activeStep.targetId === 'function' ? activeStep.targetId(targets) : activeStep.targetId
+    // Same function-or-string shape — DELETE_SAMPLE's `body` (tutorialSteps.js,
+    // Thomas SHOULD-FIX) names only what this run actually recorded, which
+    // only `targets`/`weekBlocks` (both read at render time) can answer. No
+    // more "정리 완료 — 잠시 후…" override here (owner decision, 2026-10,
+    // removed the hold this used to explain — see the DELETE_SAMPLE effect
+    // above) — satisfying the step now advances on the VERY NEXT render, so
+    // there is no longer a window where this step's own panel is still
+    // visible but already done. `weekBlocks` passed through for
+    // DELETE_SAMPLE's OWN checklist body (tutorialSteps.js) — every other
+    // step's `body` function simply ignores this second argument.
+    const resolvedBody =
+      typeof activeStep.body === 'function' ? activeStep.body(targets, weekBlocks) : activeStep.body
+
+    mainContent = (
+      <Coachmark
+        targetId={resolvedTargetId}
+        title={activeStep.title}
+        body={resolvedBody}
+        stepNumber={stepIndex + 1}
+        total={TUTORIAL_STEPS.length}
+        isLast={isLast}
+        // [다시 열기] — shown for every NON-LAST step that actually has
+        // something to (re-)request. No `nextDisabled`-style gate needed
+        // anymore (owner decision, 2026-10, removed [이전]/[다음] — see this
+        // file's own header): a step's own Coachmark is, BY CONSTRUCTION, only
+        // ever rendered while that step is still active — the moment it's
+        // satisfied, `advance()` moves `tutorialStep` on and THIS render is
+        // replaced by the next step's, so "showing while pending" and "showing
+        // at all" are now the same condition. Re-requesting something already
+        // open is a harmless no-op (re-focuses/re-opens in place) — same
+        // reasoning as before, unchanged.
+        showReopen={!isLast && Boolean(requestUrl(activeStep, presenceCheckNonce))}
+        // `{ replace: true }` (S2, same reasoning as the step-change effect
+        // above) — re-sending the same request is still a SYSTEM-driven move,
+        // and without this, clicking [다시 열기] more than once on the same
+        // step stacked one identical history entry per click. Nonce bumped
+        // here too (same reasoning as the step-change effect) — a SECOND [다시
+        // 열기] click would otherwise resend the EXACT same request the first
+        // click already sent.
+        onReopen={() => {
+          requestNonceRef.current += 1
+          navigate(requestUrl(activeStep, requestNonceRef.current), { replace: true })
+        }}
+        onSkip={finish}
+        // ONLY ever called from the LAST step's own [완료] (Coachmark.jsx only
+        // renders that button when `isLast` — see its own header) — every
+        // OTHER step has no manual trigger anymore, so this no longer needs an
+        // `else { advance() }` branch at all. Goes through
+        // `exitWithCleanupCheck` first, same as `finish` — see this file's
+        // own header ("PRACTICE-DATA CLEANUP").
+        onComplete={() => {
+          exitWithCleanupCheck(() => {
+            // TUT-08 "완료 상태와 다음 이동 화면을 확인한다" — land on the
+            // dashboard once the last step's own [완료] click commits the one
+            // server field this run actually changes. Step reset happens in
+            // onSuccess, same ordering (and same reason) as `finish` above —
+            // see that function's own comment.
+            updateProgress.mutate(
+              { tutorialCompleted: true },
+              {
+                onSuccess: () => {
+                  resetTutorialStep()
+                  navigate('/')
+                },
+              },
+            )
+          })
+        }}
+      />
+    )
   }
 
-  // Resolve a dynamic (per-run) anchor — see tutorialSteps.js's own header on
-  // why TUT-05's `targetId` is a function of `targets` rather than a fixed id.
-  const resolvedTargetId =
-    typeof activeStep.targetId === 'function' ? activeStep.targetId(targets) : activeStep.targetId
-  // Same function-or-string shape — DELETE_SAMPLE's `body` (tutorialSteps.js,
-  // Thomas SHOULD-FIX) names only what this run actually recorded, which
-  // only `targets` (read at render time) can answer. No more "정리 완료 —
-  // 잠시 후…" override here (owner decision, 2026-10, removed the hold this
-  // used to explain — see the DELETE_SAMPLE effect above) — satisfying the
-  // step now advances on the VERY NEXT render, so there is no longer a
-  // window where this step's own panel is still visible but already done.
-  const resolvedBody = typeof activeStep.body === 'function' ? activeStep.body(targets) : activeStep.body
+  // PRACTICE-DATA CLEANUP confirm — see this file's own header for the full
+  // flow. Suppresses `mainContent` entirely while open (see that variable's
+  // own comment above for why) rather than stacking over it.
+  if (cleanupPrompt) {
+    const t = onboardingCopy.tutorial
+    const itemLabel = (item) =>
+      item.kind === 'project' ? `프로젝트 「${item.label}」(태스크 포함)` : `일정 「${item.label}」`
+    const body = (
+      <div className="flex flex-col gap-4">
+        <h2 id={CLEANUP_TITLE_ID} className="text-title font-semibold text-text">
+          {t.cleanupTitle}
+        </h2>
+        <p className="text-body text-text-muted">
+          {cleanupPrompt.items.map(itemLabel).join(', ')}
+          {t.cleanupBodySuffix}
+        </p>
+        <div className="mt-1 flex justify-end gap-2">
+          <Button variant="secondary" size="md" onClick={keepPracticeDataAndExit}>
+            {t.cleanupKeep}
+          </Button>
+          <Button ref={cleanupConfirmRef} variant="primary" size="md" onClick={confirmCleanupAndExit}>
+            {t.cleanupDelete}
+          </Button>
+        </div>
+      </div>
+    )
+    // Esc/backdrop/back → `onClose` → ONLY dismiss (this file's own header,
+    // "FAILURE HANDLING" paragraph) — never `keepPracticeDataAndExit`, which
+    // would also END the tutorial; a reflexive Esc must never do that.
+    mainContent = isDesktopForCleanup ? (
+      <Dialog
+        open
+        onClose={() => setCleanupPrompt(null)}
+        labelledById={CLEANUP_TITLE_ID}
+        initialFocusRef={cleanupConfirmRef}
+      >
+        {body}
+      </Dialog>
+    ) : (
+      <BottomSheet
+        open
+        onClose={() => setCleanupPrompt(null)}
+        labelledById={CLEANUP_TITLE_ID}
+        initialFocusRef={cleanupConfirmRef}
+      >
+        {body}
+      </BottomSheet>
+    )
+  }
 
-  return (
-    <Coachmark
-      targetId={resolvedTargetId}
-      title={activeStep.title}
-      body={resolvedBody}
-      stepNumber={stepIndex + 1}
-      total={TUTORIAL_STEPS.length}
-      isLast={isLast}
-      // [다시 열기] — shown for every NON-LAST step that actually has
-      // something to (re-)request. No `nextDisabled`-style gate needed
-      // anymore (owner decision, 2026-10, removed [이전]/[다음] — see this
-      // file's own header): a step's own Coachmark is, BY CONSTRUCTION, only
-      // ever rendered while that step is still active — the moment it's
-      // satisfied, `advance()` moves `tutorialStep` on and THIS render is
-      // replaced by the next step's, so "showing while pending" and "showing
-      // at all" are now the same condition. Re-requesting something already
-      // open is a harmless no-op (re-focuses/re-opens in place) — same
-      // reasoning as before, unchanged.
-      showReopen={!isLast && Boolean(requestUrl(activeStep, presenceCheckNonce))}
-      // `{ replace: true }` (S2, same reasoning as the step-change effect
-      // above) — re-sending the same request is still a SYSTEM-driven move,
-      // and without this, clicking [다시 열기] more than once on the same
-      // step stacked one identical history entry per click. Nonce bumped
-      // here too (same reasoning as the step-change effect) — a SECOND [다시
-      // 열기] click would otherwise resend the EXACT same request the first
-      // click already sent.
-      onReopen={() => {
-        requestNonceRef.current += 1
-        navigate(requestUrl(activeStep, requestNonceRef.current), { replace: true })
-      }}
-      onSkip={finish}
-      // ONLY ever called from the LAST step's own [완료] (Coachmark.jsx only
-      // renders that button when `isLast` — see its own header) — every
-      // OTHER step has no manual trigger anymore, so this no longer needs an
-      // `else { advance() }` branch at all.
-      onComplete={() => {
-        // TUT-08 "완료 상태와 다음 이동 화면을 확인한다" — land on the
-        // dashboard once the last step's own [완료] click commits the one
-        // server field this run actually changes. Step reset happens in
-        // onSuccess, same ordering (and same reason) as `finish` above —
-        // see that function's own comment.
-        updateProgress.mutate(
-          { tutorialCompleted: true },
-          {
-            onSuccess: () => {
-              resetTutorialStep()
-              navigate('/')
-            },
-          },
-        )
-      }}
-    />
-  )
+  return mainContent
 }
 
 export default TutorialOverlay

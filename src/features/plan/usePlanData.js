@@ -360,7 +360,18 @@ export function usePlaceTask() {
           // TUT-05 완료 신호 — tutorialEvents.js 헤더 참고. 드래그/빠른 배치/
           // 「여기에 배치」 메뉴가 전부 이 한 콜백을 통과하므로(WeeklyPage.
           // placeTaskAt) 호출 경로별로 따로 걸 필요가 없다.
-          emitTutorialEvent(TUTORIAL_EVENTS.TASK_PLACED, { taskId: task.taskId, planBlockId: realId ?? null })
+          // `title` added (owner report, 2026-10: TUT-07 체크리스트 재작성) —
+          // DELETE_SAMPLE's own checklist body (tutorialSteps.js) needs the
+          // sample's title to survive even AFTER its last block is removed
+          // (weekPlan no longer has anything to read it off of at that
+          // point), so it is captured HERE, at the one moment this hook
+          // itself still has it (`task.title`, the SAME value just used for
+          // the optimistic block above).
+          emitTutorialEvent(TUTORIAL_EVENTS.TASK_PLACED, {
+            taskId: task.taskId,
+            planBlockId: realId ?? null,
+            title: task.title,
+          })
           if (!realId) return
           // Cancel a stale in-flight refetch before writing (see this hook's
           // header) so it can't land after this reconcile and revert it.
@@ -472,7 +483,14 @@ export function useApplyAutoPlace() {
       // 비운다 — TUT-07은 "기록된 id만 요구"(WeeklyPage 주석)라 비어 있는
       // 경우를 이미 감당한다.
       for (const p of placements ?? []) {
-        if (p.taskId) emitTutorialEvent(TUTORIAL_EVENTS.TASK_PLACED, { taskId: p.taskId, planBlockId: null })
+        // `title` — see usePlaceTask's own identical comment for why this
+        // rides along. `p.title` is available here because `placements`
+        // always comes from WeeklyPage's own `autoDraft.placements`, which
+        // `withDraftTitles` already stamped with one before this mutation
+        // could ever be called.
+        if (p.taskId) {
+          emitTutorialEvent(TUTORIAL_EVENTS.TASK_PLACED, { taskId: p.taskId, planBlockId: null, title: p.title })
+        }
       }
     },
     onError: () => {
@@ -746,7 +764,7 @@ export function useCreateScheduleBlock() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ weeklyPlanId, body }) => postScheduleBlock(weeklyPlanId, body),
-    onSuccess: (data, { weekStartISO }) => {
+    onSuccess: (data, { weekStartISO, body }) => {
       queryClient.invalidateQueries({ queryKey: weekPlanKey(weekStartISO) })
       toast({ tone: 'success', message: '일정을 추가했습니다' })
       // SCHEDULE 블록 생성 — PlanBlockService.createBlock이 항상 대기열에 적는다.
@@ -755,10 +773,16 @@ export function useCreateScheduleBlock() {
       // (not just `planBlockId`) rides along because TUT-07's completion
       // check (TutorialOverlay, B1 fix) judges by the SAMPLE SCHEDULE's
       // resource id, which survives a recreate-via-undo with a NEW
-      // planBlockId — see that file's own header for why.
+      // planBlockId — see that file's own header for why. `title` —
+      // the create RESPONSE (`data`) has no confirmed title field of its
+      // own, so this reads it off the REQUEST `body` instead (what the user
+      // actually typed) — same reasoning as usePlaceTask's own identical
+      // addition, for the same DELETE_SAMPLE checklist need
+      // (tutorialSteps.js).
       emitTutorialEvent(TUTORIAL_EVENTS.SCHEDULE_CREATED, {
         planBlockId: data?.planBlockId,
         scheduleId: data?.scheduleId,
+        title: body?.title,
       })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),

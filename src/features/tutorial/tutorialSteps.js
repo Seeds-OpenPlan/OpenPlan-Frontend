@@ -85,7 +85,10 @@ import { TUTORIAL_EVENTS } from './tutorialEvents'
   own comment on that param) rather than Coachmark's ring — a second,
   already-built "point at a specific block" feature this redesign reuses
   instead of teaching Coachmark a new per-block anchor it would need anyway
-  only for this one step.
+  only for this one step. UNLIKE every other step's own request, THIS one no
+  longer comes from this file's own `buildSearch` (see DELETE_SAMPLE's own
+  entry below for why) — TutorialOverlay.jsx sends it directly, recomputed
+  live off the current weekPlan every time it changes.
 */
 export const TUTORIAL_STEPS = [
   {
@@ -132,13 +135,18 @@ export const TUTORIAL_STEPS = [
     body: '미배치 패널이 열리고 방금 만든 태스크가 강조됩니다. 캘린더 칸으로 드래그하세요. (휴대폰도 카드를 눌러 끌 수 있습니다. 카드에 포커스한 뒤 Enter로도 빈 시간에 바로 배치할 수 있습니다 — 전용 버튼은 없고 이 키보드 동작이 "빠른 배치"입니다.)',
     event: TUTORIAL_EVENTS.TASK_PLACED,
     matches: (payload, targets) => !targets.taskId || payload.taskId === targets.taskId,
-    // `placedBlockId` only feeds DELETE_SAMPLE's cosmetic `highlightBlocks`
-    // hint (buildSearch below on that step) — it can be null on the
-    // auto-place path (tutorialEvents.js header) without weakening TUT-07's
-    // actual completion check, which keys off `targets.taskId` (captured at
-    // ADD_TASK, unaffected by which placement path was used — B1/S4 fix,
-    // TutorialOverlay.jsx header) rather than this block id.
-    captureTarget: (payload) => ({ placedBlockId: payload.planBlockId ?? null }),
+    // `placedBlockId` — kept for backward-compat with an in-flight §7 stale
+    // cursor, but no longer the thing DELETE_SAMPLE highlights by (owner
+    // report, 2026-10: "자동 배치나 실행 취소 후 새 id인 경우에는 강조되지
+    // 않을 수 있다" — TutorialOverlay.jsx's own highlight-recompute effect
+    // now looks up the LIVE block by `targets.taskId` every time instead,
+    // which survives exactly those two cases). `taskTitle` — DELETE_SAMPLE's
+    // checklist body (below) needs a title that SURVIVES the block being
+    // fully removed (weekPlan has nothing left to read it off at that
+    // point); captured here from the event payload (`usePlaceTask`/
+    // `useApplyAutoPlace`, see tutorialEvents.js header) while a live block
+    // still exists to have taken it from.
+    captureTarget: (payload) => ({ placedBlockId: payload.planBlockId ?? null, taskTitle: payload.title ?? null }),
   },
   {
     key: 'ADD_SCHEDULE', // TUT-06
@@ -149,46 +157,93 @@ export const TUTORIAL_STEPS = [
     body: '일정 추가 폼이 자동으로 열리고, 이번 주 비어 있는 시간대가 미리 채워집니다. 제목을 확인하고 저장해 보세요.',
     event: TUTORIAL_EVENTS.SCHEDULE_CREATED,
     matches: () => true,
-    // `scheduleBlockId` keeps feeding DELETE_SAMPLE's `highlightBlocks`
-    // request below (a point-at-this-block hint, cosmetic). `scheduleId` is
-    // the actual completion key (B1 fix) — see TutorialOverlay.jsx's header
-    // for why a `planBlockId` alone can't survive an undo-recreate.
-    captureTarget: (payload) => ({ scheduleBlockId: payload.planBlockId ?? null, scheduleId: payload.scheduleId ?? null }),
+    // `scheduleBlockId` kept for backward-compat (see PLACE_TASK's own
+    // identical note above on why DELETE_SAMPLE's highlight no longer reads
+    // it directly). `scheduleId` is the actual completion key (B1 fix) —
+    // see TutorialOverlay.jsx's header for why a `planBlockId` alone can't
+    // survive an undo-recreate. `scheduleTitle` — same reasoning as
+    // PLACE_TASK's `taskTitle` above, captured from the event payload
+    // (`useCreateScheduleBlock`, see tutorialEvents.js header).
+    captureTarget: (payload) => ({
+      scheduleBlockId: payload.planBlockId ?? null,
+      scheduleId: payload.scheduleId ?? null,
+      scheduleTitle: payload.title ?? null,
+    }),
   },
   {
     key: 'DELETE_SAMPLE', // TUT-07
     route: '/weekly',
-    // WeeklyPage reads this once and fires its OWN existing PLAN-23 focus-ring
-    // (the same highlight "검토 항목 선택"/"블록 클릭" already use) at
-    // whichever of these two ids is still present in the current week's
-    // blocks — see that file's own comment on `highlightBlocks`. Cosmetic
-    // only: the actual completion judgment (TutorialOverlay.jsx) keys off
-    // `targets.taskId`/`targets.scheduleId` instead, not these block ids.
-    buildSearch: (targets) => {
-      const ids = [targets.placedBlockId, targets.scheduleBlockId].filter(Boolean)
-      return ids.length > 0 ? `highlightBlocks=${ids.join(',')}` : ''
-    },
+    // No `highlightBlocks` here anymore (owner report, 2026-10: "자동
+    // 배치나 실행 취소 후 새 id인 경우에는 강조되지 않을 수 있다") — a
+    // RECORDED block id (`placedBlockId`/`scheduleBlockId`) can go stale the
+    // moment an undo recreates the block under a NEW id, or was never set at
+    // all on the auto-place path. TutorialOverlay.jsx's own dedicated effect
+    // now looks up whichever block CURRENTLY carries `targets.taskId`/
+    // `targets.scheduleId` every time the week's own block list changes, and
+    // sends `highlightBlocks` itself — this step needs nothing here.
+    buildSearch: () => '',
     targetId: null,
     title: '연습으로 만든 블록을 정리해 보세요',
-    // A FUNCTION (like `targetId`/`buildSearch` above), not a static string —
-    // Thomas code review SHOULD-FIX: the copy must name only what this run
-    // actually recorded (a stale §7 cursor may be missing one of the two, or
-    // even both), not always claim "태스크는... 일정은..." regardless.
-    body: (targets) => {
-      const hasTask = Boolean(targets.taskId)
-      const hasSchedule = Boolean(targets.scheduleId)
-      if (hasTask && hasSchedule) {
-        return '방금 만든 블록이 캘린더에서 강조됩니다. 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) 태스크는 [배치 해제]로, 일정은 [일정 삭제]로 정리해 보세요.'
+    /*
+      A FUNCTION returning a DATA object (`{ checklist, footer }`), not a
+      plain string like every other step's `body` — Coachmark.jsx's own
+      render sites turn that shape into the actual `<ul>`/`<li>` JSX (see
+      its own `renderBody`/`TutorialChecklist` helpers); kept as data here,
+      not JSX, so this file stays a plain `.js` module (no Fast-Refresh
+      component-boundary rule to satisfy — `react-refresh/only-export-
+      components` flags a `.jsx` file that exports non-component values
+      like `TUTORIAL_STEPS`).
+
+      PROGRESS CHECKLIST, computed from the CURRENT weekPlan state
+      (`weekBlocks`, TutorialOverlay's own `weekPlanQuery`), not a static
+      claim about what happened once (owner report, 2026-10 — three
+      problems with the OLD static copy):
+        ① it never said BOTH had to be cleared to advance — now the
+           footer's "모두 정리하면 자동으로 넘어갑니다" line, plus a live
+           count, says so explicitly.
+        ② it claimed "강조됩니다" unconditionally — the highlight can miss
+           (see `buildSearch`'s own comment above); this copy never promises
+           it, only describes what to click via the menu.
+        ③ it talked about "a block" (singular) for a TASK that may be SPLIT
+           across several placements (A4) — `remaining.length` counts them
+           directly ("남은 N개").
+
+      Each item's own `done`/`label` is exactly PasswordChecklist.jsx's own
+      checklist shape (an icon that changes SHAPE not just color — NFR-017
+      — plus `sr-only` text carrying "정리됨"/"남음" so a screen reader gets
+      the SAME information a sighted user reads off the icon) — Coachmark.jsx
+      renders it, this file just supplies the data.
+    */
+    body: (targets, weekBlocks) => {
+      const items = []
+      if (targets.taskId) {
+        const remaining = (weekBlocks ?? []).filter((b) => b.taskId === targets.taskId)
+        const title = remaining[0]?.title ?? targets.taskTitle ?? '태스크'
+        items.push({
+          done: remaining.length === 0,
+          label:
+            remaining.length > 0
+              ? `「${title}」 블록 [배치 해제] — 남은 ${remaining.length}개`
+              : `「${title}」 정리됨`,
+        })
       }
-      if (hasTask) {
-        return '방금 배치한 태스크 블록이 캘린더에서 강조됩니다. 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) [배치 해제]로 정리해 보세요.'
+      if (targets.scheduleId) {
+        const remaining = (weekBlocks ?? []).filter((b) => b.scheduleId === targets.scheduleId)
+        const title = remaining[0]?.title ?? targets.scheduleTitle ?? '일정'
+        items.push({
+          done: remaining.length === 0,
+          label: remaining.length > 0 ? `「${title}」 [일정 삭제]` : `「${title}」 정리됨`,
+        })
       }
-      if (hasSchedule) {
-        return '방금 만든 일정 블록이 캘린더에서 강조됩니다. 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) [일정 삭제]로 정리해 보세요.'
+      if (items.length === 0) {
+        // 둘 다 기록이 없다(§7 스테일 커서) — 체크할 대상이 없으므로 기능
+        // 설명만 한다 (TutorialOverlay의 bypass 규칙과 짝을 이룬다).
+        return '캘린더의 블록에서 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) 태스크는 [배치 해제]로, 일정은 [일정 삭제]로 정리할 수 있습니다.'
       }
-      // 둘 다 기록이 없다(§7 스테일 커서) — 가리킬 블록이 없으므로 기능
-      // 설명만 한다 (TutorialOverlay의 bypass 규칙과 짝을 이룬다).
-      return '캘린더의 블록에서 메뉴를 열어(우클릭, 휴대폰은 길게 누르기) 태스크는 [배치 해제]로, 일정은 [일정 삭제]로 정리할 수 있습니다.'
+      return {
+        checklist: items,
+        footer: '메뉴는 우클릭(휴대폰은 길게 누르기)으로 엽니다. 모두 정리하면 자동으로 다음 단계로 넘어갑니다.',
+      }
     },
     // TutorialOverlay 특수 분기 전용 — 이 다섯 단계와 같은 단일 event/matches
     // 모양이 아니라 상태 기반 규칙이다("이 run이 기록한 taskId/scheduleId가

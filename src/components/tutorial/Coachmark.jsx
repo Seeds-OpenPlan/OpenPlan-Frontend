@@ -1,9 +1,67 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '../common/Button'
+import { CheckCircleIcon } from '../common/statusIcons'
 import { useIsDesktop, useMediaQuery } from '../../hooks/useMediaQuery'
 import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
 import { getOverlayStackSnapshot, subscribeOverlayStack } from '../../utils/overlayStack'
+
+/*
+  DELETE_SAMPLE's own `body` (tutorialSteps.js) is a DATA object
+  (`{ checklist, footer }`), not a plain string like every other step's —
+  that file stays a plain `.js` module (no JSX, so no Fast-Refresh
+  component-boundary rule to satisfy) and hands the shape to THIS component
+  to actually render, since this file already owns every other `body`
+  render site below. `renderBody` is the single seam both of those sites
+  (the anchored panel, and the modal-open top strip) call through, so
+  neither has to duplicate the "is this a checklist or a plain string"
+  branch.
+*/
+function renderBody(body) {
+  if (body && typeof body === 'object' && Array.isArray(body.checklist)) {
+    return <TutorialChecklist checklist={body.checklist} footer={body.footer} />
+  }
+  return body
+}
+
+/*
+  Progress checklist (owner report, 2026-10: DELETE_SAMPLE's old static copy
+  never said both items had to clear, claimed a highlight it couldn't always
+  deliver, and talked about "a block" singular for a task that can be split
+  across several — see tutorialSteps.js's own header for the full reasoning;
+  this component only renders the DATA it hands back).
+
+  Same checklist SHAPE as PasswordChecklist.jsx (not reused directly — that
+  one is password-policy-specific — but deliberately identical): an icon
+  that changes SHAPE, not just color, between done/pending (NFR-017), plus
+  `sr-only` text carrying "정리됨"/"남음" so a screen reader gets the SAME
+  information a sighted user reads off the icon shape alone.
+*/
+function TutorialChecklist({ checklist, footer }) {
+  return (
+    <>
+      <ul role="status" aria-live="polite" className="flex flex-col gap-1">
+        {checklist.map((item, i) => (
+          <li key={i} className="flex items-center gap-1.5">
+            {item.done ? (
+              <CheckCircleIcon size={14} className="shrink-0" />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-current"
+              />
+            )}
+            <span>
+              {item.label}
+              <span className="sr-only">{item.done ? ' (정리됨)' : ' (남음)'}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {footer && <p className="mt-1">{footer}</p>}
+    </>
+  )
+}
 
 // Re-measured on a light interval rather than a per-frame rAF loop — this
 // overlay only exists during the (rare, one-time) tutorial run, and its
@@ -314,7 +372,10 @@ export function Coachmark({
             and the first thing worth shedding to keep this strip from
             crowding a Dialog/BottomSheet that is ALSO fighting for vertical
             room on the same short screen. */}
-        {!shortViewport && <span className="text-white/90">{body}</span>}
+        {/* `<div>`, not `<span>` — DELETE_SAMPLE's own checklist body
+            (renderBody above) can return a `<ul>`/`<p>` fragment, which is
+            invalid inside an inline `<span>`. */}
+        {!shortViewport && <div className="text-white/90">{renderBody(body)}</div>}
       </div>,
       document.body,
     )
@@ -353,7 +414,10 @@ export function Coachmark({
         <h2 ref={headingRef} tabIndex={-1} className="text-label font-semibold text-text outline-none">
           {title}
         </h2>
-        <p className="text-caption text-text-muted">{body}</p>
+        {/* `<div>`, not `<p>` — same reasoning as the top strip's own render
+            site above: a checklist body is a `<ul>`/`<p>` fragment, invalid
+            nested inside a `<p>`. */}
+        <div className="text-caption text-text-muted">{renderBody(body)}</div>
         {/* [다시 열기] sits on its OWN line, left-aligned — it is a recovery
             action ("I closed the thing you opened for me"), not a step of
             the same weight as 건너뛰기/완료, so it doesn't compete with them

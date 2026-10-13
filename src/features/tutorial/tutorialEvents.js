@@ -18,16 +18,17 @@ import { useEffect, useRef } from 'react'
   why that specific line is the true "it worked" moment):
     - useCreateProject      → PROJECT_CREATED  { projectId }
     - useCreateTask         → TASK_CREATED     { projectId, taskId }
-    - usePlaceTask          → TASK_PLACED      { taskId, planBlockId }
+    - usePlaceTask          → TASK_PLACED      { taskId, planBlockId, title }
       (covers every real placement path — drag, keyboard quick-place, and the
       empty-slot "여기에 배치" menu — because all three call this ONE hook;
       see WeeklyPage.placeTaskAt)
-    - useApplyAutoPlace     → TASK_PLACED      { taskId } (per placement — an
-      auto-place batch can commit several tasks at once, and the tutorial only
-      cares that SOME task matching its own saved id landed)
-    - useCreateScheduleBlock→ SCHEDULE_CREATED { planBlockId, scheduleId }
-      (`scheduleId` added for the B1 completion-check fix — see
-      usePlanData.js's own emit call and TutorialOverlay.jsx's header)
+    - useApplyAutoPlace     → TASK_PLACED      { taskId, title } (per
+      placement — an auto-place batch can commit several tasks at once, and
+      the tutorial only cares that SOME task matching its own saved id landed)
+    - useCreateScheduleBlock→ SCHEDULE_CREATED { planBlockId, scheduleId, title }
+      (`scheduleId` added for the B1 completion-check fix; `title` added for
+      DELETE_SAMPLE's own checklist body — see usePlanData.js's own emit
+      calls and tutorialSteps.js's header)
     - useRemoveBlockWithUndo→ BLOCK_REMOVED    { planBlockId } (both 배치 해제
       and 일정 삭제 funnel through this one hook — see its own header)
 

@@ -136,6 +136,17 @@ export const onboardingCopy = {
     // showReopen 주석 참고).
     reopen: '다시 열기',
     progressLabel: (n, total) => `${n}/${total}`,
+    // PRACTICE-DATA CLEANUP confirm (owner decision, 2026-10) — shown from
+    // [완료]/[건너뛰기] (TutorialOverlay.jsx's own `exitWithCleanupCheck`)
+    // ONLY when something this run created is CONFIRMED to still exist.
+    // `cleanupBodySuffix` is appended after a comma-joined list of real
+    // item names (e.g. "프로젝트 「연습」(태스크 포함), 일정 「연습 일정」") —
+    // kept separate from a template string so the join logic stays in the
+    // component, not duplicated here.
+    cleanupTitle: '연습으로 만든 데이터를 정리할까요?',
+    cleanupBodySuffix: '이 남아 있습니다. 함께 정리할까요?',
+    cleanupDelete: '삭제하고 종료',
+    cleanupKeep: '남기고 종료',
     restartTitle: '튜토리얼을 다시 시작할까요?',
     // Thomas 리뷰 MAJOR fix — 이전 문구는 "정리한 뒤 시작합니다"라고 약속했지만
     // 실제 재시작 동작(SettingsLayout.confirmRestart)은 잔존 샘플을 정리하지
