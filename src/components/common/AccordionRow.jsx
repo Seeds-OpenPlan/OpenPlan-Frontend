@@ -21,7 +21,20 @@
   `header`; this shell does not force that on every caller, since a plain
   read-only row (no nested interactive controls) needs none of it.
 */
-export function AccordionRow({ expanded, onToggle, ariaLabel, panelId, header, summary, panel }) {
+export function AccordionRow({
+  expanded,
+  onToggle,
+  ariaLabel,
+  panelId,
+  header,
+  summary,
+  panel,
+  // Optional `data-tut-id` passthrough onto the toggle button itself (the
+  // ONE element that covers this whole row — see this file's own header).
+  // Undefined for every caller that doesn't pass it (both other consumers
+  // today), so this is a pure addition with no behavior change for them.
+  toggleTutId,
+}) {
   return (
     <li className="rounded-card border border-border bg-surface shadow-card">
       <div className="relative p-4">
@@ -31,6 +44,7 @@ export function AccordionRow({ expanded, onToggle, ariaLabel, panelId, header, s
           aria-controls={expanded ? panelId : undefined}
           aria-label={ariaLabel}
           onClick={onToggle}
+          data-tut-id={toggleTutId}
           className="absolute inset-0 z-0 rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         />
         <div className="flex flex-wrap items-center justify-between gap-3">{header}</div>

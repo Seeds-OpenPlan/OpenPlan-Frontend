@@ -64,6 +64,14 @@ export function TaskStructuringDraft({ projectId, project, onCreateTaskDirect, d
           onSecondaryAction={onCreateTaskDirect}
           disabled={disabled}
           disabledReason={disabledReason}
+          // 튜토리얼 2-2단계 anchor — 샘플 프로젝트는 항상 태스크 0개로
+          // 시작하므로(새로 만든 프로젝트) ProjectExpandedPanel의 "+ 태스크
+          // 추가" 버튼(tasks.length > 0에서만 렌더)이 아니라 이 빈 상태의
+          // 버튼이 실제로 보이는 쪽이다 — 같은 id를 공유해, 둘 중 실제로
+          // 마운트된(=보이는) 쪽을 Coachmark가 그대로 찾는다(기존 "보이는
+          // 쪽만 고른다" 로직, ProjectsPage의 데스크톱 버튼/모바일 FAB 쌍과
+          // 동일한 패턴).
+          secondaryActionTutId="tut-add-task"
         />
         {createDraft.isPending && (
           <p role="status" className="text-center text-caption text-text-muted">

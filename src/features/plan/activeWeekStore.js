@@ -41,6 +41,13 @@ import { currentWeekStartISO } from './planTime'
 */
 
 let activeWeekStartISO = currentWeekStartISO()
+// 튜토리얼 3단계(캘린더에 배치) 2-1→2-2 하위 단계 판정용 — WeeklyPage의
+// 미배치 패널이 지금 열려 있는가. `panelOpen`은 순수 로컬 state(URL에 안
+// 남음, see WeeklyPage's own `openUnplaced`/`panelOpen` 주석)라 다른
+// weekStartISO와 같은 이유로(아래 본 파일 헤더) 공유 저장소가 아니면
+// TutorialOverlay가 전혀 읽을 방법이 없다 — "그 프로젝트 행이 펼쳐졌는가"는
+// `?expanded=` URL로 읽을 수 있지만, 패널은 그런 URL 반영이 없다.
+let unplacedPanelOpen = false
 const listeners = new Set()
 
 function notify() {
@@ -59,6 +66,18 @@ export function setActiveWeekStartISO(weekStartISO) {
  * a future non-React consumer). */
 export function getActiveWeekStartISO() {
   return activeWeekStartISO
+}
+
+/** The one writer for `unplacedPanelOpen` — see `usePublishUnplacedPanelOpen`
+ * below. */
+export function setUnplacedPanelOpen(open) {
+  if (unplacedPanelOpen === open) return
+  unplacedPanelOpen = open
+  notify()
+}
+
+export function getUnplacedPanelOpen() {
+  return unplacedPanelOpen
 }
 
 function subscribe(listener) {
@@ -84,6 +103,32 @@ export function usePublishActiveWeek(weekStartISO) {
 /** React binding for a READER (TutorialOverlay). */
 export function useActiveWeekStartISO() {
   return useSyncExternalStore(subscribe, getActiveWeekStartISO)
+}
+
+/**
+ * WeeklyPage's OWN hook — publishes `panelOpen` every time IT changes.
+ * UNLIKE `usePublishActiveWeek` above, this ONE resets to `false` on
+ * unmount — "panel open" stops meaning anything the instant WeeklyPage
+ * itself goes away (navigating off /weekly), unlike "which week" (a value
+ * worth remembering even while the page showing it isn't mounted).
+ */
+export function usePublishUnplacedPanelOpen(panelOpen) {
+  useEffect(() => {
+    setUnplacedPanelOpen(panelOpen)
+  }, [panelOpen])
+  // SEPARATE effect with an EMPTY dep array — its cleanup only ever runs on
+  // actual UNMOUNT, not on every `panelOpen` toggle (unlike bundling this
+  // into the effect above, whose cleanup would otherwise fire-then-
+  // immediately-re-fire on every single toggle, a harmless but wasteful
+  // double notify).
+  useEffect(() => {
+    return () => setUnplacedPanelOpen(false)
+  }, [])
+}
+
+/** React binding for a READER (TutorialOverlay). */
+export function useUnplacedPanelOpen() {
+  return useSyncExternalStore(subscribe, getUnplacedPanelOpen)
 }
 
 export default useActiveWeekStartISO

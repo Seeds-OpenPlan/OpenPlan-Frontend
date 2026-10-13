@@ -27,6 +27,12 @@ export function EmptyState({
   // sets `disabled`, so the button stays visible and discoverable.
   disabled = false,
   disabledReason,
+  // Optional `data-tut-id` passthrough onto either action button. Undefined
+  // for every EXISTING caller (dashboard onboarding, list-empty states), so
+  // this is a pure addition — only TaskStructuringDraft's own zero-task
+  // state passes one today (tutorial 2-2 anchor, see that file's comment).
+  actionTutId,
+  secondaryActionTutId,
 }) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-card border border-border bg-surface px-4 py-10 text-center">
@@ -42,6 +48,7 @@ export function EmptyState({
               onClick={onAction}
               disabled={disabled}
               disabledReason={disabled ? disabledReason : undefined}
+              data-tut-id={actionTutId}
             >
               {actionLabel}
             </Button>
@@ -53,6 +60,7 @@ export function EmptyState({
               onClick={onSecondaryAction}
               disabled={disabled}
               disabledReason={disabled ? disabledReason : undefined}
+              data-tut-id={secondaryActionTutId}
             >
               {secondaryActionLabel}
             </Button>

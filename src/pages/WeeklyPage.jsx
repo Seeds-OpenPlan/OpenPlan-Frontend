@@ -56,7 +56,7 @@ import {
   visibleRange,
 } from '../features/plan/planGeometry'
 import { findFirstFreeSlot } from '../features/plan/planPlacement'
-import { usePublishActiveWeek } from '../features/plan/activeWeekStore'
+import { usePublishActiveWeek, usePublishUnplacedPanelOpen } from '../features/plan/activeWeekStore'
 import { getPopoverAnchorStyle } from '../utils/popoverPosition'
 import {
   addWeeksISO,
@@ -141,6 +141,11 @@ function WeeklyPage() {
   // would be invisible, so either param alone opens it, and they combine fine
   // (`?openUnplaced=1&project=xxx`) since both just seed independent state.
   const [panelOpen, setPanelOpen] = useState(false)
+  // 튜토리얼 3단계(캘린더에 배치) 3-1→3-2 하위 단계 판정용 — `panelOpen`은
+  // 순수 로컬 state로 URL에 전혀 반영되지 않아(위 주석), TutorialOverlay가
+  // 달리 읽을 방법이 없다. activeWeekStore.js's own header의 weekStartISO와
+  // 같은 이유로 공유 저장소에 발행한다.
+  usePublishUnplacedPanelOpen(panelOpen)
   const [projectFilter, setProjectFilter] = useState(null)
   const [autoDraft, setAutoDraft] = useState(null) // { placements, unplaced } | null
   const [slotMenu, setSlotMenu] = useState(null) // { point, slot } | null
@@ -1923,10 +1928,14 @@ function WeeklyPage() {
               onRedo={handleRedo}
             />
           </div>
-          {/* FAB hides while the panel is open; reappears on close. */}
+          {/* FAB hides while the panel is open; reappears on close. SAME
+              button on desktop and mobile (only its CSS position differs,
+              via the wrapping `md:absolute` container above) — one
+              `data-tut-id` anchors the 튜토리얼 3-1단계 coachmark on both
+              shells with no responsive-duplicate needed. */}
           <div className="pointer-events-auto">
             {!panelOpen && (
-              <PlanFab count={unplacedCount} onClick={() => setPanelOpen(true)} />
+              <PlanFab count={unplacedCount} onClick={() => setPanelOpen(true)} data-tut-id="tut-unplaced-toggle" />
             )}
           </div>
         </div>
