@@ -74,10 +74,10 @@ export function CheckCircleIcon({ className, size = 24 }) {
 // design-of-record SVG (docs/플레이 출시 작업내용/스토어 그래픽/openplan-icon.svg,
 // 512 viewBox), same shape AppIcon.jsx (PR #75) renders — but outline-only:
 // no background square, no hardcoded white fill, so `currentColor` lets each
-// call site mute it via className (e.g. `text-text-disabled`) instead of
-// forcing the solid brand blue, since here it's a quiet watermark, not the
-// literal app icon. Named BrandMarkOutlineIcon (not AppIcon) to stay clear of
-// that component's name.
+// call site mute it via className (e.g. `EMPTY_STATE_ICON_CLASS` below)
+// instead of forcing the solid brand blue, since here it's a quiet
+// watermark, not the literal app icon. Named BrandMarkOutlineIcon (not
+// AppIcon) to stay clear of that component's name.
 export function BrandMarkOutlineIcon({ className, size = 24 }) {
   return (
     <svg {...base} width={size} height={size} viewBox="0 0 512 512" className={className}>
@@ -86,6 +86,18 @@ export function BrandMarkOutlineIcon({ className, size = 24 }) {
     </svg>
   )
 }
+
+// Shared size/color for every `BrandMarkOutlineIcon` usage in an empty-state
+// card (EmptyState.jsx, DashboardEmptyState.jsx). Exported as constants
+// — not left as separate literals at each call site — so a future owner
+// tweak (this pair has already changed once: 32px/text-text-disabled →
+// 40px/text-neutral-300) only needs editing here instead of two files
+// silently drifting apart. `text-neutral-300` (lighter than the
+// text-disabled/neutral-400 token) is a deliberate one-off for this
+// decorative mark, not a semantic-token substitute — it's purely
+// decorative (aria-hidden) so WCAG text-contrast minimums don't apply.
+export const EMPTY_STATE_ICON_SIZE = 40
+export const EMPTY_STATE_ICON_CLASS = 'text-neutral-300'
 
 // Button inline-loading spinner. Marked aria-hidden; the label text ("처리 중")
 // carries the state, and the button sets aria-busy (color/motion is secondary).

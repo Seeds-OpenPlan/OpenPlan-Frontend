@@ -1,4 +1,4 @@
-import { BrandMarkOutlineIcon } from './statusIcons'
+import { BrandMarkOutlineIcon, EMPTY_STATE_ICON_SIZE, EMPTY_STATE_ICON_CLASS } from './statusIcons'
 import { Button } from './Button'
 
 /*
@@ -9,12 +9,12 @@ import { Button } from './Button'
 
   Icon history (owner direction, 2026-10-13): first removed app-wide (a
   generic "empty box" illustration read as clutter), then replaced with the
-  app's own brand mark at reduced size/muted color instead of staying
-  icon-less — "no icon" was too plain, but the old literal box wasn't the
-  answer either. `size={32}` + `text-text-disabled` + the surrounding
-  `gap-3`/`py-8` card deliberately mirror ErrorState's section variant (same
-  icon slot, same AlertTriangleIcon size) rather than inventing new spacing
-  values for a smaller icon.
+  app's own brand mark instead of staying icon-less — "no icon" was too
+  plain, but the old literal box wasn't the answer either — then the owner
+  asked for it lighter and a little larger (32px/text-text-disabled →
+  40px/text-neutral-300). Size/color come from `EMPTY_STATE_ICON_SIZE` /
+  `EMPTY_STATE_ICON_CLASS` (statusIcons.jsx) rather than local literals, so
+  this card and DashboardEmptyState.jsx can't drift apart on a future tweak.
 
   Not `role="alert"`/`role="status"`: an empty list is a normal, expected state
   (not an error, not a transient announcement), so it renders like ordinary
@@ -38,7 +38,7 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-card border border-border bg-surface px-4 py-8 text-center">
-      <BrandMarkOutlineIcon className="text-text-disabled" size={32} />
+      <BrandMarkOutlineIcon className={EMPTY_STATE_ICON_CLASS} size={EMPTY_STATE_ICON_SIZE} />
       <p className="text-body font-medium text-text">{title}</p>
       {description && <p className="max-w-[42ch] text-label text-text-muted">{description}</p>}
       {(onAction || onSecondaryAction) && (
