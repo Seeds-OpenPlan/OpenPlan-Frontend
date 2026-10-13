@@ -107,6 +107,38 @@ export function useTutorialRestart() {
     )
   }
 
+  /*
+    [PR #81 AI 리뷰 Should-fix, 이어지는 경합] 위 설계대로 다이얼로그를 PATCH 성공까지
+    열어 두면, 그 대기 중에도 취소/Esc/백드롭/하드웨어 뒤로 가기로 "닫을" 수 있다는
+    문제가 새로 생긴다 — 사용자가 취소로 닫아도 이미 날아간 PATCH는 계속 진행되고,
+    그게 성공하면 onSuccess가 그대로 `resetTutorialStep`+`navigate('/')`를 실행해
+    버린다("취소했는데 재시작되는" 경합).
+
+    고친 버전은 pending 동안 다이얼로그를 **닫을 수 없게** 만든다 — `onClose`를
+    `isPending`이면 Dialog/BottomSheet에 아예 넘기지 않는다(`undefined`). 이 한
+    지점만 바꾸면 Esc·백드롭 클릭(Dialog.jsx/BottomSheet.jsx 둘 다 `onClose`가
+    없으면 그 자리에서 끝낸다)과 BottomSheet 드래그 핸들(`onClose` 없으면 버튼이 아닌
+    장식용 span)이 전부 같이 막힌다 — OVL-CONFLICT("선택만이 유일한 출구")가 이미
+    쓰는, 이 코드베이스의 기존 "닫을 수 없는 오버레이" 관례 그대로다.
+
+    하드웨어 뒤로 가기는 별도 경로(`useOverlayBackButton.js`)라 같은 `onClose` 체크로
+    저절로 막히는지 직접 확인했다 — `onPopState`는 `!onCloseRef.current`(= onClose가
+    undefined)일 때 오버레이를 닫는 대신 `ensureOverlayEntry()`로 소비된 히스토리
+    엔트리를 다시 push한다(그 함수 자신의 주석: "닫을 수 없는 오버레이 — 소비된
+    엔트리를 되돌려 놓는다"). 즉 ConflictOverlay가 이미 쓰는 바로 그 경로라, 여기서
+    새로 만들 것 없이 `onClose`를 끊는 것 하나로 Esc·백드롭·드래그 핸들·하드웨어
+    뒤로 가기가 전부 일관되게 막힌다.
+
+    onSuccess 시점에 "다이얼로그가 아직 이 요청을 기다리고 있는지" 별도 ref로 재확인
+    하는 방어는 넣지 않았다 — 위 네 경로를 전부 막았으므로 pending 중 이 다이얼로그를
+    사용자 조작으로 닫을 방법이 아예 없고(Dialog는 전체 화면 백드롭 + 포커스 트랩이라
+    바깥 클릭으로 다른 화면 조작도 못 한다), 그래서 onSuccess가 불릴 때 다이얼로그는
+    항상 그 요청을 시작했던 바로 그 열림 상태 그대로다 — ref가 지켜 줄 "이미 닫힌/
+    다른 요청으로 바뀐" 경우 자체가 생기지 않는다.
+  */
+  const confirmPending = updateOnboardingProgress.isPending
+  const closeDialog = confirmPending ? undefined : () => setConfirmOpen(false)
+
   const dialogBody = (
     <div className="flex flex-col gap-4">
       <h2 id={TITLE_ID} className="text-title font-semibold text-text">
@@ -114,7 +146,13 @@ export function useTutorialRestart() {
       </h2>
       <p className="text-body text-text-muted">{onboardingCopy.tutorial.restartBody}</p>
       <div className="mt-1 flex justify-end gap-2">
-        <Button type="button" variant="secondary" size="md" onClick={() => setConfirmOpen(false)}>
+        <Button
+          type="button"
+          variant="secondary"
+          size="md"
+          disabled={confirmPending}
+          onClick={() => setConfirmOpen(false)}
+        >
           {onboardingCopy.tutorial.restartCancel}
         </Button>
         <Button
@@ -122,7 +160,7 @@ export function useTutorialRestart() {
           type="button"
           variant="primary"
           size="md"
-          loading={updateOnboardingProgress.isPending}
+          loading={confirmPending}
           onClick={confirmRestart}
         >
           {onboardingCopy.tutorial.restartConfirm}
@@ -134,16 +172,11 @@ export function useTutorialRestart() {
   const dialog =
     confirmOpen &&
     (isDesktop ? (
-      <Dialog open onClose={() => setConfirmOpen(false)} labelledById={TITLE_ID} initialFocusRef={confirmBtnRef}>
+      <Dialog open onClose={closeDialog} labelledById={TITLE_ID} initialFocusRef={confirmBtnRef}>
         {dialogBody}
       </Dialog>
     ) : (
-      <BottomSheet
-        open
-        onClose={() => setConfirmOpen(false)}
-        labelledById={TITLE_ID}
-        initialFocusRef={confirmBtnRef}
-      >
+      <BottomSheet open onClose={closeDialog} labelledById={TITLE_ID} initialFocusRef={confirmBtnRef}>
         {dialogBody}
       </BottomSheet>
     ))
