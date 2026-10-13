@@ -225,14 +225,32 @@ let selfBackSuppressedAt = null
 const SELF_BACK_SUPPRESS_TTL_MS = 2000
 
 /**
- * 오버레이를 닫으면서 **다른 화면으로 이동할** 호출부가, 그 navigate() 바로 앞에서
- * 불러야 한다 — "곧 이동할 테니, 지연 재확인이 (아직 실행되지 않았다면) self-back()을
- * 포기하게" 알리는 신호다. 설계 헤더의 "명시적 억제" 단락과, 실제 사용 예시는
- * `SettingsAccountPage.jsx`(로그아웃)·`SessionExpiredOverlay.jsx`(재로그인)·
- * `useTutorialRestart.jsx`(재시작 확인)·`NotificationBell.jsx`(알림 클릭/설정 이동) 등
- * 이 파일을 호출하는 쪽의 주석을 참고. 앞으로 "닫고 이동"하는 새 호출부(예: #78 튜토리얼
- * 개편이 추가할 코치마크 종료 흐름)를 만들 때도 같은 자리(오버레이를 닫는 상태 갱신 직후,
- * navigate() 직전)에서 이 함수를 부르면 된다.
+ * 계약: **실제로 오버레이 스택에 등록된(Dialog/BottomSheet) 오버레이를 닫으면서,
+ * 그 결과로 반드시 다른 화면으로 이동할** 호출부만, 그 navigate() 바로 앞에서 불러야
+ * 한다 — "곧 이동할 테니, 지연 재확인이 (아직 실행되지 않았다면) self-back()을
+ * 포기하게" 알리는 신호다.
+ *
+ * 이 플래그는 **오버레이 단위가 아니라 모듈 전역**이고 TTL(`SELF_BACK_SUPPRESS_TTL_MS`,
+ * 2초) 동안 유지된다 — 그래서 위 계약의 두 조건을 둘 다 반드시 지켜야 한다(Thomas
+ * 재리뷰 S2-a/S2-b로 드러난 사고):
+ * - **오버레이 스택에 등록되지 않은 UI**(예: 데스크톱의 비모달 드롭다운처럼
+ *   `useOverlayBackButton`을 쓰지 않는 패널)를 닫으며 부르면, 그 TTL 창 안에 실제로
+ *   "닫아서 self-back이 필요한" **전혀 무관한 다른** 오버레이가 하나라도 닫히면 그
+ *   self-back까지 이 호출이 빼앗아 버린다 — "호출해도 무해하다"는 가정은 틀렸다.
+ *   호출부가 데스크톱/모바일처럼 셸에 따라 오버레이 등록 여부가 달라진다면(예:
+ *   `NotificationBell.jsx`), 실제로 모달로 열렸는지를 가리는 값(`isDesktop` 등)으로
+ *   직접 가드해야 한다.
+ * - **이동이 실제로 일어나는 경로에서만** 불러야 한다 — 조건부 navigate()(예:
+ *   `if (notification.routePath) navigate(...)`) 앞이 아니라 **그 조건 블록 안**,
+ *   navigate() 바로 앞에서 불러야 한다. 이동이 끝내 일어나지 않는데도 미리 불러
+ *   버리면 역시 같은 방식으로 무관한 self-back을 억제한다.
+ *
+ * 실제 사용 예시는 `SettingsAccountPage.jsx`(로그아웃)·`SessionExpiredOverlay.jsx`
+ * (재로그인)·`useTutorialRestart.jsx`(재시작 확인)·`NotificationBell.jsx`(알림
+ * 클릭/설정 이동, 모바일 한정) 등 이 파일을 호출하는 쪽의 주석을 참고. 앞으로 "닫고
+ * 이동"하는 새 호출부(예: #78 튜토리얼 개편이 추가할 코치마크 종료 흐름)를 만들 때도
+ * 위 계약(실제로 등록된 오버레이 + 이동이 반드시 일어나는 지점)을 지키며, 오버레이를
+ * 닫는 상태 갱신 직후·navigate() 직전에서 이 함수를 부르면 된다.
  */
 export function suppressPendingSelfBack() {
   selfBackSuppressedAt = Date.now()
