@@ -35,3 +35,29 @@ export const SETTINGS_DETAIL_TITLES = {
   '/settings/support': '지원',
   '/settings/notices': '공지',
 }
+
+/*
+  PR #82 AI 리뷰 Should-fix: 위 맵은 router.js의 `/settings/*` 자식 경로를
+  정확히 한 단계만 따라간다 — `calendar/google-callback`처럼 그 밑에 한 단계
+  더 들어간 경로(구글 캘린더 OAuth 콜백 착지점, GoogleCalendarCallbackPage)는
+  정확히 일치하는 키가 없어 빈 제목을 받았다. 정확히 일치하는 항목이 없으면
+  "가장 긴 접두사"로 거슬러 올라가 부모 항목의 제목을 쓴다(콜백 화면은 결국
+  "캘린더 연동" 흐름의 일부이므로 그 제목이 맞다) — 그래도 못 찾으면 빈 h2
+  대신 페이지 기본 제목("설정")으로 떨어진다.
+
+  콜백 전용 문구를 명시적으로 추가하지 않은 이유: 이 화면은 항상
+  `/settings/calendar`로 재이동(replace)하며 끝나는 몇 초짜리 처리 중
+  화면이고, "캘린더 연동"이라는 제목이 사용자가 방금 탭한 행과 이미
+  일치해 혼란을 주지 않는다 — 접두사 매칭 하나로 이 경로뿐 아니라 앞으로
+  `/settings/calendar/` 밑에 생길 임의의 하위 경로까지 함께 커버된다.
+*/
+export function resolveSettingsDetailTitle(pathname) {
+  let best = null
+  for (const [path, title] of Object.entries(SETTINGS_DETAIL_TITLES)) {
+    const isMatch = pathname === path || pathname.startsWith(`${path}/`)
+    if (isMatch && (!best || path.length > best.path.length)) {
+      best = { path, title }
+    }
+  }
+  return best?.title ?? '설정'
+}

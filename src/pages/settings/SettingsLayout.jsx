@@ -3,7 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { SettingsNavList } from '../../components/settings/SettingsNavList'
 import { ChevronLeftIcon } from '../../components/settings/settingsIcons'
 import { useIsDesktop, useMediaQuery } from '../../hooks/useMediaQuery'
-import { SETTINGS_FIRST_DETAIL_PATH, SETTINGS_DETAIL_TITLES } from '../../features/settings/settingsNavOrder'
+import { SETTINGS_FIRST_DETAIL_PATH, resolveSettingsDetailTitle } from '../../features/settings/settingsNavOrder'
 import { useTutorialRestart } from '../../features/onboarding/useTutorialRestart'
 
 // Sidebar width once a detail screen is open (desktop). Named so the list
@@ -205,7 +205,7 @@ function SettingsLayout() {
                 tabIndex={-1}
                 className="truncate text-title font-semibold text-text outline-none"
               >
-                {SETTINGS_DETAIL_TITLES[location.pathname] ?? ''}
+                {resolveSettingsDetailTitle(location.pathname)}
               </h2>
             </div>
           )}
