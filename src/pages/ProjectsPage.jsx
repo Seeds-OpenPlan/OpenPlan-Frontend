@@ -62,10 +62,12 @@ function ProjectsPage() {
 
   /*
     `?create=1` seam (§PROJ.0.1) — OPENS the form; see useSearchParamRequest's
-    own header for why this is a hook rather than a plain effect (and why it
-    re-fires on a REPEAT appearance of the param, unlike the lazy
-    `useState` initializer this used to be — needed for the tutorial's own
-    [다시 열기], ST-F1-13).
+    own header for why this is a hook rather than a plain effect: a GENUINE
+    deep-link re-arriving while this page stays mounted (not tutorial-specific
+    — the tutorial's old [다시 열기] button that originally motivated this
+    hook is gone, RING-BASED REDESIGN, see TutorialOverlay.jsx's own header)
+    still needs `?create=1` to re-fire if the user follows the same link
+    twice, unlike the lazy `useState` initializer this used to be.
   */
   useSearchParamRequest(searchParams, setSearchParams, 'create', {
     onFire: () => setOverlay({ type: 'create' }),

@@ -1514,14 +1514,14 @@ function WeeklyPage() {
   /*
     `?openUnplaced=1`/`?project={id}` — OPENS the panel (+ sets the filter).
     See useSearchParamRequest's own header for why a hook, not the lazy
-    `useState` initializer this used to be: TUT-05's own [다시 열기] can
-    re-send either param while this page stays mounted across TUT-05/06/07
-    (all three share `/weekly`, so none of them remount between steps). Two
+    `useState` initializer this used to be: a GENUINE deep-link re-arriving
+    while this page stays mounted still needs either param to re-fire (not
+    tutorial-specific — no tutorial step sends either of these params
+    anymore, RING-BASED REDESIGN, see TutorialOverlay.jsx's own header). Two
     independent calls (not one combined effect) — either param alone still
     opens the panel, and `project` additionally sets the filter; each strips
-    and re-fires on its OWN schedule, which matters once `project` can
-    arrive WITHOUT `openUnplaced` (TUT-05's own request) just as easily as
-    the reverse.
+    and re-fires on its OWN schedule, which matters whenever `project` can
+    arrive WITHOUT `openUnplaced` just as easily as the reverse.
   */
   useSearchParamRequest(searchParams, setSearchParams, 'openUnplaced', {
     onFire: () => setPanelOpen(true),
