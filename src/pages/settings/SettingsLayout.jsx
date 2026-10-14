@@ -161,17 +161,19 @@ function SettingsLayout() {
   // 768px 경계를 넘나들어도(리사이즈, 폴드 펼침/접힘) `open`이 토글된다 — 그때
   // 마다 자동으로 포커스가 옮겨지면, 하위 페이지의 입력 필드에 타이핑하던 중
   // 창을 돌리기만 해도 포커스가 튕겨 나갔다(실제 재현된 Blocking). 포커스를
-  // 언제 옮길지는 아래 두 effect가 **라우트(location.pathname) 변화에만** 반응해
-  // 따로 결정한다 — 트랩은 Tab 가두기만 맡는다.
+  // 언제 옮길지는 아래 effect(제목 포커스 / 허브로 돌아올 때 포커스, 두 분기를
+  // 가진 하나의 effect)가 **라우트(location.pathname) 변화에만** 반응해 결정한다
+  // — 트랩은 Tab 가두기만 맡는다.
   const panelRef = useRef(null)
   useFocusTrap(panelRef, { open: mobileDetailOpen, manageFocus: false })
 
-  // 아래 두 effect(제목 포커스 / 허브로 돌아올 때 포커스)가 공유하는 "리사이즈
-  // 때문에 effect가 다시 돌면 안 된다"는 요구를 만족시키는 장치 — `isDesktop`을
-  // effect의 deps로 직접 넣는 대신, 매 렌더 최신값을 ref에 적어 두고 effect
-  // 안에서는 그 ref만 읽는다(BottomSheet.jsx의 `onCloseRef`와 같은 이유: deps에
-  // 안 넣인 값을 "그 순간의 값"으로만 참조). 이 updater는 deps 배열이 없어 매
-  // 렌더 실행되지만, effect 바디가 가벼워 비용이 무시할 만하다.
+  // 아래 focus 복원 effect(제목 포커스 / 허브로 돌아올 때 포커스 두 분기)가
+  // "리사이즈 때문에 effect가 다시 돌면 안 된다"는 요구를 만족시키는 장치 —
+  // `isDesktop`을 그 effect의 deps로 직접 넣는 대신, 매 렌더 최신값을 ref에
+  // 적어 두고 effect 안에서는 그 ref만 읽는다(BottomSheet.jsx의 `onCloseRef`와
+  // 같은 이유: deps에 안 넣인 값을 "그 순간의 값"으로만 참조). 이 updater는
+  // deps 배열이 없어 매 렌더 실행되지만, effect 바디가 가벼워 비용이 무시할
+  // 만하다.
   const isDesktopRef = useRef(isDesktop)
   useEffect(() => {
     isDesktopRef.current = isDesktop
