@@ -19,6 +19,7 @@ import { getProject, deleteProject } from '../../features/project/projectApi'
 import { projectKey, projectsKey } from '../../features/project/useProjectData'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
+import { suppressPendingSelfBack } from '../../utils/overlayHistory'
 
 const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
 const CLEANUP_TITLE_ID = 'tutorial-cleanup-title'
@@ -177,20 +178,29 @@ const MAIN_STEP_LABELS = ['1', '2', '3', '4', '5']
   closes — kickoff→CREATE_PROJECT is the same shape as PLACE_TASK's own
   /projects→/weekly move, just not special-cased before).
 
-  CLOSE-THEN-MOVE HARDENING (Thomas 분석, 2026-10 — defense-in-depth on top
-  of the fix above, independent of the separate `fix/overlay-history` PR
-  rebuilding `utils/overlayHistory.js` itself, which this file does not
-  touch): nowhere in this file does a click handler both close a Dialog
-  (`setOffRouteState`/etc.) AND call `navigate()` in the SAME tick anymore.
-  [튜토리얼로 돌아가기] (`returnToTutorialRoute` below) only calls
-  `navigate()` — the off-route ask's own Dialog closes ONE RENDER LATER,
-  via the combined effect's own reactive disarm, once `navLocation.pathname`
-  actually reflects that navigation. The render branch chain below ALSO
-  renders NOTHING (not the surface about to close, not yet the Coachmark
-  ring) for the one tick between a step becoming active and its own
-  entry-navigate landing (see that branch's own comment) — covering BOTH
-  kickoff→CREATE_PROJECT and a RESUME onto a step whose route the user
-  wasn't already on.
+  CLOSE-THEN-MOVE HARDENING, revised for PR #81 (`fix/overlay-history`,
+  merged 2026-10) — this file's OWN earlier defense here (before #81
+  landed) made [튜토리얼로 돌아가기] avoid closing its Dialog synchronously,
+  deferring the close to a LATER render via the combined effect's reactive
+  disarm, specifically because the OLD bridge (a boolean flag +
+  `stopImmediatePropagation`, `6d9aeb5`) had no principled way to tell "a
+  close+navigate that's actually fine" from "a close that should really
+  self-back()" — spacing them across ticks was a hand-rolled workaround.
+  #81 replaced that bridge wholesale with an idx-tracked self-back map, a
+  double-`requestAnimationFrame` deferred re-check before ever calling
+  `history.back()`, and an explicit `suppressPendingSelfBack()` signal for
+  exactly this "closing a registered overlay, then definitely
+  navigating" shape (see that file's own header) — this file now uses THAT
+  signal instead of the tick-spacing workaround: `returnToTutorialRoute`
+  closes the off-route ask Dialog AND calls `navigate()` in the SAME
+  handler again, with `suppressPendingSelfBack()` called in between (see
+  that function's own comment for why the OLD workaround is no longer
+  needed, and why this is nonetheless the SAME canonical order
+  `useTutorialRestart.jsx`/`SettingsAccountPage.jsx`/etc. all use now). The
+  render branch chain below STILL renders NOTHING for the one tick between
+  a step becoming active and its own entry-navigate landing — see that
+  branch's own comment for why that stays, for an UNRELATED (cosmetic, not
+  history-race) reason, even though the bridge no longer requires it either.
 
   RESUME PROMPT (owner decision, 2026-10) — a FRESH MOUNT (refresh,
   re-login, app restart; TutorialOverlay itself otherwise stays mounted for
@@ -595,18 +605,29 @@ export function TutorialOverlay() {
     setOffRouteState(null)
   }
 
-  // [튜토리얼로 돌아가기] — returns to the active step's OWN route. Does
-  // NOT also call `setOffRouteState(null)` here (Thomas 분석, 2026-10
-  // hardening — "닫기와 이동을 같은 틱에 하지 않기"): closing this Dialog
-  // and calling `navigate()` in the SAME click handler would close+move in
-  // one tick, the exact shape of race the kickoff→CREATE_PROJECT BLOCKER
-  // above was. The reactive disarm already in the combined effect above
-  // (`onRoute && offRouteState !== null → setOffRouteState(null)`) closes
-  // this dialog on its own, ONE RENDER LATER, once `navLocation.pathname`
-  // actually reflects this `navigate()` call — the dialog staying open for
-  // that one extra tick is imperceptible and strictly safer than closing
-  // it before the navigation it depends on has actually landed.
+  // [튜토리얼로 돌아가기] — closes THIS registered overlay (the off-route
+  // ask Dialog/BottomSheet) and, as a DIRECT result, moves to a different
+  // route — exactly the shape `suppressPendingSelfBack()` exists for (PR
+  // #81, `utils/overlayHistory.js`'s own header: "오버레이 스택에 등록된
+  // 오버레이를 닫으면서, 그 결과로 반드시 다른 화면으로 이동할 호출부만,
+  // 그 navigate() 바로 앞에서" — this call site is named there verbatim as
+  // the expected future caller). Superseded here (2026-10, PR #81 merge) a
+  // PREVIOUS version of this handler that deliberately did NOT close
+  // synchronously — that was a hand-rolled defense against the OLD bridge
+  // (a boolean flag + `stopImmediatePropagation`, replaced wholesale by
+  // #81) and is no longer needed: the NEW bridge's own double-rAF
+  // re-verification (closing a registered overlay always defers its own
+  // "stack is 0, should I self-back()" decision two frames, re-checking
+  // `location.href`/`isNavigationInFlight` before ever acting) already
+  // tolerates "close and navigate in the exact same tick" on its own for a
+  // SYNCHRONOUS handler like this one — `suppressPendingSelfBack()` is
+  // still called explicitly anyway, both to follow the SAME canonical
+  // "닫기 → 억제 → 이동" order every other close+navigate call site in this
+  // codebase now uses (`useTutorialRestart.jsx`, `SettingsAccountPage.jsx`,
+  // etc.) and because it costs nothing and removes any doubt.
   const returnToTutorialRoute = () => {
+    setOffRouteState(null)
+    suppressPendingSelfBack()
     navigate(activeStep.route)
   }
   // [종료] — goes through the SAME `exitWithCleanupCheck` → PATCH flow as
@@ -1001,8 +1022,7 @@ export function TutorialOverlay() {
     )
   } else if (navLocation.pathname !== activeStep.route && offRouteState === null) {
     /*
-      PENDING ENTRY NAVIGATE (Thomas 분석, 2026-10 하드닝 — "닫기와 이동을
-      같은 틱에 하지 않기") — a step just became active but its own
+      PENDING ENTRY NAVIGATE — a step just became active but its own
       entry-tick `navigate()` (the combined effect above) hasn't landed on
       screen yet; `offRouteState === null` is what tells this apart from a
       REAL later off-route excursion (that effect never arms the ask during
@@ -1011,14 +1031,29 @@ export function TutorialOverlay() {
       Dialog on the very first entry, or the RESUME ask's Dialog if resuming
       mid-progress onto a step whose route the user wasn't already on) or
       the Coachmark ring (whose target doesn't exist on the CURRENT page
-      yet anyway). This keeps that closing Dialog's own unmount and this
-      step's own `navigate()` call from both happening in the exact same
-      effect pass — the shape of race the kickoff→CREATE_PROJECT BLOCKER
-      above was. The gap is one render tick, imperceptible; the owner's own
-      instruction left the choice between keeping the old surface open vs.
-      rendering nothing here, and "nothing" was picked specifically because
-      "keep the old surface" would show kickoff's own [시작하기] copy during
-      a RESUME's analogous gap, which is wrong content for that case.
+      yet anyway).
+
+      NOT a `suppressPendingSelfBack()` call site (PR #81 merge, 2026-10 —
+      re-evaluated this branch against the NEW bridge): that function's own
+      contract is for a handler that closes a registered overlay AND is
+      about to navigate, called once, right next to that one `navigate()`
+      call. The entry-tick effect's own `navigate()` fires for EVERY step
+      change, most of which (1→2, 3→4→5→6) close NOTHING at all (Coachmark
+      never registers on the overlay stack) — calling suppress unconditionally
+      there would risk swallowing a completely UNRELATED overlay's own
+      legitimate self-back if one happened to close within the suppression
+      window (`utils/overlayHistory.js`'s own header warns about exactly
+      this). The two cases that DO close a registered overlay here (kickoff,
+      and the resume ask) are both synchronous, no-network-wait transitions,
+      well within the bridge's own double-rAF re-verification — which
+      already bails out on its own once `location.href` has changed, with
+      no suppress call needed (unlike `useTutorialRestart.jsx`'s PATCH-gated
+      close+navigate, which genuinely can outlast that window). This branch
+      itself is ALSO no longer strictly needed to avoid a close+navigate
+      race (the new bridge tolerates that natively) — it stays because it
+      independently avoids rendering the Coachmark ring against a
+      `data-tut-id` that doesn't exist on the CURRENT (not-yet-navigated-to)
+      page, which is a real, if purely cosmetic, win on its own.
     */
     mainContent = null
   } else if (offRouteState === 'asking') {
