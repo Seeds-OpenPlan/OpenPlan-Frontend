@@ -12,12 +12,27 @@ import { useEffect } from 'react'
 
   Escape is intentionally NOT handled here — each surface decides its own Esc
   policy (UnsavedGuard: Esc = safe default; ConflictOverlay: Esc ignored).
+
+  `manageFocus` (default true, PR #82 AI 리뷰 Blocking fix #2): every existing
+  caller (Dialog, BottomSheet, ProjectWbsDrawer) wants `open` itself to BE the
+  "move focus in / restore focus out" trigger — for them, `open` only ever
+  flips on a real mount/unmount of that modal, so that's correct. But
+  SettingsLayout.jsx's mobile detail panel derives its `open` from a LIVE
+  media query (`isDesktop`) that can flip on a bare window resize or fold
+  hinge move — WITHOUT the route (and therefore the user's actual intent)
+  changing at all. If this hook still moved focus on every `open` flip, a
+  resize alone would steal focus out of whatever field the user was mid-typing
+  in. `manageFocus: false` keeps the Tab/Shift+Tab containment (still exactly
+  what a modal needs, and safe to toggle on resize — it's not an explicit
+  user action, just which keys get trapped) while leaving ALL focus-moving
+  decisions to the caller, who can tie them to something narrower (e.g. route
+  change) instead of `open`.
 */
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])'
 
-export function useFocusTrap(containerRef, { open, initialFocusRef, returnFocusRef }) {
+export function useFocusTrap(containerRef, { open, initialFocusRef, returnFocusRef, manageFocus = true }) {
   useEffect(() => {
     if (!open) return
 
@@ -40,7 +55,7 @@ export function useFocusTrap(containerRef, { open, initialFocusRef, returnFocusR
       if (focusables.length > 0) focusables[0].focus()
       else container.focus()
     }
-    focusFirst()
+    if (manageFocus) focusFirst()
 
     const onKeyDown = (e) => {
       if (e.key !== 'Tab') return
@@ -61,11 +76,11 @@ export function useFocusTrap(containerRef, { open, initialFocusRef, returnFocusR
     container.addEventListener('keydown', onKeyDown)
     return () => {
       container.removeEventListener('keydown', onKeyDown)
-      if (restoreTarget && typeof restoreTarget.focus === 'function') {
+      if (manageFocus && restoreTarget && typeof restoreTarget.focus === 'function') {
         restoreTarget.focus()
       }
     }
-  }, [open, containerRef, initialFocusRef, returnFocusRef])
+  }, [open, containerRef, initialFocusRef, returnFocusRef, manageFocus])
 }
 
 export default useFocusTrap

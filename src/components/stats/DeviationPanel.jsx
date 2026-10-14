@@ -1,4 +1,4 @@
-import { StatsToggle } from './StatsToggle'
+import { FilterPill, FilterPillGroup } from '../common/FilterPill'
 import { LoadingSkeleton } from '../common/LoadingSkeleton'
 import { formatSignedHm } from '../../features/stats/statsFormat'
 import { DEVIATION_GROUP_BYS } from '../../features/stats/statsConstants'
@@ -50,12 +50,18 @@ export function DeviationPanel({ groupBy, onGroupByChange, deviations = [], cate
     <div className="rounded-card border border-border bg-surface p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-title font-semibold text-text">편차 분석</h2>
-        <StatsToggle
-          options={DEVIATION_GROUP_BYS}
-          value={groupBy}
-          onChange={onGroupByChange}
-          ariaLabel="편차 분석 그룹 기준"
-        />
+        {/* 오너 실측 피드백(2026-10): 프로젝트 필터와 같은 칩 모양 + 모바일
+            48px 터치 타깃으로 통일(FilterPill.jsx 참고). */}
+        <FilterPillGroup ariaLabel="편차 분석 그룹 기준">
+          {DEVIATION_GROUP_BYS.map((opt) => (
+            <FilterPill
+              key={opt.value}
+              active={groupBy === opt.value}
+              label={opt.label}
+              onClick={() => onGroupByChange(opt.value)}
+            />
+          ))}
+        </FilterPillGroup>
       </div>
 
       {deviations.length === 0 ? (

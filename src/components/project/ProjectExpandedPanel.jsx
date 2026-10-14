@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '../common/Button'
+import { FilterPill, FilterPillGroup } from '../common/FilterPill'
 import { ErrorState } from '../common/ErrorState'
 import { SkeletonListRow } from '../common/Skeleton'
 import { TaskRow } from './TaskRow'
@@ -114,11 +115,11 @@ export function ProjectExpandedPanel({ project, panelMode, onPanelModeChange }) 
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-2">
+        <FilterPillGroup ariaLabel="태스크 상태 필터">
           <FilterPill active={taskFilter === 'ALL'} label={`전체 ${tasks.length}`} onClick={() => setTaskFilter('ALL')} />
           <FilterPill active={taskFilter === 'ACTIVE'} label={`진행중 ${activeCount}`} onClick={() => setTaskFilter('ACTIVE')} />
           <FilterPill active={taskFilter === 'DONE'} label={`완료 ${doneCount}`} onClick={() => setTaskFilter('DONE')} />
-        </div>
+        </FilterPillGroup>
         {tasks.length > 0 && (
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -213,23 +214,6 @@ export function ProjectExpandedPanel({ project, panelMode, onPanelModeChange }) 
         />
       )}
     </div>
-  )
-}
-
-function FilterPill({ active, label, onClick }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={[
-        'rounded-full px-3 py-1.5 text-label font-medium transition-colors',
-        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
-        active ? 'bg-brand-600 text-white font-semibold' : 'border border-border bg-surface text-text-muted',
-      ].join(' ')}
-    >
-      {label}
-    </button>
   )
 }
 

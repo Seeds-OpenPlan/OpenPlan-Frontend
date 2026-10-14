@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ErrorState } from '../components/common/ErrorState'
 import { EmptyState } from '../components/common/EmptyState'
-import { StatsToggle } from '../components/stats/StatsToggle'
+import { FilterPill, FilterPillGroup } from '../components/common/FilterPill'
 import { SummaryCards, SummaryCardsSkeleton } from '../components/stats/SummaryCards'
 import { TimeBandChart, TimeBandChartSkeleton } from '../components/stats/TimeBandChart'
 import { DeviationPanel, DeviationPanelSkeleton } from '../components/stats/DeviationPanel'
@@ -80,7 +80,19 @@ function StatisticsPage() {
   const header = (
     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
       <h1 className="text-2xl font-bold text-text">통계</h1>
-      <StatsToggle options={STATS_PERIODS} value={period} onChange={setPeriod} ariaLabel="기간 선택" size="lg" />
+      {/* 오너 실측 피드백(2026-10): 기간 토글을 프로젝트 필터와 같은 칩 모양으로
+          맞추고, 모든 통계 토글이 모바일에서 48px 터치 타깃을 갖도록 한다
+          (FilterPill이 그 치수를 책임진다 — 자세한 설명은 그 파일 참고). */}
+      <FilterPillGroup ariaLabel="기간 선택">
+        {STATS_PERIODS.map((opt) => (
+          <FilterPill
+            key={opt.value}
+            active={period === opt.value}
+            label={opt.label}
+            onClick={() => setPeriod(opt.value)}
+          />
+        ))}
+      </FilterPillGroup>
     </div>
   )
 
