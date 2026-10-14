@@ -1,4 +1,5 @@
 import { createBrowserRouter, redirect } from 'react-router-dom'
+import { setNavigationStateGetter } from '../utils/overlayHistory'
 import AppLayout from '../layouts/AppLayout'
 import AuthLayout from '../layouts/AuthLayout'
 import LandingPage from '../pages/auth/LandingPage'
@@ -319,3 +320,11 @@ export const router = createBrowserRouter([
     ],
   },
 ])
+
+// overlayHistory.js의 self-back() 지연 재확인(design "닫기와 이동의 경합")은 진행 중인
+// navigate()를 이겨서는 안 된다 — 그걸 알려면 `router.state.navigation.state`를 읽어야
+// 하는데, 그 모듈이 이 파일을 정적으로 import하면 순환이 생긴다(이 파일 → 여러 페이지
+// → Dialog/BottomSheet → useOverlayBackButton → overlayHistory.js). 그래서 정적
+// import 대신 getter를 하나 "주입"한다 — overlayHistory.js는 router.js의 존재 자체를
+// 모른 채로 남는다(그 파일 자신의 헤더 ③ 참고).
+setNavigationStateGetter(() => router.state.navigation.state)
