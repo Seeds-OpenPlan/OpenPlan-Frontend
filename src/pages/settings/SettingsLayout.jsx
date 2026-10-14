@@ -149,37 +149,79 @@ function SettingsLayout() {
   // BottomSheet가 이미 쓰는 같은 useFocusTrap을 이 패널의 컨테이너
   // (panelRef, 아래 렌더의 상세 pane div)에 걸어 Tab 순환을 그 안으로
   // 가둔다. 데스크톱 2단에서는 허브와 상세가 동시에 상호작용 가능해야 하므로
-  // `open`을 모바일-열림 조건에만 묶는다.
+  // `open`을 모바일-열림 조건에만 묶는다 — 이 값은 실시간 리사이즈에 반응해도
+  // 안전하다(Tab을 어디서 가둘지는 "지금 화면이 모바일 모양인가"일 뿐, 포커스
+  // 자체를 옮기는 건 아니므로).
+  //
+  // `manageFocus: false` (PR #82 AI 리뷰 2차 Blocking fix): 기본 동작(true)은
+  // `open`이 켜지는 "순간" 포커스를 안으로 옮기고, 꺼지는 "순간" 이전 포커스로
+  // 되돌린다 — Dialog/BottomSheet처럼 `open`이 실제 마운트/언마운트와 1:1인
+  // 호출부에서는 그게 맞다. 그러나 여기 `open`(=mobileDetailOpen)은 isDesktop
+  // 이라는 실시간 미디어 쿼리에서 파생되므로, 라우트는 그대로인 채 창 폭만
+  // 768px 경계를 넘나들어도(리사이즈, 폴드 펼침/접힘) `open`이 토글된다 — 그때
+  // 마다 자동으로 포커스가 옮겨지면, 하위 페이지의 입력 필드에 타이핑하던 중
+  // 창을 돌리기만 해도 포커스가 튕겨 나갔다(실제 재현된 Blocking). 포커스를
+  // 언제 옮길지는 아래 두 effect가 **라우트(location.pathname) 변화에만** 반응해
+  // 따로 결정한다 — 트랩은 Tab 가두기만 맡는다.
   const panelRef = useRef(null)
-  useFocusTrap(panelRef, { open: mobileDetailOpen })
+  useFocusTrap(panelRef, { open: mobileDetailOpen, manageFocus: false })
+
+  // 아래 두 effect(제목 포커스 / 허브로 돌아올 때 포커스)가 공유하는 "리사이즈
+  // 때문에 effect가 다시 돌면 안 된다"는 요구를 만족시키는 장치 — `isDesktop`을
+  // effect의 deps로 직접 넣는 대신, 매 렌더 최신값을 ref에 적어 두고 effect
+  // 안에서는 그 ref만 읽는다(BottomSheet.jsx의 `onCloseRef`와 같은 이유: deps에
+  // 안 넣인 값을 "그 순간의 값"으로만 참조). 이 updater는 deps 배열이 없어 매
+  // 렌더 실행되지만, effect 바디가 가벼워 비용이 무시할 만하다.
+  const isDesktopRef = useRef(isDesktop)
+  useEffect(() => {
+    isDesktopRef.current = isDesktop
+  })
+
+  // 방금까지 보고 있던 상세 경로 — 허브로 돌아올 때 "그 항목의 허브 Row"로
+  // 포커스를 돌려주기 위해 기억해 둔다(아래 효과 참고). atHub가 아닐 때마다
+  // 갱신되고, atHub가 되는 순간에는 건드리지 않아 "방금 떠난 경로"가 그대로
+  // 남는다.
+  const lastDetailPathRef = useRef(atHub ? null : location.pathname)
+  // 허브 리스트 전체를 감싸는 pane(아래 렌더) — 그 안에서 `href`가 일치하는
+  // NavLink 행을 찾아 포커스한다(SettingsNavList 자신은 고치지 않는다).
+  const hubPaneRef = useRef(null)
 
   // 모바일 슬라이드 상세가 열리면 그 "하위 페이지 자신의" 제목(#settings-
-  // detail-title)으로 포커스를 옮긴다(NotFoundPage.jsx의 "라우트 진입 시
-  // 제목에 포커스" 패턴과 동일) — 그래야 스크린리더 사용자가 방금 inert
-  // 처리된 허브 행에 포커스가 멈춰 있지 않고 "무엇이 열렸는지"를 바로 듣는다.
-  // 데스크톱(2단, 허브가 inert되지 않음)과 허브 자체(상세가 없음)에서는 옮길
-  // 포커스가 없다.
+  // detail-title)으로, 허브로 돌아오면 방금 보던 항목의 허브 Row로 포커스를
+  // 옮긴다(NotFoundPage.jsx의 "라우트 진입 시 제목에 포커스" 패턴과 동일) —
+  // 그래야 스크린리더 사용자가 방금 inert 처리된 요소에 포커스가 멈춰 있지
+  // 않고 "무엇이 바뀌었는지"를 바로 듣는다.
   //
-  // 순서 의존성(중요, PR #82 AI 리뷰 Blocking fix): 바로 위 useFocusTrap도
-  // 같은 "열리는 순간"에 포커스를 옮긴다(initialFocusRef를 안 줬으므로
-  // 컨테이너의 첫 포커스 가능 요소 = 아래 "← 설정" 버튼). 두 effect가 서로
-  // 다른 대상으로 포커스를 다투면 React가 같은 컴포넌트의 effect를 선언
-  // 순서대로 커밋 후 동기 실행하므로 "나중에 선언된 effect가 마지막에
-  // 이긴다" — 그래서 이 effect를 useFocusTrap **다음**에 선언해, 제목이
-  // 당장 존재하는 페이지(캘린더·지원·공지)에서는 이 effect가 트랩의 "← 설정"
-  // 포커스를 바로 덮어쓰고 제목으로 보낸다. 로딩 스켈레톤이 먼저 뜨는
-  // 페이지(계정·가용시간·기본값·고정일정·알림·카테고리)에서는 이 effect가
-  // 당장 아무것도 못 찾아 MutationObserver만 걸어 두므로, 데이터가 도착하기
-  // 전까지는 트랩이 옮긴 "← 설정" 포커스가 그대로 유지된다(완전히 빈
-  // 포커스보다 낫다) — 데이터가 도착하면 그제야 제목으로 넘어간다.
+  // PR #82 AI 리뷰 2차 Blocking fix — deps를 `[location.pathname]` 하나로
+  // 좁혔다(이전엔 `mobileDetailOpen`도 있어, 리사이즈만 해도 이 effect가
+  // 다시 돌며 포커스를 빼앗았다). isDesktop은 `isDesktopRef`로 읽어 "그
+  // 순간"의 값만 쓴다 — 데스크톱에서 상세에 진입했다가 나중에 리사이즈로
+  // 모바일이 되어도(라우트는 그대로) 이 effect 자체가 재실행되지 않으므로
+  // 포커스가 전혀 움직이지 않는다(요구사항 그대로).
   //
-  // contentPaneRef: Outlet을 담은 div(아래 렌더 참고) — 그 id를 가진 heading은
-  // 이 서브트리 안에만 나타날 수 있으므로 관찰 범위를 여기로 좁힌다(문서
-  // 전체를 관찰하면 react-query 캐시 갱신·토스트 등 무관한 변이에도 콜백이
-  // 돈다).
+  // 순서 의존성(여전히 유효): 바로 위 useFocusTrap은 이제 `manageFocus:
+  // false`라 포커스를 옮기지 않으므로, 이 effect와 더는 경쟁하지 않는다.
   const contentPaneRef = useRef(null)
   useEffect(() => {
-    if (!mobileDetailOpen) return undefined
+    const atHubNow = location.pathname === '/settings'
+
+    if (atHubNow) {
+      // 데스크톱은 허브/상세가 항상 둘 다 보이므로 "돌아온다"는 개념이 없다
+      // — 포커스를 건드리지 않는다.
+      if (!isDesktopRef.current && hubPaneRef.current && lastDetailPathRef.current) {
+        const row = hubPaneRef.current.querySelector(`a[href="${lastDetailPathRef.current}"]`)
+        row?.focus()
+      }
+      return undefined
+    }
+
+    // 상세 라우트에 있다 — lastDetailPathRef를 갱신해 다음에 허브로 돌아올
+    // 때 이 경로를 가리키게 한다.
+    lastDetailPathRef.current = location.pathname
+
+    // 데스크톱(2단)은 허브가 inert되지 않으므로 옮길 포커스가 없다.
+    if (isDesktopRef.current) return undefined
+
     const container = contentPaneRef.current
     if (!container) return undefined
 
@@ -215,7 +257,10 @@ function SettingsLayout() {
     })
     observer.observe(container, { childList: true, subtree: true })
     return () => observer.disconnect()
-  }, [mobileDetailOpen, location.pathname])
+    // 의도적으로 location.pathname에만 반응한다(리사이즈 제외) — 위 효과
+    // 설명 참고. isDesktop/atHub는 ref로만 읽으므로 react-hooks/exhaustive-deps
+    // 가 이 배열을 그대로 통과시킨다(ref는 그 규칙의 공인된 예외).
+  }, [location.pathname])
 
   // ESC도 ← 버튼과 같은 동작(허브로 돌아가기)을 하게 한다 — 트랩이 생긴
   // 이상 Esc는 Dialog/BottomSheet와 마찬가지로 "닫는" 수단으로 기대된다.
@@ -242,11 +287,24 @@ function SettingsLayout() {
       // 그래서 스택이 "비어 있는지"만 본다 — 비어 있지 않다면 안쪽 Dialog/
       // BottomSheet가 이미 같은 keydown에 반응해(자기 자신의
       // isTopmostOverlay 체크로) 스스로 처리하므로 우리는 양보한다.
+      //
+      // Thomas 리뷰 Should-fix: 이 "양보"가 안전하려면 우리 핸들러가 안쪽
+      // 모달의 핸들러보다 먼저 실행돼야 하는데, 둘 다 `document`에 등록된
+      // bubble-phase 리스너라 그 순서는 "어느 쪽이 먼저 addEventListener
+      // 됐는가"라는 암묵적 사실에 기대는 셈이었다(지금은 이 패널이 더 먼저
+      // 마운트되어 우연히 안전하지만, 코드만 봐서는 보장되지 않는다). 그래서
+      // 세 번째 인자로 `capture: true`를 줘 **capture 단계**에서 먼저
+      // 가로챈다 — DOM 스펙상 모든 bubble-phase 리스너보다 반드시 먼저
+      // 실행되는 건 attachment 순서가 아니라 phase 자체이므로, Dialog.jsx·
+      // BottomSheet.jsx를 전혀 건드리지 않고도 순서를 코드로 보장할 수
+      // 있다. `preventDefault`/`stopPropagation`을 호출하지 않으므로 안쪽
+      // 모달의 bubble 리스너는 평소대로 이어서 실행된다 — 우리는 그저
+      // "먼저 보고 더 할 일이 없으면 아무것도 안 한다".
       if (getOverlayStackSnapshot().length > 0) return
       handleBackRef.current()
     }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [mobileDetailOpen])
 
   // `atHub`를 내려 보낸다 — SettingsNavList가 "지금 허브에서 상세로 들어가는
@@ -275,8 +333,12 @@ function SettingsLayout() {
             Tab이나 가상 커서가 가려진 허브 행으로 넘어갈 수 있다(아래
             useFocusTrap이 상세 쪽 Tab 순환을 가두는 것과 한 쌍 — 이 inert가
             허브 쪽을, 그 트랩이 상세 쪽 경계를 각각 책임진다). 데스크톱
-            2단은 둘 다 항상 상호작용 가능해야 하므로 해당 없음. */}
+            2단은 둘 다 항상 상호작용 가능해야 하므로 해당 없음.
+
+            `ref={hubPaneRef}` — 허브로 돌아올 때 방금 보던 항목의 행을
+            찾아 포커스하는 효과(위)가 쓰는 검색 범위다. */}
         <div
+          ref={hubPaneRef}
           inert={mobileDetailOpen || undefined}
           style={isDesktop ? { width: atHub ? '100%' : sidebarWidth } : undefined}
           className={[

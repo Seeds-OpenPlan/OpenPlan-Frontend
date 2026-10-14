@@ -1,10 +1,11 @@
+import { FilterPill, FilterPillGroup } from '../common/FilterPill'
+
 /*
   지원(SettingsSupportPage) 안의 "자주 묻는 질문"↔"내 문의" 전환. Originally a
   route-based NavLink pair (linking `/faq`↔`/help`) — owner feedback #D moved
   both into ONE settings sub-route (`/settings/support`), so switching tabs is
   no longer a navigation at all, just which content the caller renders; this
-  is now a plain controlled pill toggle (`value`/`onChange`, same shape
-  common/FilterPill.jsx's group already uses) instead of NavLink.
+  is now a plain controlled pill toggle (`value`/`onChange`).
 
   Owner feedback #B: FAQ는 항상 왼쪽(첫 번째) — "지원" 진입 시 FAQ가 먼저
   보이는 기본값(owner feedback #7)과 같은 순서로 통일.
@@ -17,9 +18,21 @@
   at all. Since the caller (SettingsSupportPage) only swaps which content
   renders via `value`/`onChange` — there's no real tabpanel structure here,
   this was never actually tabs — switched to the same `role="group"` +
-  `aria-pressed` pill-toggle pattern common/FilterPill.jsx's group already
-  uses, rather than building out a full tablist (no test suite in this repo
-  to guard a bigger, riskier change).
+  `aria-pressed` pill-toggle pattern common/FilterPill.jsx's group uses,
+  rather than building out a full tablist (no test suite in this repo to
+  guard a bigger, riskier change).
+
+  PR #82 AI 리뷰 Should-fix (2026-10): this file had its OWN hand-rolled
+  capsule markup (`role="group"` + `aria-pressed` button, identical semantics
+  to FilterPill/FilterPillGroup) instead of actually USING that shared
+  component — so when the mobile 48px touch-target pass unified every OTHER
+  filter/segment control in the app onto FilterPill, this one was missed
+  (same markup, different file, drifted silently — exactly the kind of
+  duplication FilterPill.jsx's own header warns about). Swapped to the real
+  component: the role/aria contract above is unchanged (FilterPillGroup is
+  `role="group"`, FilterPill is `aria-pressed`), only the visual shape moves
+  from a single bordered capsule to separate chips with a gap — matching
+  every other filter control in the app, including the 48px mobile minimum.
 */
 const TABS = [
   { value: 'faq', label: '자주 묻는 질문' },
@@ -28,26 +41,11 @@ const TABS = [
 
 export function HelpTabs({ value, onChange }) {
   return (
-    <div role="group" aria-label="문의·FAQ" className="inline-flex rounded-full border border-border bg-surface p-0.5">
-      {TABS.map((tab) => {
-        const active = value === tab.value
-        return (
-          <button
-            key={tab.value}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onChange(tab.value)}
-            className={[
-              'rounded-full px-3 py-1 text-label font-medium transition-colors',
-              'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
-              active ? 'bg-brand-600 text-white' : 'text-text-muted hover:text-text',
-            ].join(' ')}
-          >
-            {tab.label}
-          </button>
-        )
-      })}
-    </div>
+    <FilterPillGroup ariaLabel="문의·FAQ">
+      {TABS.map((tab) => (
+        <FilterPill key={tab.value} active={value === tab.value} label={tab.label} onClick={() => onChange(tab.value)} />
+      ))}
+    </FilterPillGroup>
   )
 }
 
