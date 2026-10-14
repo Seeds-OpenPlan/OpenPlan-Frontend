@@ -46,6 +46,23 @@ const FIELD =
   창보다 훨씬 길어서, 재확인이 먼저 self-back()을 불러 버린 뒤에야 navigate()가
   온다. 그래서 닫기는 호출부가 로그아웃까지 끝낸 바로 그 순간에만 일어나야
   한다(SettingsAccountPage.handlePasswordChangeSuccess 참고).
+
+  닫기 금지 조건은 `finalizing`만이 아니라 `changePassword.isPending`도 포함한다
+  (Thomas 리뷰 B1). PATCH 자체가 아직 날아가 있는 동안에도 취소로 닫을 수 있게
+  열어 두면, 사용자가 "이미 닫았다"고 믿은 뒤에 그 PATCH가 뒤늦게 성공해
+  onSuccess(handlePasswordChangeSuccess)가 동의 없이 로그아웃·이동을 실행해
+  버린다 — useTutorialRestart.jsx가 겪은 것과 같은 모양의 "취소했는데 실행되는"
+  경합이다.
+
+  닫기를 막는 방식도 내부에서 onClose를 삼키는 래퍼가 아니라, blocked일 때
+  Dialog/BottomSheet에 **onClose 자체를 아예 넘기지 않는다**(undefined) —
+  useTutorialRestart.jsx와 같은 패턴(Thomas 리뷰 B2). 이유: 하드웨어 뒤로
+  가기(useOverlayBackButton.js)는 `onCloseRef.current`가 **falsy**일 때만
+  "닫을 수 없는 오버레이"로 보고 `ensureOverlayEntry()`로 소비된 히스토리
+  엔트리를 되돌려 놓는다 — 내부에서 아무것도 안 하는 함수라도 "함수가 있다"는
+  사실 자체가 `ensureOverlayEntry()`를 건너뛰게 만들어, 뒤로 가기 한 번으로
+  보호 엔트리를 영구히 잃는다(Esc·배경 클릭·취소 버튼은 onClose가 아예 없으면
+  Dialog.jsx/BottomSheet.jsx가 그 자리에서 끝내므로 자동으로 함께 막힌다).
 */
 export function PasswordChangeDialog({ onClose, onSuccess, finalizing = false }) {
   // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
@@ -69,12 +86,16 @@ export function PasswordChangeDialog({ onClose, onSuccess, finalizing = false })
   // 경우만 여기 도달한다(예: 72자 초과, ChangePasswordRequest.java `@Size`).
   const newPasswordError = code === 'E-COM-001' ? '새 비밀번호가 정책에 맞지 않습니다(8~72자)' : null
 
-  // finalizing 동안은 onClose를 아예 부르지 않는다(위 컴포넌트 헤더 참고) —
-  // Esc·배경 클릭·취소 버튼이 전부 이 한 함수를 거치므로 한 곳만 지키면 된다.
-  const handleClose = () => {
-    if (finalizing) return
-    onClose()
-  }
+  // 닫기 금지 조건 — 위 컴포넌트 헤더 "닫기 금지 조건은..." 단락 참고. PATCH가
+  // 날아가 있는 동안(changePassword.isPending)과 PATCH 성공 뒤 호출부가
+  // 로그아웃을 정착시키는 동안(finalizing) 둘 다 막는다.
+  const blocked = changePassword.isPending || finalizing
+
+  // blocked일 때 onClose 자체를 undefined로 끊는다(래퍼 함수를 넘기지 않는다) —
+  // 위 컴포넌트 헤더 "닫기를 막는 방식도..." 단락 참고. Esc·배경 클릭은
+  // Dialog/BottomSheet가 onClose 부재를 보고 자동으로 막고, 취소 버튼은 아래
+  // disabled={blocked}로 같이 막는다.
+  const closeDialog = blocked ? undefined : onClose
 
   const passwordValid = isPasswordValid(newPassword)
   const passwordsMatch = newPassword.length > 0 && newPassword === confirmPassword
@@ -87,11 +108,11 @@ export function PasswordChangeDialog({ onClose, onSuccess, finalizing = false })
     setter(value)
   }
 
-  // finalizing 중엔 폼이 이미 할 일을 다 했다(PATCH 성공) — 엔터로 재제출되는
-  // 것도 막는다(버튼 disabled만으로는 폼 submit 이벤트 자체를 막지 못한다).
+  // blocked 중엔 재제출도 막는다(버튼 disabled만으로는 폼 submit 이벤트 자체를
+  // 막지 못한다 — 엔터 키로 우회될 수 있다).
   const submit = (e) => {
     e.preventDefault()
-    if (!canSubmit || changePassword.isPending || finalizing) return
+    if (!canSubmit || blocked) return
     changePassword.mutate(
       { currentPassword, newPassword },
       {
@@ -171,16 +192,10 @@ export function PasswordChangeDialog({ onClose, onSuccess, finalizing = false })
       </label>
 
       <div className="mt-1 flex justify-end gap-2">
-        <Button type="button" variant="secondary" size="md" onClick={handleClose} disabled={finalizing}>
+        <Button type="button" variant="secondary" size="md" onClick={closeDialog} disabled={blocked}>
           취소
         </Button>
-        <Button
-          type="submit"
-          variant="primary"
-          size="md"
-          loading={changePassword.isPending || finalizing}
-          disabled={!canSubmit || finalizing}
-        >
+        <Button type="submit" variant="primary" size="md" loading={blocked} disabled={!canSubmit || blocked}>
           변경
         </Button>
       </div>
@@ -189,13 +204,13 @@ export function PasswordChangeDialog({ onClose, onSuccess, finalizing = false })
 
   if (isDesktop) {
     return (
-      <Dialog open onClose={handleClose} labelledById={titleId} initialFocusRef={firstFieldRef}>
+      <Dialog open onClose={closeDialog} labelledById={titleId} initialFocusRef={firstFieldRef}>
         {content}
       </Dialog>
     )
   }
   return (
-    <BottomSheet open onClose={handleClose} labelledById={titleId} initialFocusRef={firstFieldRef}>
+    <BottomSheet open onClose={closeDialog} labelledById={titleId} initialFocusRef={firstFieldRef}>
       {content}
     </BottomSheet>
   )

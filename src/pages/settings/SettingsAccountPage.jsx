@@ -30,6 +30,17 @@ function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', 
   const titleId = useId()
   const confirmRef = useRef(null)
 
+  // submitting 중엔 닫을 수 없다(Thomas 리뷰 S2, PasswordChangeDialog의 B1/B2와
+  // 같은 이유) — handleLogout처럼 "확인" 클릭 뒤에도 다이얼로그를 onSettled까지
+  // 열어 두는 호출부라면, 그 사이 취소로 닫을 수 있게 두면 사용자가 "취소했다"고
+  // 믿은 뒤에 이미 날아간 요청이 뒤늦게 성공해 동의 없이 다음 동작(로그아웃
+  // 이동 등)이 실행된다. onClose 자체를 undefined로 끊는 이유(래퍼로 삼키지
+  // 않는 이유)는 PasswordChangeDialog.jsx 헤더의 "닫기를 막는 방식도..." 단락
+  // 참고 — useOverlayBackButton.js가 onClose의 유무 자체로 "닫을 수 없는
+  // 오버레이"를 판정하기 때문에, 내부에서 no-op하는 함수를 넘기면 하드웨어
+  // 뒤로 가기가 보호 엔트리를 되돌려 놓지 못한다.
+  const closeDialog = submitting ? undefined : onClose
+
   const content = (
     <div className="flex flex-col gap-4">
       <h2 id={titleId} className="text-title font-semibold text-text">
@@ -37,7 +48,7 @@ function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', 
       </h2>
       <p className="text-body text-text-muted">{body}</p>
       <div className="flex justify-end gap-2">
-        <Button variant="secondary" size="md" onClick={onClose}>
+        <Button variant="secondary" size="md" onClick={closeDialog} disabled={submitting}>
           취소
         </Button>
         <Button ref={confirmRef} variant={confirmVariant} size="md" loading={submitting} onClick={onConfirm}>
@@ -49,13 +60,13 @@ function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', 
 
   if (isDesktop) {
     return (
-      <Dialog open onClose={onClose} labelledById={titleId} initialFocusRef={confirmRef}>
+      <Dialog open onClose={closeDialog} labelledById={titleId} initialFocusRef={confirmRef}>
         {content}
       </Dialog>
     )
   }
   return (
-    <BottomSheet open onClose={onClose} labelledById={titleId} initialFocusRef={confirmRef}>
+    <BottomSheet open onClose={closeDialog} labelledById={titleId} initialFocusRef={confirmRef}>
       {content}
     </BottomSheet>
   )
