@@ -213,11 +213,26 @@ function SettingsAccountPage() {
   // 먼저 기존 로그아웃 경로(위 handleLogout과 같은 useLogout())로 나가,
   // "비밀번호를 바꿨으니 다시 로그인하라"는 의도가 분명한 안내를 보여준다
   // — 서버의 지연된 세션 정리를 기다리지 않고 화면이 선제적으로 정리한다.
+  //
+  // 다이얼로그를 여기서 바로 닫지 않는다(#81 리뷰 "늦은 suppress"와 같은 모양의
+  // 사고를 여기서도 피하기 위해 — overlayHistory.js 헤더의 "닫기와 이동의 경합"
+  // 참고). PasswordChangeDialog는 비밀번호 PATCH가 성공한 뒤에도 오버레이
+  // 스택에 그대로 남아 있고(아래 JSX의 `finalizing={logoutMutation.isPending}`이
+  // 그동안 Esc/배경 클릭/취소를 막는다), logoutMutation이 실제로 끝난 바로 그
+  // onSettled 안에서만 닫기·suppress·이동을 한 틱에 함께 한다 — handleLogout과
+  // 정확히 같은 모양. 만약 여기서 먼저 다이얼로그를 닫아 버리면, 오버레이
+  // 스택이 0이 되는 시점과 실제 navigate() 시점 사이에 로그아웃 네트워크
+  // 왕복(수십 ms보다 훨씬 긴) 전체가 끼어들어, 더블 rAF 재확인 창 안에 이미
+  // self-back()이 불려 버린 뒤에야 navigate()가 도착한다.
   const handlePasswordChangeSuccess = () => {
-    setPasswordChangeOpen(false)
     logoutMutation.mutate(undefined, {
       onSettled: () => {
+        setPasswordChangeOpen(false)
         toast({ tone: 'success', message: '비밀번호를 변경했습니다. 새 비밀번호로 다시 로그인해 주세요' })
+        // ConfirmDialog를 닫는 것과 다른 pathname으로 이동하는 것이 같은 틱에
+        // 겹친다 — handleLogout과 동일한 이유(owner 리뷰 S2)로 navigate() 바로
+        // 앞에서 알려야 한다.
+        suppressPendingSelfBack()
         navigate('/login', { replace: true })
       },
     })
@@ -331,6 +346,9 @@ function SettingsAccountPage() {
         <PasswordChangeDialog
           onClose={() => setPasswordChangeOpen(false)}
           onSuccess={handlePasswordChangeSuccess}
+          // 비밀번호 PATCH가 끝난 뒤에도 logoutMutation이 정착할 때까지는
+          // 닫을 수 없게 한다 — 위 handlePasswordChangeSuccess 주석 참고.
+          finalizing={logoutMutation.isPending}
         />
       )}
 

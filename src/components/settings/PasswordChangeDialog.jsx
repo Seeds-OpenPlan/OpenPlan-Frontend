@@ -36,8 +36,18 @@ const FIELD =
   경로로 먼저 나가 안내하는 것)는 세션 캐시·라우팅을 함께 다뤄야 해서
   onSuccess 콜백 하나로 호출부(SettingsAccountPage.handlePasswordChangeSuccess)
   에 넘긴다.
+
+  `finalizing`(호출부가 `logoutMutation.isPending`을 그대로 넘긴다)은 PATCH가
+  성공한 뒤에도 호출부가 이어서 돌리는 로그아웃 요청이 끝날 때까지, 이
+  다이얼로그가 오버레이 스택에서 사라지지 못하게 막는다 — Esc·배경 클릭·취소
+  버튼을 전부 무시한다. 그동안 닫아 버리면 overlayHistory.js의 "닫기와 이동의
+  경합"(그 파일 헤더 참고)에 걸린다: 스택이 0이 되는 시점과 호출부가 실제로
+  navigate()하는 시점(로그아웃 네트워크 왕복 뒤) 사이 간격이 더블 rAF 재확인
+  창보다 훨씬 길어서, 재확인이 먼저 self-back()을 불러 버린 뒤에야 navigate()가
+  온다. 그래서 닫기는 호출부가 로그아웃까지 끝낸 바로 그 순간에만 일어나야
+  한다(SettingsAccountPage.handlePasswordChangeSuccess 참고).
 */
-export function PasswordChangeDialog({ onClose, onSuccess }) {
+export function PasswordChangeDialog({ onClose, onSuccess, finalizing = false }) {
   // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
   const isDesktop = useLockedIsDesktop()
   const titleId = useId()
@@ -59,6 +69,13 @@ export function PasswordChangeDialog({ onClose, onSuccess }) {
   // 경우만 여기 도달한다(예: 72자 초과, ChangePasswordRequest.java `@Size`).
   const newPasswordError = code === 'E-COM-001' ? '새 비밀번호가 정책에 맞지 않습니다(8~72자)' : null
 
+  // finalizing 동안은 onClose를 아예 부르지 않는다(위 컴포넌트 헤더 참고) —
+  // Esc·배경 클릭·취소 버튼이 전부 이 한 함수를 거치므로 한 곳만 지키면 된다.
+  const handleClose = () => {
+    if (finalizing) return
+    onClose()
+  }
+
   const passwordValid = isPasswordValid(newPassword)
   const passwordsMatch = newPassword.length > 0 && newPassword === confirmPassword
   const canSubmit = currentPassword.length > 0 && passwordValid && passwordsMatch
@@ -70,9 +87,11 @@ export function PasswordChangeDialog({ onClose, onSuccess }) {
     setter(value)
   }
 
+  // finalizing 중엔 폼이 이미 할 일을 다 했다(PATCH 성공) — 엔터로 재제출되는
+  // 것도 막는다(버튼 disabled만으로는 폼 submit 이벤트 자체를 막지 못한다).
   const submit = (e) => {
     e.preventDefault()
-    if (!canSubmit || changePassword.isPending) return
+    if (!canSubmit || changePassword.isPending || finalizing) return
     changePassword.mutate(
       { currentPassword, newPassword },
       {
@@ -152,10 +171,16 @@ export function PasswordChangeDialog({ onClose, onSuccess }) {
       </label>
 
       <div className="mt-1 flex justify-end gap-2">
-        <Button type="button" variant="secondary" size="md" onClick={onClose}>
+        <Button type="button" variant="secondary" size="md" onClick={handleClose} disabled={finalizing}>
           취소
         </Button>
-        <Button type="submit" variant="primary" size="md" loading={changePassword.isPending} disabled={!canSubmit}>
+        <Button
+          type="submit"
+          variant="primary"
+          size="md"
+          loading={changePassword.isPending || finalizing}
+          disabled={!canSubmit || finalizing}
+        >
           변경
         </Button>
       </div>
@@ -164,13 +189,13 @@ export function PasswordChangeDialog({ onClose, onSuccess }) {
 
   if (isDesktop) {
     return (
-      <Dialog open onClose={onClose} labelledById={titleId} initialFocusRef={firstFieldRef}>
+      <Dialog open onClose={handleClose} labelledById={titleId} initialFocusRef={firstFieldRef}>
         {content}
       </Dialog>
     )
   }
   return (
-    <BottomSheet open onClose={onClose} labelledById={titleId} initialFocusRef={firstFieldRef}>
+    <BottomSheet open onClose={handleClose} labelledById={titleId} initialFocusRef={firstFieldRef}>
       {content}
     </BottomSheet>
   )
