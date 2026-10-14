@@ -928,6 +928,18 @@ export function TutorialOverlay() {
   // guarantees above, are otherwise UNCHANGED: cleanup (if any) happens
   // BEFORE this mutate call even starts, and the step cursor still only
   // resets in onSuccess, after the server confirms.
+  //
+  // Reused VERBATIM as TUT-08's own [완료] handler too (`onComplete` in the
+  // Coachmark render branch below) — kickoff's own [건너뛰기], off-route's
+  // own [종료] (`exitFromOffRoute`), and the LAST step's own [완료] all PATCH
+  // and reset in exactly this same way, so there is only one copy of it. This
+  // also satisfies the owner's "종료 시 현재 화면 유지" requirement for free:
+  // `finish` has never called `navigate()` for any of its callers, so
+  // whichever screen the user was already on when they triggered it is
+  // exactly where they stay (an earlier version of TUT-08's own handler
+  // specifically had its own `navigate('/')` to the dashboard, removed per
+  // owner feedback — that removal is simply inherent here now, not a
+  // special case this function needs to carve out).
   const finish = () => {
     exitWithCleanupCheck(() => {
       updateProgress.mutate({ tutorialCompleted: true }, { onSuccess: () => resetTutorialStep() })
@@ -1118,27 +1130,14 @@ export function TutorialOverlay() {
         // ONLY ever called from the LAST step's own [완료] (Coachmark.jsx only
         // renders that button when `isLast` — see its own header) — every
         // OTHER step has no manual trigger anymore, so this no longer needs an
-        // `else { advance() }` branch at all. Goes through
-        // `exitWithCleanupCheck` first, same as `finish` — see this file's
-        // own header ("PRACTICE-DATA CLEANUP").
-        onComplete={() => {
-          exitWithCleanupCheck(() => {
-            // 오너 요구(2026-10, 실측 피드백): 종료 경로는 현재 화면을
-            // 유지한다 — `navigate('/')`로 대시보드로 보내던 것을 제거했다.
-            // [완료]를 누른 그 WEEKLY 화면(TUT-08의 own route)에 그대로
-            // 남는다. Step reset happens in onSuccess, same ordering (and
-            // same reason) as `finish` above — see that function's own
-            // comment.
-            updateProgress.mutate(
-              { tutorialCompleted: true },
-              {
-                onSuccess: () => {
-                  resetTutorialStep()
-                },
-              },
-            )
-          })
-        }}
+        // `else { advance() }` branch at all. Reuses `finish` directly (not a
+        // separate inline closure — the two bodies were byte-for-byte
+        // identical: same `exitWithCleanupCheck` wrap, same PATCH, same
+        // onSuccess reset) — see that function's own comment for the full
+        // ordering rationale and for why this also keeps TUT-08's own [완료]
+        // on the SAME /weekly screen (현재 화면 유지) with no extra code
+        // needed here.
+        onComplete={finish}
       />
     )
   }
