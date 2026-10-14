@@ -22,6 +22,11 @@ import {
 // 의도한 동작이지, 이 상수를 축척에 맞춰 같이 키울 이유가 아니다.
 const SHORT_BLOCK_PX = 46
 
+// Thomas 리뷰 HIGH: 키보드 contextmenu 오판 방지 — CalendarGrid.jsx의 같은
+// 이름 상수와 같은 값(1초). 터치 "최근" 판정 창이 두 파일에서 서로 다르면
+// 한 화면 안에서 손잡이별로 체감이 달라진다.
+const TOUCH_GESTURE_WINDOW_MS = 1000
+
 /*
   A single plan block on the grid. It is the interaction surface for three inputs:
   - pointer drag  → move (PLAN-19) / week-boundary move (PLAN-20), started here,
@@ -146,6 +151,18 @@ export function PlanBlock({
 
   const rootRef = useRef(null)
   const reducedMotion = useReducedMotion()
+  // 리드 셀프리뷰 지적 + Thomas 리뷰 HIGH: 안드로이드 Chrome(TWA 포함)은
+  // 터치 롱프레스(~500ms 전후)에 네이티브 contextmenu를 자체적으로 쏜다 —
+  // usePlanDrag의 롱프레스(450ms, 드래그 활성화)와 거의 동시에 겹친다.
+  // Chrome은 그 contextmenu를 PointerEvent로 보내 pointerType을 실어 주지만,
+  // 키보드(Shift+F10/메뉴 키)로 연 contextmenu는 pointerType 자체가 없다.
+  //
+  // 처음엔 "직전 pointerdown의 pointerType"을 영구 기억하는 ref로 그 빈
+  // 자리를 메웠는데, 그러면 몇 분 전 터치에서 남은 'touch' 값이 지금의
+  // 키보드 contextmenu까지 조용히 삼켜 버렸다(Thomas 리뷰). 영구 값 대신
+  // "최근 TOUCH_GESTURE_WINDOW_MS 안에 터치가 있었는가"로 바꾼다 — 그 창을
+  // 벗어난 키보드 경로는 항상 통과한다.
+  const touchGestureUntilRef = useRef(0)
 
   /*
     PLAN-23: bring this block into view and give it keyboard focus when the review
@@ -341,16 +358,31 @@ export function PlanBlock({
         ...style,
         // Stripe painted into the block's own background — see VIOLATION_STRIPES.
         ...(violation ? { backgroundImage: VIOLATION_STRIPES[violation.severity] } : null),
-        touchAction: 'none',
+        // 모바일 레이아웃 작업(A1): 예전엔 항상 'none'이라 터치로 그리드를
+        // 스크롤하려는 스와이프까지 전부 블록 이동으로 가로채였다. 이제는 평소
+        // pan-x pan-y로 둬 네이티브 스크롤을 그대로 허용하고, usePlanDrag의
+        // 롱프레스가 실제로 드래그를 켠 "뒤"에만 non-passive touchmove로
+        // 스크롤을 막는다(그 훅 헤더 참고 — touch-action은 제스처 시작 후
+        // 바꿔도 적용되지 않는다). 마우스/펜은 touch-action의 영향을 받지
+        // 않으므로 이 값과 무관하게 그대로 동작한다.
+        touchAction: 'pan-x pan-y',
+        // 리드 셀프리뷰 지적: 롱프레스 중 iOS의 콜아웃(복사/공유 팝업)이나
+        // 텍스트 선택이 끼어들면 드래그가 중간에 끊긴다 — select-none(아래
+        // className)은 텍스트 선택만 막고 콜아웃 자체는 안 막으므로 별도로
+        // 끈다. Android는 이 속성이 없어도 무해하다(무시됨).
+        WebkitTouchCallout: 'none',
       }}
-      onPointerDown={
-        moveBlocked
-          ? undefined
-          : (e) => {
-              closeDetail()
-              onPointerDown?.(e, block, startMin)
-            }
-      }
+      onPointerDown={(e) => {
+        // moveBlocked 여부와 무관하게 항상 기록한다 — 바로 아래 onContextMenu
+        // 가 "최근에 터치가 있었는가"를 폴백으로 물어볼 자리이므로, 드래그를
+        // 안 시작하는 경우에도 창을 열어 둬야 한다.
+        if (e.pointerType === 'touch') {
+          touchGestureUntilRef.current = Date.now() + TOUCH_GESTURE_WINDOW_MS
+        }
+        if (moveBlocked) return
+        closeDetail()
+        onPointerDown?.(e, block, startMin)
+      }}
       onClick={() => {
         /*
           블록을 누르면 그 블록에 **포커스**를 준다 — 검토 패널이 항목을 지목했을
@@ -374,6 +406,21 @@ export function PlanBlock({
         // Keep a block right-click on the block: don't let it bubble to the grid
         // body's empty-slot placement menu (ST-F1-03 PLAN-07).
         e.stopPropagation()
+        // 리드 셀프리뷰 지적 + Thomas 리뷰 HIGH: 터치 롱프레스가 일으킨
+        // 네이티브 contextmenu는 메뉴를 열지 않는다 — PLAN-09의 터치 정본
+        // 경로는 usePlanDrag의 롱프레스(드래그 활성화)와 탭(onTap, 메뉴)
+        // 이므로, 여기서 또 열면 드래그 중에 메뉴가 같이 뜨거나 탭 경로와
+        // 중복으로 열린다. preventDefault/stopPropagation은 위에서 이미
+        // 했으니 iOS 콜아웃·길게 눌렀을 때의 선택 메뉴도 같이 막힌다.
+        //
+        // 판별: nativeEvent.pointerType이 'touch'면 바로 억제. 그 값이 없을
+        // 때(키보드 Shift+F10/메뉴 키)만 "최근 터치가 있었는가"로 폴백한다 —
+        // 영구 ref라면 몇 분 전 터치가 지금의 키보드 contextmenu까지 막는다.
+        // 마우스 우클릭은 pointerType이 'mouse'로 명시되어 폴백 자체를 안
+        // 타므로 항상 통과한다.
+        const pointerType = e.nativeEvent?.pointerType
+        const touchRecently = Date.now() < touchGestureUntilRef.current
+        if (pointerType === 'touch' || (!pointerType && touchRecently)) return
         if (locked) return
         openMenuFromEvent(e)
       }}
@@ -407,7 +454,15 @@ export function PlanBlock({
       )}
       {/* A2 resize handles (top/bottom edge). Pointer-only; keyboard users edit
           time via the task/schedule form. onResizeStart stops propagation so it
-          never starts a block MOVE. Group-hover reveals a subtle grip. */}
+          never starts a block MOVE. Group-hover reveals a subtle grip.
+
+          모바일 레이아웃 작업: 이 손잡이는 터치-스크롤 정책(위 루트 div의
+          touchAction 주석)을 일부러 안 따른다 — 8px 높이의 작은 영역이라
+          "거기서 시작한 스와이프"가 스크롤이었을 가능성이 낮고, 늘 즉시
+          반응해야 리사이즈가 쓸만하다(롱프레스를 기다리면 손잡이를 누른 채
+          450ms를 버텨야 하는 것이 오히려 더 나쁘다). hover 전용이라 터치에서
+          안 보이는 것은 기존 한계로 남겨 둔다(가용성 손잡이의 A4 수정과 달리
+          이번 범위 밖). */}
       {onResizeStart && !moveBlocked && !dragging && (
         <>
           <span

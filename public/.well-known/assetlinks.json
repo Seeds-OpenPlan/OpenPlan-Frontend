@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "services.openplan.app",
+      "sha256_cert_fingerprints": [
+        "42:E6:AF:73:E9:DD:D4:50:78:15:E3:89:4F:50:CD:B4:90:0E:32:32:A5:57:8B:45:15:5B:BB:EA:27:5D:F0:0E",
+        "37:40:C6:D8:40:D1:27:90:AB:18:73:17:A9:D2:83:09:93:85:84:0E:63:84:2D:48:F7:F2:9A:F4:A0:6D:B3:D1"
+      ]
+    }
+  }
+]

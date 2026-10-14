@@ -3,7 +3,7 @@ import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import {
   BASELINE_OPTION,
   BASELINE_STRATEGY_TYPE,
@@ -227,7 +227,9 @@ export function ReplanOptionsModal({
   isGenerating = false,
   slowNotice = false,
 }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open, 이 파일 헤더 참고) —
+  // 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const closeRef = useRef(null)
   // Default selection = 기존 계획 유지안 (BASELINE). ASSUMPTION (flagged to the

@@ -20,7 +20,10 @@ export function Toaster() {
   if (toasts.length === 0) return null
 
   return createPortal(
-    <div className="pointer-events-none fixed inset-x-0 bottom-24 z-40 flex flex-col items-center gap-2 px-4 md:bottom-6">
+    // C3: bottom-24(96px)에 env(safe-area-inset-bottom)을 더한다 — BottomTabBar
+    // 가 그 값만큼 더 커지는 기기에서는(그 파일 C3 주석) 이 96px 기준점 자체가
+    // 바의 새 윗경계에 못 미치게 된다. md 이상은 탭바가 없으니(bottom-6) 그대로.
+    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-40 flex flex-col items-center gap-2 px-4 md:bottom-6">
       {toasts.map((t) => (
         <Toast
           key={t.id}

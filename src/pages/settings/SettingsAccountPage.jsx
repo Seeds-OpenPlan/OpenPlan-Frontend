@@ -10,7 +10,8 @@ import { OvlAccountDeactivate } from '../../components/auth/OvlAccountDeactivate
 import { OvlAccountReactivate } from '../../components/auth/OvlAccountReactivate'
 import { deriveReactivationInfo } from '../../features/auth/reactivationInfo'
 import { useLogout } from '../../features/auth/useAuth'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { suppressPendingSelfBack } from '../../utils/overlayHistory'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import {
   useAccount,
   useUpdateAccount,
@@ -29,7 +30,8 @@ function formatDateKO(iso) {
 }
 
 function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', onClose, onConfirm, submitting }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const confirmRef = useRef(null)
 
@@ -67,7 +69,8 @@ function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', 
 // 이름 변경 (오너 리뷰 3차, item 5). ProjectManageForm 등 이 코드베이스의 다른
 // 폼과 같은 모양: 폼 자체 state는 로컬, 서버 왕복은 useUpdateAccount 하나.
 function NameEditDialog({ currentName, onClose, onSubmit, submitting }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const inputRef = useRef(null)
   const [name, setName] = useState(currentName)
@@ -185,6 +188,11 @@ function SettingsAccountPage() {
       onSettled: () => {
         setConfirmAction(null)
         toast({ tone: 'info', message: '로그아웃했습니다' })
+        // ConfirmDialog를 닫는 것(바로 위 setConfirmAction(null))과 다른 pathname으로
+        // 이동하는 것이 같은 틱에 겹친다 — overlayHistory.js의 self-back() 지연 재확인이
+        // 이 이동을 미처 못 보고 먼저 끼어들면 로그인 화면으로의 이동이 되돌려진다(owner
+        // 리뷰 S2). navigate() 바로 앞에서 알려 그 재확인이 포기하게 한다.
+        suppressPendingSelfBack()
         navigate('/login', { replace: true })
       },
     })

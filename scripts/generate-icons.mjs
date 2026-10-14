@@ -1,15 +1,18 @@
 #!/usr/bin/env node
-// ⚠️ 임시 플레이스홀더 아이콘 생성 스크립트.
+// 확정 디자인 = 고리만 (오너 2026-10-13).
 //
 // TWA(Trusted Web Activity)로 구글 플레이에 출시하려면 Bubblewrap이 매니페스트의
-// 아이콘 PNG를 그대로 앱 아이콘/스플래시로 패키징한다. 하지만 지금은 확정된
-// 로고 에셋이 없고(BrandLogo.jsx는 "OpenPlan" 텍스트 워드마크뿐, 이미지 로고
-// 없음) 아이콘 생성기에 npm 패키지(sharp/canvas 등)를 새로 추가하는 것도
-// 범위 밖이라, Node 내장 zlib만으로 PNG를 직접 인코딩한다.
+// 아이콘 PNG를 그대로 앱 아이콘/스플래시로 패키징한다. 아이콘 생성기에 npm
+// 패키지(sharp/canvas 등)를 새로 추가하는 것은 범위 밖이라, Node 내장 zlib만
+// 으로 PNG를 직접 인코딩한다.
 //
-// 디자인은 브랜드 파랑(#2563eb, src/index.css --color-brand-600) 배경 위에
-// 흰색 고리("O") 마크 — "최종 아이콘이 나올 때까지 자리만 채우는" 용도다.
-// 아이콘을 교체하려면 이 스크립트를 수정(또는 PNG를 통째로 교체)한 뒤
+// 디자인 정본은 `Github/docs/플레이 출시 작업내용/스토어 그래픽/openplan-icon.svg`
+// (오너 확정 2026-10-13) — 브랜드 파랑(#2563eb) 배경 위에 흰색 고리 하나만
+// 얹은 모양이다. 체크마크가 있던 이전 "디자인 A"는 오너 피드백(① #65가 임시로
+// 띄워 뒀던 고리 전용 모양이 더 예뻤다 ② 고리+체크는 중앙 정렬이 안 맞아
+// 보인다)에 따라 폐기됐다 — 고리 비율도 그 #65 플레이스홀더 값(바깥 반지름
+// size*0.33, 안쪽 반지름 size*0.18)을 그대로 되살린 것이다.
+// 아이콘(또는 이름)을 다시 바꾸려면 위 SVG와 이 스크립트를 함께 수정한 뒤
 // `public/icons/*`, `public/favicon.png`, `public/apple-touch-icon.png`를
 // 다시 생성해야 하고, 플레이스토어에는 **새 AAB를 다시 업로드**해야 한다 —
 // 아이콘만 바꿔서는 이미 배포된 APK/AAB가 자동으로 갱신되지 않는다.
@@ -133,6 +136,12 @@ function lerp(a, b, t) {
   return a + (b - a) * t
 }
 
+// 고리 비율 — #65가 임시로 띄워 뒀던 플레이스홀더 값을 그대로 정본으로
+// 승격한 것(오너: "이게 더 예쁘다"). size에 대한 비율이라 모든 출력 크기가
+// 자동으로 같은 모양을 유지한다(512 기준 좌표를 스케일링하는 방식이 아님).
+const RING_OUTER_RATIO = 0.33
+const RING_INNER_RATIO = 0.18
+
 /**
  * size x size RGBA 버퍼를 만든다.
  * - fullBleed=true  : 아이콘 전체를 브랜드색으로 꽉 채운다(알파 항상 255).
@@ -141,25 +150,37 @@ function lerp(a, b, t) {
  *                      모서리를 만들면 오히려 OS 마스크와 이중으로 겹쳐 보인다.
  * - fullBleed=false : 둥근 사각형 바깥은 완전 투명(알파 0) — "any" 목적
  *                      아이콘용. 플랫폼이 마스킹하지 않을 때도 사각 배경이
- *                      아니라 둥근 배지처럼 보이게 한다.
+ *                      아니라 둥근 배지처럼 보이게 한다. PWA의 "any" 아이콘은
+ *                      (adaptive icon처럼 강제 마스킹되는 환경이 아니면) 투명
+ *                      모서리 배지가 관례이므로 기존 동작을 유지한다.
  *
- * 고리 마크의 바깥 반지름은 항상 size*0.33으로 고정한다 — maskable 아이콘의
- * "안전 영역"(중앙 지름 80%, 반지름 40%) 안에 여유 있게 들어가도록.
+ * 고리는 캔버스 정중앙(cx,cy = size/2)에 둔다 — 체크마크가 있던 이전 디자인은
+ * 체크 꺾은선이 고리 중심에서 살짝 치우쳐 있어 "중앙이 안 맞는다"는 오너
+ * 피드백을 받았는데, 고리 단독이면 원 자체가 대칭이라 그 문제가 없다.
+ *
+ * 고리 바깥 반지름(size*0.33)은 maskable 아이콘의 "안전 영역"(중앙 지름 80%,
+ * 반지름 40% = size*0.4) 안에 여유 있게 들어간다. 48px 파비콘에서도 고리
+ * 두께(outer-inner = size*0.15, 48px 기준 7.2px)가 충분히 두꺼워 안티앨리어싱에
+ * 묻히지 않으므로, 이전 디자인(체크 포함, 두께 비율 더 얇음)에 있던 작은
+ * 크기용 strokeBoost 보정은 더 필요 없다 — 그대로 비율만 축소한다.
  */
 function renderMark(size, { fullBleed }) {
   const rgba = Buffer.alloc(size * size * 4)
   const cx = size / 2
   const cy = size / 2
   const cornerRadius = size * 0.18
-  const outerRadius = size * 0.33
-  const innerRadius = size * 0.18
+  const ringOuterRadius = size * RING_OUTER_RATIO
+  const ringInnerRadius = size * RING_INNER_RATIO
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
+      const px = x + 0.5
+      const py = y + 0.5
+
       const bgCoverage = fullBleed
         ? 1
-        : clamp01(0.5 - roundedRectSD(x + 0.5, y + 0.5, cx, cy, size / 2, cornerRadius))
-      const ringCoverage = clamp01(0.5 - annulusSD(x + 0.5, y + 0.5, cx, cy, outerRadius, innerRadius))
+        : clamp01(0.5 - roundedRectSD(px, py, cx, cy, size / 2, cornerRadius))
+      const ringCoverage = clamp01(0.5 - annulusSD(px, py, cx, cy, ringOuterRadius, ringInnerRadius))
 
       const r = lerp(BRAND[0], WHITE[0], ringCoverage)
       const g = lerp(BRAND[1], WHITE[1], ringCoverage)
@@ -186,7 +207,7 @@ function writeIcon(path, size, options) {
 
 mkdirSync(ICONS_DIR, { recursive: true })
 
-console.log('Generating placeholder PWA icons...')
+console.log('Generating PWA icons (design: ring only)...')
 // manifest "any" 아이콘: 둥근 배지 + 투명 모서리.
 writeIcon(join(ICONS_DIR, 'icon-192.png'), 192, { fullBleed: false })
 writeIcon(join(ICONS_DIR, 'icon-512.png'), 512, { fullBleed: false })
@@ -194,7 +215,7 @@ writeIcon(join(ICONS_DIR, 'icon-512.png'), 512, { fullBleed: false })
 writeIcon(join(ICONS_DIR, 'icon-maskable-512.png'), 512, { fullBleed: true })
 // iOS 홈 화면 아이콘: iOS가 자체적으로 모서리를 둥글리므로 전면 배경으로.
 writeIcon(join(PUBLIC_DIR, 'apple-touch-icon.png'), 180, { fullBleed: true })
-// 파비콘.
+// 파비콘: 48px에서도 고리 두께(size*0.15 = 7.2px)가 충분히 두꺼워 별도 보정 없음.
 writeIcon(join(PUBLIC_DIR, 'favicon.png'), 48, { fullBleed: true })
 
 console.log('Done.')

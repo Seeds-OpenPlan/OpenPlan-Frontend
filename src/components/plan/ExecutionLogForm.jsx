@@ -3,7 +3,7 @@ import { Dialog } from '../common/Dialog'
 import { BottomSheet } from '../common/BottomSheet'
 import { Button } from '../common/Button'
 import { MinuteStepper } from './MinuteStepper'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 
 /*
   Actual-time log (PLAN-15 실제 시간 기록). A small modal: a 5-minute MinuteStepper
@@ -24,7 +24,8 @@ const RESULT_OPTIONS = [
 ]
 
 export function ExecutionLogForm({ block, onClose, onSubmit, submitting = false }) {
-  const isDesktop = useIsDesktop()
+  // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
+  const isDesktop = useLockedIsDesktop()
   const durationMin = Math.max(
     5,
     Math.round((new Date(block.endAt).getTime() - new Date(block.startAt).getTime()) / 60000),
