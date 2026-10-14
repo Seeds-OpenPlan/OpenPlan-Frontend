@@ -58,7 +58,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
   site passes a FRESH inline closure on every render, and putting that
   reference in `useEffect`'s deps would re-run the effect — re-firing the
   request — on every unrelated re-render of the page, not just when
-  `handledRaw` itself actually changes.
+  `handledRaw` itself actually changes. The ref is kept current by its OWN
+  `useLayoutEffect`, declared BEFORE FIRE's — see that sync effect's own
+  comment for why a passive effect (what this used to be) went stale once
+  FIRE itself became a layout effect, and why a direct render-time write
+  (simpler still) isn't an option here either.
 
   DEFAULT `isMatch` WIDENED TO "any non-empty string", not just the LITERAL
   `'1'` (owner report, 2026-10, from the tutorial's OLD auto-open design —
@@ -89,8 +93,30 @@ export function useSearchParamRequest(
   const raw = searchParams.get(paramName)
   const [handledRaw, setHandledRaw] = useState(null)
 
+  /*
+    `useLayoutEffect`, NOT a passive `useEffect` (Thomas 분석, 2026-10
+    SHOULD-FIX — "FIRE가 stale 클로저로 실행된다"), and declared BEFORE the
+    FIRE layout effect below — ORDER DEPENDENCY: within one commit, React
+    runs every `useLayoutEffect` (in declaration order) before any passive
+    `useEffect`, so a ref-sync left in a passive effect updated
+    `onFireRef.current` ONE COMMIT TOO LATE from FIRE's own point of view —
+    FIRE read whatever `onFire` closure was current LAST time, not THIS
+    render's. Observed: `highlightBlocks`'s own `onFire` closes over
+    `blocks`; when `plan` loads on a LATER commit than the one that first
+    flips `ready` true, FIRE ran against the stale closure's `blocks: []`,
+    silently skipping the highlight. Writing `onFireRef.current = onFire`
+    directly in the render body (no effect at all) would be the simpler fix
+    and IS the standard React "keep a ref always current" idiom in general —
+    but this codebase's lint config (`react-hooks/refs`) forbids writing a
+    ref's `.current` during render, not just reading it, so a layout effect
+    is the next-best option: it is GUARANTEED to run, every commit, before
+    the FIRE layout effect declared right after it (same component, same
+    effect kind, declaration order), which keeps `onFireRef.current` current
+    in time for FIRE to read it, every single commit — not merely "usually
+    in time" the way relying on passive-vs-layout ordering luck would be.
+  */
   const onFireRef = useRef(onFire)
-  useEffect(() => {
+  useLayoutEffect(() => {
     onFireRef.current = onFire
   }, [onFire])
 
