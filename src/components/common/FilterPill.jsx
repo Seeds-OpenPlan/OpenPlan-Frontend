@@ -22,10 +22,13 @@ export function FilterPill({ active, label, onClick }) {
       aria-pressed={active}
       onClick={onClick}
       className={[
-        // 48px 최소 높이는 모바일 전용 — md 이상은 기존 칩 크기(px-3 py-1.5
-        // text-label)로 줄어든다. StatsToggle의 예전 size="lg" 분기와 같은
-        // 중단점 처리다.
-        'min-h-[48px] rounded-full px-4 text-body font-medium transition-colors',
+        // PR #82 AI 리뷰 Blocking fix: `min-h-[48px]`만 있고 정렬이 없으면
+        // 버튼 기본 흐름대로 텍스트가 박스 위쪽에 붙는다(48px는 한 줄
+        // 라벨보다 훨씬 크므로 남는 높이가 전부 아래로만 쌓인다) —
+        // `inline-flex items-center justify-center`로 세로 중앙에 고정한다.
+        // md 이상은 min-h가 0으로 줄고(바로 아래) 박스 높이가 패딩+내용과
+        // 같아지므로 이 정렬은 자리만 지킬 뿐 모양을 바꾸지 않는다.
+        'inline-flex min-h-[48px] items-center justify-center rounded-full px-4 text-body font-medium transition-colors',
         'md:min-h-0 md:px-3 md:py-1.5 md:text-label',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
         active

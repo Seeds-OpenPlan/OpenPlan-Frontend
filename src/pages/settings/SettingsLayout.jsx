@@ -3,6 +3,8 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { SettingsNavList } from '../../components/settings/SettingsNavList'
 import { ChevronLeftIcon } from '../../components/settings/settingsIcons'
 import { useIsDesktop, useMediaQuery } from '../../hooks/useMediaQuery'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { getOverlayStackSnapshot } from '../../utils/overlayStack'
 import { SETTINGS_FIRST_DETAIL_PATH } from '../../features/settings/settingsNavOrder'
 import { useTutorialRestart } from '../../features/onboarding/useTutorialRestart'
 
@@ -106,6 +108,51 @@ function SettingsLayout() {
     }
   }, [isDesktop, atHub, navigate])
 
+  // 모바일에서 상세(전체화면 슬라이드)가 "열려 있다"는 조건 — 이 레이아웃
+  // 안에서 포커스 트랩·허브 inert·ESC 처리·focus 이펙트가 전부 같은 이
+  // 조건을 쓴다(예전엔 `!isDesktop && !atHub`가 3곳에 따로 적혀 있었다).
+  const mobileDetailOpen = !isDesktop && !atHub
+
+  // ← 버튼 (PR #82 AI 리뷰 Blocking fix): "허브에서 들어왔는지"를
+  // `window.history.length`가 아니라 location.state로 명시적으로 추적한다.
+  //
+  // 이전 가드(`window.history.length > 1`)의 전제가 틀렸었다 — 데스크톱
+  // 자동 리다이렉트(위 useLayoutEffect, `/settings`→첫 상세, `replace:
+  // true`)가 허브 엔트리를 히스토리에서 지우고 나면, 그 뒤 창을 좁혀 모바일로
+  // 바뀌어도 `history.length`는 여전히 1보다 커서(설정에 들어오기 전의 다른
+  // 페이지들 때문에) navigate(-1)이 실행됐다 — 그 결과 ← 버튼이 허브를
+  // 건너뛰고 설정에 들어오기 전 화면으로 나가 버렸다.
+  //
+  // 지금은 SettingsNavList의 Row가 "지금 허브에 서 있다가 상세로 들어가는"
+  // 클릭에만 `state={{ fromSettingsHub: true }}`를 NavLink에 실어 보낸다
+  // (그 파일 자신의 `fromHubState` 주석 참고):
+  // - state가 있으면 → 허브를 거쳐 방금 들어왔다는 뜻 → navigate(-1)로
+  //   히스토리를 한 칸 되감는다(브라우저 뒤로가기와 동일한 결과).
+  // - state가 없으면 → 데스크톱 자동 리다이렉트·북마크/새로고침 직접 진입·
+  //   데스크톱 2단에서 상세→상세로 건너뛴 경우(허브를 거치지 않음) 중
+  //   하나다 → `/settings`로 **replace**한다. push를 쓰면 지금 보던 상세
+  //   위에 허브가 새로 쌓여, 그다음 뒤로가기를 누르면 그 상세로 되돌아가는
+  //   루프가 생긴다 — replace는 그 상세 엔트리 자체를 허브로 바꿔치기해
+  //   루프를 만들지 않는다.
+  const handleBack = () => {
+    if (location.state?.fromSettingsHub) navigate(-1)
+    else navigate('/settings', { replace: true })
+  }
+
+  // PR #82 AI 리뷰 Blocking fix (포커스 트랩): `fixed inset-0`으로 뷰포트를
+  // 덮는 모바일 전체화면 상세는 시각적으로는 모달이지만, 예전 BottomSheet가
+  // 주던 `useFocusTrap`도 `role="dialog"`도 없었다 — 그래서 Tab/Shift+Tab이
+  // 뒤에 깔린 AppLayout의 MobileTopBar(알림·계정)·BottomTabBar로 새어나가,
+  // 거기서 Enter를 누르면 다른 탭으로 이동해 버렸다. AppLayout 자체를 고쳐
+  // 그 바깥 바들을 inert하는 방법도 있지만 이번엔 피한다(리드 결정 — 이
+  // 레이아웃 파일 밖을 건드리지 않고 끝낼 수 있어서다). 대신 Dialog/
+  // BottomSheet가 이미 쓰는 같은 useFocusTrap을 이 패널의 컨테이너
+  // (panelRef, 아래 렌더의 상세 pane div)에 걸어 Tab 순환을 그 안으로
+  // 가둔다. 데스크톱 2단에서는 허브와 상세가 동시에 상호작용 가능해야 하므로
+  // `open`을 모바일-열림 조건에만 묶는다.
+  const panelRef = useRef(null)
+  useFocusTrap(panelRef, { open: mobileDetailOpen })
+
   // 모바일 슬라이드 상세가 열리면 그 "하위 페이지 자신의" 제목(#settings-
   // detail-title)으로 포커스를 옮긴다(NotFoundPage.jsx의 "라우트 진입 시
   // 제목에 포커스" 패턴과 동일) — 그래야 스크린리더 사용자가 방금 inert
@@ -113,13 +160,26 @@ function SettingsLayout() {
   // 데스크톱(2단, 허브가 inert되지 않음)과 허브 자체(상세가 없음)에서는 옮길
   // 포커스가 없다.
   //
+  // 순서 의존성(중요, PR #82 AI 리뷰 Blocking fix): 바로 위 useFocusTrap도
+  // 같은 "열리는 순간"에 포커스를 옮긴다(initialFocusRef를 안 줬으므로
+  // 컨테이너의 첫 포커스 가능 요소 = 아래 "← 설정" 버튼). 두 effect가 서로
+  // 다른 대상으로 포커스를 다투면 React가 같은 컴포넌트의 effect를 선언
+  // 순서대로 커밋 후 동기 실행하므로 "나중에 선언된 effect가 마지막에
+  // 이긴다" — 그래서 이 effect를 useFocusTrap **다음**에 선언해, 제목이
+  // 당장 존재하는 페이지(캘린더·지원·공지)에서는 이 effect가 트랩의 "← 설정"
+  // 포커스를 바로 덮어쓰고 제목으로 보낸다. 로딩 스켈레톤이 먼저 뜨는
+  // 페이지(계정·가용시간·기본값·고정일정·알림·카테고리)에서는 이 effect가
+  // 당장 아무것도 못 찾아 MutationObserver만 걸어 두므로, 데이터가 도착하기
+  // 전까지는 트랩이 옮긴 "← 설정" 포커스가 그대로 유지된다(완전히 빈
+  // 포커스보다 낫다) — 데이터가 도착하면 그제야 제목으로 넘어간다.
+  //
   // contentPaneRef: Outlet을 담은 div(아래 렌더 참고) — 그 id를 가진 heading은
   // 이 서브트리 안에만 나타날 수 있으므로 관찰 범위를 여기로 좁힌다(문서
   // 전체를 관찰하면 react-query 캐시 갱신·토스트 등 무관한 변이에도 콜백이
   // 돈다).
   const contentPaneRef = useRef(null)
   useEffect(() => {
-    if (isDesktop || atHub) return
+    if (!mobileDetailOpen) return undefined
     const container = contentPaneRef.current
     if (!container) return undefined
 
@@ -155,46 +215,45 @@ function SettingsLayout() {
     })
     observer.observe(container, { childList: true, subtree: true })
     return () => observer.disconnect()
-  }, [isDesktop, atHub, location.pathname])
+  }, [mobileDetailOpen, location.pathname])
 
-  // ← 버튼 (PR #82 AI 리뷰 Blocking fix): "허브에서 들어왔는지"를
-  // `window.history.length`가 아니라 location.state로 명시적으로 추적한다.
-  //
-  // 이전 가드(`window.history.length > 1`)의 전제가 틀렸었다 — 데스크톱
-  // 자동 리다이렉트(위 useLayoutEffect, `/settings`→첫 상세, `replace:
-  // true`)가 허브 엔트리를 히스토리에서 지우고 나면, 그 뒤 창을 좁혀 모바일로
-  // 바뀌어도
-  // `history.length`는 여전히 1보다 커서(설정에 들어오기 전의 다른 페이지들
-  // 때문에) navigate(-1)이 실행됐다 — 그 결과 ← 버튼이 허브를 건너뛰고
-  // 설정에 들어오기 전 화면으로 나가 버렸다.
-  //
-  // 지금은 SettingsNavList의 Row가 "지금 허브에 서 있다가 상세로 들어가는"
-  // 클릭에만 `state={{ fromSettingsHub: true }}`를 NavLink에 실어 보낸다
-  // (그 파일 자신의 `fromHubState` 주석 참고):
-  // - state가 있으면 → 허브를 거쳐 방금 들어왔다는 뜻 → navigate(-1)로
-  //   히스토리를 한 칸 되감는다(브라우저 뒤로가기와 동일한 결과).
-  // - state가 없으면 → 데스크톱 자동 리다이렉트·북마크/새로고침 직접 진입·
-  //   데스크톱 2단에서 상세→상세로 건너뛴 경우(허브를 거치지 않음) 중
-  //   하나다 → `/settings`로 **replace**한다. push를 쓰면 지금 보던 상세
-  //   위에 허브가 새로 쌓여, 그다음 뒤로가기를 누르면 그 상세로 되돌아가는
-  //   루프가 생긴다 — replace는 그 상세 엔트리 자체를 허브로 바꿔치기해
-  //   루프를 만들지 않는다.
-  const handleBack = () => {
-    if (location.state?.fromSettingsHub) navigate(-1)
-    else navigate('/settings', { replace: true })
-  }
+  // ESC도 ← 버튼과 같은 동작(허브로 돌아가기)을 하게 한다 — 트랩이 생긴
+  // 이상 Esc는 Dialog/BottomSheet와 마찬가지로 "닫는" 수단으로 기대된다.
+  // handleBack은 매 렌더 새로 만들어지는 함수라 effect의 의존성 배열에
+  // 그대로 넣으면 키 리스너를 매번 떼고 다시 붙이게 된다 — BottomSheet.jsx의
+  // `onCloseRef`와 같은 이유로 ref에 최신 버전만 담아 둔다.
+  const handleBackRef = useRef(handleBack)
+  useEffect(() => {
+    handleBackRef.current = handleBack
+  })
+  useEffect(() => {
+    if (!mobileDetailOpen) return undefined
+    const onKeyDown = (e) => {
+      if (e.key !== 'Escape') return
+      // 이 패널 자신은 utils/overlayStack.js의 공유 스택에 올라가지
+      // *않는다* — 올리면 그 파일의 SINGLE SCRIM 전제("스택 맨 아래만
+      // scrim을 그린다")가 깨진다. 이 패널은 반투명 오버레이가 아니라
+      // 완전히 불투명한 실제 페이지라서, 그 위에서 처음 여는 Dialog나
+      // BottomSheet(FixedScheduleForm 등, z-50)도 평소처럼 자기 스크림을
+      // 그려야 한다 — 이 패널이 스택 맨 아래를 차지해 버리면 그 모달이
+      // "아래가 이미 어둡다"고 착각해 스크림을 생략한다(실제로는 아무도
+      // 안 그린 상태가 된다).
+      //
+      // 그래서 스택이 "비어 있는지"만 본다 — 비어 있지 않다면 안쪽 Dialog/
+      // BottomSheet가 이미 같은 keydown에 반응해(자기 자신의
+      // isTopmostOverlay 체크로) 스스로 처리하므로 우리는 양보한다.
+      if (getOverlayStackSnapshot().length > 0) return
+      handleBackRef.current()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [mobileDetailOpen])
 
   // `atHub`를 내려 보낸다 — SettingsNavList가 "지금 허브에서 상세로 들어가는
   // 클릭"과 "데스크톱 2단에서 상세→상세로 건너뛰는 클릭"을 구분해 NavLink의
-  // `state`를 다르게 싣는다(그 파일 자신의 `fromHubState` 주석, 그리고 아래
+  // `state`를 다르게 싣는다(그 파일 자신의 `fromHubState` 주석, 그리고 위
   // handleBack 주석 참고).
   const navList = <SettingsNavList onTutorialRestart={requestRestart} atHub={atHub} />
-  // 모바일에서 상세(전체화면 슬라이드)가 열려 있는 동안 허브 리스트를
-  // 포커스/스크린리더에서 뺀다 — 시각적으로는 상세가 `fixed`로 완전히 덮지만
-  // DOM상으론 둘 다 떠 있으므로, inert 없이는 Tab이나 가상 커서가 가려진
-  // 허브 행으로 넘어갈 수 있다. 데스크톱 2단은 둘 다 항상 상호작용 가능해야
-  // 하므로 해당 없음.
-  const hubInert = !isDesktop && !atHub
 
   return (
     <div className="flex flex-col gap-6">
@@ -208,9 +267,17 @@ function SettingsLayout() {
             class scanner only recognizes literal strings in source, never an
             interpolated one. `shrink-0` keeps this pane from being squeezed
             by its sibling mid-transition. 모바일은 항상 전체 폭(detail이
-            `fixed`로 떠 있는 레이어라 폭을 나눠 가질 상대가 없다). */}
+            `fixed`로 떠 있는 레이어라 폭을 나눠 가질 상대가 없다).
+
+            `inert={mobileDetailOpen}` — 모바일에서 상세가 열려 있는 동안
+            허브 리스트를 포커스/스크린리더에서 뺀다. 시각적으로는 상세가
+            `fixed`로 완전히 덮지만 DOM상으론 둘 다 떠 있으므로, inert 없이는
+            Tab이나 가상 커서가 가려진 허브 행으로 넘어갈 수 있다(아래
+            useFocusTrap이 상세 쪽 Tab 순환을 가두는 것과 한 쌍 — 이 inert가
+            허브 쪽을, 그 트랩이 상세 쪽 경계를 각각 책임진다). 데스크톱
+            2단은 둘 다 항상 상호작용 가능해야 하므로 해당 없음. */}
         <div
-          inert={hubInert || undefined}
+          inert={mobileDetailOpen || undefined}
           style={isDesktop ? { width: atHub ? '100%' : sidebarWidth } : undefined}
           className={[
             'shrink-0',
@@ -226,8 +293,25 @@ function SettingsLayout() {
             (invisible, whether collapsed-to-0 on desktop or slid offscreen on
             mobile) content out of the tab order and out of find-in-page while
             hidden — a real accessibility gap a bare opacity/transform fade
-            would otherwise leave. */}
+            would otherwise leave.
+
+            `ref={panelRef}` is useFocusTrap's container (see that call
+            above). `role`/`aria-modal`/`aria-labelledby`/`tabIndex` are only
+            added while `mobileDetailOpen` — on desktop this pane is a
+            same-page 2단 pane, not a modal, so it must NOT claim
+            `role="dialog"` there (a screen reader would announce a
+            non-dismissable "dialog" sitting right next to the list it's
+            supposedly modal over). `aria-labelledby` points at the SAME
+            literal id the focus effect above searches for — if the page is
+            still showing its loading skeleton when this paints, the id
+            simply doesn't resolve to anything yet; most screen readers
+            re-resolve `aria-labelledby` once the element with that id shows
+            up, so the name "catches up" the same way focus does. */}
         <div
+          ref={panelRef}
+          {...(mobileDetailOpen
+            ? { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': DETAIL_TITLE_ID, tabIndex: -1 }
+            : {})}
           inert={atHub || undefined}
           style={isDesktop ? { width: atHub ? 0 : `calc(100% - ${sidebarWidth} - 1.5rem)` } : undefined}
           className={
@@ -261,7 +345,7 @@ function SettingsLayout() {
               inert+화면 밖이다) — 이 조건이 아래 `contentPane`의 children
               배열 위치를 바꾸지 않는 것이 핵심이다(React가 조건식 자체를
               항상 같은 슬롯에 두므로 Outlet의 부모는 흔들리지 않는다). */}
-          {!isDesktop && !atHub && (
+          {mobileDetailOpen && (
             <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-surface p-3">
               <button
                 type="button"
