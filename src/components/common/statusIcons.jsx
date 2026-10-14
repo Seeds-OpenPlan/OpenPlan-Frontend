@@ -15,6 +15,12 @@ const base = {
 }
 
 // SCR-404 — compass/search: "you are looking for something that isn't here".
+// Also re-exported below as `SearchIcon`: this same magnifying-glass shape is
+// what the owner picked for the empty-state decorative mark too (feedback
+// 2026-10-13 — "not bad, but a magnifying glass would read better" than the
+// earlier brand-mark ring+check), and since both uses are purely decorative
+// (aria-hidden, meaning carried by adjacent text) there's no reason to draw
+// the same circle+diagonal twice under two names.
 export function NotFoundIcon({ className, size = 24 }) {
   return (
     <svg {...base} width={size} height={size} viewBox="0 0 24 24" className={className}>
@@ -23,6 +29,12 @@ export function NotFoundIcon({ className, size = 24 }) {
     </svg>
   )
 }
+
+// Alias used by empty-state surfaces (EmptyState.jsx, DashboardEmptyState.jsx)
+// so call sites read "search" rather than "not found" — same component, a
+// name that fits the "nothing here yet, go look elsewhere" context instead
+// of the 404-page one.
+export const SearchIcon = NotFoundIcon
 
 // SCR-403 — lock: access denied (visually distinct from 404, story §2 requires it).
 export function LockIcon({ className, size = 24 }) {
@@ -67,18 +79,22 @@ export function CheckCircleIcon({ className, size = 24 }) {
   )
 }
 
-// EmptyState (ST-F1-08 ui-spec §PROJ.1/2.1/9, shared with ui-spec-dash §DASH.6)
-// — an open box: "nothing here yet", distinct from 404's compass (nothing
-// FOUND) and 403's lock (not ALLOWED).
-export function EmptyBoxIcon({ className, size = 24 }) {
-  return (
-    <svg {...base} width={size} height={size} viewBox="0 0 24 24" className={className}>
-      <path d="M3 8 12 4l9 4-9 4-9-4Z" />
-      <path d="M3 8v8l9 4 9-4V8" />
-      <path d="M12 12v8" />
-    </svg>
-  )
-}
+// Shared size/color for every `SearchIcon` usage in an empty-state card
+// (EmptyState.jsx, DashboardEmptyState.jsx). Exported as constants — not
+// left as separate literals at each call site — so a future owner tweak
+// (this pair has already changed twice: 32px/text-text-disabled →
+// 40px/text-neutral-300, then the icon itself from a brand-mark ring+check
+// to this magnifying glass) only needs editing here instead of two files
+// silently drifting apart. `text-neutral-300` (lighter than the
+// text-disabled/neutral-400 token) is a deliberate one-off for this
+// decorative mark, not a semantic-token substitute — it's purely
+// decorative (aria-hidden) so WCAG text-contrast minimums don't apply. At
+// 40px the NotFoundIcon/SearchIcon circle's default base strokeWidth=2 (its
+// 24-unit viewBox scaled ~1.67x) renders ≈3.3px — the same proportional
+// scaling every other icon in this file gets at a larger `size`, so it's
+// neither too thin nor too heavy without a one-off override.
+export const EMPTY_STATE_ICON_SIZE = 40
+export const EMPTY_STATE_ICON_CLASS = 'text-neutral-300'
 
 // Button inline-loading spinner. Marked aria-hidden; the label text ("처리 중")
 // carries the state, and the button sets aria-busy (color/motion is secondary).

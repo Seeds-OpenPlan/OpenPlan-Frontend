@@ -1,11 +1,21 @@
-import { EmptyBoxIcon } from './statusIcons'
+import { SearchIcon, EMPTY_STATE_ICON_SIZE, EMPTY_STATE_ICON_CLASS } from './statusIcons'
 import { Button } from './Button'
 
 /*
   EmptyState atom (ui-spec §PROJ.1 목록 empty · §PROJ.9 구조화 초안 empty · shared
-  with ui-spec-dash §DASH.6 온보딩 empty). Icon + title + description + up to two
-  actions (primary + optional secondary), centered — the shape every "nothing
-  here yet, here's how to start" surface in this codebase repeats.
+  with ui-spec-dash §DASH.6 온보딩 empty). Icon + title + description + up to
+  two actions (primary + optional secondary), centered — the shape every
+  "nothing here yet, here's how to start" surface in this codebase repeats.
+
+  Icon history (owner direction, 2026-10-13): removed app-wide (a generic
+  "empty box" illustration read as clutter) → replaced with the app's brand
+  mark (ring+check) since "no icon" was too plain → lightened/enlarged
+  (32px/text-text-disabled → 40px/text-neutral-300) → finally swapped the
+  mark itself for a magnifying glass ("not bad, but a search icon reads
+  better" — `SearchIcon`, an alias for the existing SCR-404 icon shape,
+  statusIcons.jsx). Size/color still come from `EMPTY_STATE_ICON_SIZE` /
+  `EMPTY_STATE_ICON_CLASS` rather than local literals, so this card and
+  DashboardEmptyState.jsx can't drift apart on a future tweak.
 
   Not `role="alert"`/`role="status"`: an empty list is a normal, expected state
   (not an error, not a transient announcement), so it renders like ordinary
@@ -14,7 +24,6 @@ import { Button } from './Button'
   role="status" on SCR-403.
 */
 export function EmptyState({
-  icon: Icon = EmptyBoxIcon,
   title,
   description,
   actionLabel,
@@ -35,8 +44,8 @@ export function EmptyState({
   secondaryActionTutId,
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-card border border-border bg-surface px-4 py-10 text-center">
-      <Icon className="text-text-disabled" size={48} />
+    <div className="flex flex-col items-center gap-3 rounded-card border border-border bg-surface px-4 py-8 text-center">
+      <SearchIcon className={EMPTY_STATE_ICON_CLASS} size={EMPTY_STATE_ICON_SIZE} />
       <p className="text-body font-medium text-text">{title}</p>
       {description && <p className="max-w-[42ch] text-label text-text-muted">{description}</p>}
       {(onAction || onSecondaryAction) && (
