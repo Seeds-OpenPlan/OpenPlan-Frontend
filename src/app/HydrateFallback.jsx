@@ -27,8 +27,10 @@ import { BrandLogo } from '../components/common/BrandLogo'
 export function HydrateFallback() {
   return (
     <div className="min-h-screen bg-surface-sunken text-text">
-      <header className="flex h-bar items-center border-b border-border bg-surface px-page-x">
-        <BrandLogo />
+      <header className="border-b border-border bg-surface pt-safe-top">
+        <div className="flex h-bar items-center px-page-x">
+          <BrandLogo />
+        </div>
       </header>
       <main className="mx-auto max-w-page px-page-x py-6">
         <LoadingSkeleton preset="card" />

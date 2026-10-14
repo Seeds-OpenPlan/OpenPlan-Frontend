@@ -123,6 +123,16 @@
      viewport width (a one-value difference here was the ST-F1-01 desktop
      8px jump this cycle fixed). */
   --spacing-page-x: 1rem;
+  /* Safe-area insets (Android 15+ edge-to-edge · TWA, notch/gesture bar).
+     index.html opts in with viewport-fit=cover — without it env() is always 0
+     and there is no way to keep fixed chrome off the system bars. Every
+     inset falls back to 0, so on desktop/older browsers these are no-ops.
+     Fixed/sticky chrome pads by these (pt-safe-top, pb-safe-bottom, …);
+     offsets that already have a number use calc(<number> + var(...)). */
+  --spacing-safe-top: env(safe-area-inset-top, 0px);
+  --spacing-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --spacing-safe-left: env(safe-area-inset-left, 0px);
+  --spacing-safe-right: env(safe-area-inset-right, 0px);
   /* 72rem: shared page max-width — same value as Tailwind's built-in 6xl,
      named here so AppLayout/TopNav/HydrateFallback's max-w-page all read
      from one place instead of three copies of the (otherwise unexplained)

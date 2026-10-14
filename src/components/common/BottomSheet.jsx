@@ -131,7 +131,10 @@ export function BottomSheet({
           // 휴대폰 폭(360~430px대)에는 영향이 없는 `max-w-lg`(512px)로
           // 상한을 두고, 부모가 이미 `justify-center`이므로 가운데 정렬도
           // 그대로 따라온다(mx-auto 불필요).
-          'relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-t-sheet bg-surface shadow-modal',
+          // pb-safe-bottom: the sheet sits on the screen's bottom edge, so its last
+          // row (often the confirm button) must clear the gesture bar — #68 didn't
+          // touch BottomSheet, so this is still the only safe-area padding here.
+          'relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-t-sheet bg-surface pb-safe-bottom shadow-modal',
           'motion-safe:transition-transform motion-safe:duration-slow motion-safe:ease-emphasized',
         ].join(' ')}
       >
