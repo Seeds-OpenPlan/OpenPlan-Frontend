@@ -434,6 +434,12 @@ function SettingsLayout() {
           </div>
         </div>
       </div>
+      {/* upstream/main 병합(PR #81): 그 PR이 고치던 모바일 BottomSheet
+          블록(onClose에서 suppressPendingSelfBack() 호출)은 #82의 전체화면
+          슬라이드 구조로 대체되며 이미 사라졌다 — 이 패널은
+          utils/overlayStack.js의 오버레이 스택에 등록되지 않으므로(위 Esc
+          이펙트 주석 참고) overlayHistory.js의 self-back 재확인 자체가
+          예약되지 않는다(Thomas 확인) — 그 호출을 옮겨 올 자리가 없다. */}
       {tutorialDialog}
     </div>
   )

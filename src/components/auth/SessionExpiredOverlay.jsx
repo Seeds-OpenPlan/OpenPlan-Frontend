@@ -7,6 +7,7 @@ import { ErrorState } from '../common/ErrorState'
 import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import { useSessionStore } from '../../features/auth/sessionStore'
 import { useLogin } from '../../features/auth/useAuth'
+import { suppressPendingSelfBack } from '../../utils/overlayHistory'
 
 const FIELD =
   'w-full rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring'
@@ -62,7 +63,13 @@ export function SessionExpiredOverlay() {
       { email, password },
       {
         onSuccess: () => {
-          resolve()
+          resolve() // 이 오버레이를 닫는다(expired=false) — 아래 navigate()와 같은 틱
+          // 목적지(특히 '/')에는 sessionGuardLoader(실 네트워크 요청)가 걸려 있어
+          // overlayHistory.js의 self-back() 지연 재확인 창(두 프레임)보다 이동이 더
+          // 오래 걸릴 수 있다 — 그러면 재확인이 먼저 self-back()을 불러 이 재로그인
+          // 이동을 되돌릴 위험이 있다(owner 리뷰 S2). navigate() 바로 앞에서 알려
+          // 그 재확인이 포기하게 한다.
+          suppressPendingSelfBack()
           navigate(previousPath || '/', { replace: true })
         },
       },
