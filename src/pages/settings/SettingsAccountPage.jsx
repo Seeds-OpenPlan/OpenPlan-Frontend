@@ -11,6 +11,7 @@ import { OvlAccountReactivate } from '../../components/auth/OvlAccountReactivate
 import { PasswordChangeDialog } from '../../components/settings/PasswordChangeDialog'
 import { deriveReactivationInfo } from '../../features/auth/reactivationInfo'
 import { useLogout } from '../../features/auth/useAuth'
+import { suppressPendingSelfBack } from '../../utils/overlayHistory'
 import { useLockedIsDesktop } from '../../hooks/useMediaQuery'
 import {
   useAccount,
@@ -193,6 +194,11 @@ function SettingsAccountPage() {
       onSettled: () => {
         setConfirmAction(null)
         toast({ tone: 'info', message: '로그아웃했습니다' })
+        // ConfirmDialog를 닫는 것(바로 위 setConfirmAction(null))과 다른 pathname으로
+        // 이동하는 것이 같은 틱에 겹친다 — overlayHistory.js의 self-back() 지연 재확인이
+        // 이 이동을 미처 못 보고 먼저 끼어들면 로그인 화면으로의 이동이 되돌려진다(owner
+        // 리뷰 S2). navigate() 바로 앞에서 알려 그 재확인이 포기하게 한다.
+        suppressPendingSelfBack()
         navigate('/login', { replace: true })
       },
     })

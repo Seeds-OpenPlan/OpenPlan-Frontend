@@ -5,6 +5,7 @@ import { SettingsNavList } from '../../components/settings/SettingsNavList'
 import { useLockedIsDesktop, useMediaQuery } from '../../hooks/useMediaQuery'
 import { SETTINGS_FIRST_DETAIL_PATH } from '../../features/settings/settingsNavOrder'
 import { useTutorialRestart } from '../../features/onboarding/useTutorialRestart'
+import { suppressPendingSelfBack } from '../../utils/overlayHistory'
 
 // id every settings sub-page's own <h2> carries (SettingsAvailabilityPage,
 // SettingsDefaultsPage, ...) — the mobile BottomSheet's labelledById reads
@@ -146,7 +147,17 @@ function SettingsLayout() {
       <h1 className="text-2xl font-bold text-text">설정</h1>
       {navList}
       {!atHub && (
-        <BottomSheet open onClose={() => navigate('/settings')} labelledById={DETAIL_TITLE_ID}>
+        <BottomSheet
+          open
+          onClose={() => {
+            // 닫기(백드롭/Esc/드래그 핸들)와 다른 pathname('/settings')으로의 이동이
+            // 같은 호출 안에서 겹친다(owner 리뷰 S2) — navigate() 앞에서 미리 알려
+            // overlayHistory.js의 self-back() 지연 재확인이 이 이동과 경합하지 않게 한다.
+            suppressPendingSelfBack()
+            navigate('/settings')
+          }}
+          labelledById={DETAIL_TITLE_ID}
+        >
           <Outlet />
         </BottomSheet>
       )}

@@ -9,6 +9,7 @@ import {
   useUnreadNotificationCount,
   useMarkNotificationRead,
 } from '../../features/notifications/useNotifications'
+import { suppressPendingSelfBack } from '../../utils/overlayHistory'
 
 const PANEL_TITLE_ID = 'notification-panel-title'
 
@@ -93,13 +94,29 @@ export function NotificationBell() {
   const handleItemClick = (notification) => {
     if (!notification.readAt) markRead.mutate(notification.notificationId)
     setOpen(false)
-    if (notification.routePath) navigate(notification.routePath)
+    if (notification.routePath) {
+      // 모바일에서만: 이 패널이 BottomSheet(오버레이 스택 등록 대상)일 때만 닫기와
+      // 다른 pathname으로의 이동이 겹치는 "닫기+이동" 경합(owner 리뷰 S2)이 성립한다.
+      // 데스크톱의 비모달 드롭다운은 오버레이 스택에 등록되지 않으므로 호출해서는 안
+      // 된다 — suppressPendingSelfBack()은 오버레이 단위가 아니라 전역 플래그라서
+      // (TTL 2초) 그 창 안에 닫히는, 전혀 무관한 다른(실제 등록된) 오버레이의
+      // self-back까지 빼앗아 버린다(리뷰 S2-b, Thomas 재리뷰로 발견). 그리고 이동이
+      // 실제로 일어날 때만 호출해야 한다 — `routePath`가 없어 navigate() 자체가
+      // 일어나지 않는데도 미리 불러 버리면 역시 같은 방식으로 무관한 self-back을
+      // 억제해 버린다(리뷰 S2-a).
+      if (!isDesktop) suppressPendingSelfBack()
+      navigate(notification.routePath)
+    }
   }
 
   // 헤더 톱니바퀴 (owner feedback #3) — 알림 설정 화면은 라우트 이동이므로
   // 패널부터 닫아야 뒤에 남은 드롭다운/시트가 없다.
   const openNotificationSettings = () => {
     setOpen(false)
+    // 위 handleItemClick과 같은 이유(S2-b) — 모바일(BottomSheet, 오버레이 스택
+    // 등록 대상)에서만 호출한다. 이동은 이 함수에서 무조건 일어나므로(S2-a 해당 없음)
+    // isDesktop 가드만 필요하다.
+    if (!isDesktop) suppressPendingSelfBack()
     navigate('/settings/notifications')
   }
 
