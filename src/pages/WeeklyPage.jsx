@@ -393,8 +393,10 @@ function WeeklyPage() {
 
   const days = useMemo(() => weekDaysOf(weekStartISO), [weekStartISO])
   /*
-    findFirstFreeSlot (quickPlace below, and TUT-06's own auto-open
-    add-schedule request further down) scans `blocks` for occupied spans
+    findFirstFreeSlot (quickPlace below — the ONLY caller now; the tutorial's
+    OWN add-schedule auto-open request that used to ALSO call this was
+    removed along with every other auto-open, RING-BASED REDESIGN, 2026-10 —
+    see TutorialOverlay.jsx's own header) scans `blocks` for occupied spans
     only — a fixed schedule (#70, BE #90: read straight off this week's own
     response via `useFixedSchedules`, see that hook's own header) was
     invisible to it, so "이번 주 가까운 빈 시간대를 미리 채운다" could land
@@ -1533,9 +1535,14 @@ function WeeklyPage() {
   })
 
   /*
-    TUT-07 "할 일 창 자동 열기" — `?highlightBlocks=id1,id2` (comma-separated
-    planBlockIds, TUT-05/06's own created blocks — see tutorialSteps.js's
-    DELETE_SAMPLE entry). Reuses the EXISTING PLAN-23 focus-ring mechanism
+    DELETE_SAMPLE (TUT-07) highlight — `?highlightBlocks=id1,id2`
+    (comma-separated planBlockIds, PLACE_TASK/ADD_SCHEDULE's own created
+    blocks — see tutorialSteps.js's DELETE_SAMPLE entry). No form ever opens
+    here — this ONLY highlights/scrolls (RING-BASED REDESIGN, 2026-10,
+    removed every actual auto-open; this request predates and is unrelated
+    to that redesign, see TutorialOverlay.jsx's own header on why
+    DELETE_SAMPLE still uses this mechanism instead of a Coachmark ring
+    anchor). Reuses the EXISTING PLAN-23 focus-ring mechanism
     (`handleFocusBlock`/`focusRequest`) instead of teaching Coachmark a new
     per-block anchor — that mechanism already scrolls the right block into
     view and flashes a ring around it, on both shells, which is exactly
@@ -1554,10 +1561,11 @@ function WeeklyPage() {
       // Same "widen to 24h if the block falls outside the focus-mode window"
       // safety handleSelectIssue already needs (and for the identical
       // reason — see that function's own comment): a TASK/SCHEDULE created
-      // from a slot the user picked themselves (TUT-06's own prefill stays
-      // inside availability, but the form lets them change it before
-      // saving) could land outside what focus mode renders, and scrolling
-      // to a block that isn't in the DOM at all would silently do nothing.
+      // from a slot the user picked themselves (the right-click/long-press
+      // menu lets them pick ANY empty cell, not just one inside the current
+      // focus window) could land outside what focus mode renders, and
+      // scrolling to a block that isn't in the DOM at all would silently do
+      // nothing.
       const startMin = minutesOfDay(target.startAt)
       const endMin = minutesOfDayEnd(target.endAt, dateOf(target.startAt))
       if (startMin < range.startMinutes || endMin > range.endMinutes) setMode('24h')

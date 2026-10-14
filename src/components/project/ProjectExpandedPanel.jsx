@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '../common/Button'
 import { ErrorState } from '../common/ErrorState'
 import { SkeletonListRow } from '../common/Skeleton'
@@ -18,7 +18,6 @@ import {
 } from '../../features/project/useProjectData'
 import { useAppStore, selectCanWrite } from '../../store/useAppStore'
 import { systemMessages } from '../../constants/systemMessages'
-import { useSearchParamRequest } from '../../hooks/useSearchParamRequest'
 
 /*
   An accordion row's expanded body — everything the old SCR-PROJ-WS 태스크 탭
@@ -43,7 +42,6 @@ import { useSearchParamRequest } from '../../hooks/useSearchParamRequest'
 */
 export function ProjectExpandedPanel({ project, panelMode, onPanelModeChange }) {
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
   const { projectId } = project
 
   const [taskFilter, setTaskFilter] = useState('ALL') // 'ALL' | 'ACTIVE' | 'DONE'
@@ -52,20 +50,6 @@ export function ProjectExpandedPanel({ project, panelMode, onPanelModeChange }) 
   const [taskEditTaskId, setTaskEditTaskId] = useState(null)
   const [deleteTaskTarget, setDeleteTaskTarget] = useState(null) // task | null
   const [deleteTaskError, setDeleteTaskError] = useState(false)
-
-  /*
-    TUT-04 "할 일 창 자동 열기" — `?addTask=1`. This panel only ever exists
-    for the ONE currently-expanded project (ProjectsPage's single-open
-    accordion — see that file's own header), so reading the URL directly
-    here (rather than threading a prop down through ProjectAccordionRow) is
-    safe: whatever `addTask=1` is attached to can only ever mean THIS panel.
-    See useSearchParamRequest's own header for why a hook, not a plain
-    lazy initializer — TUT-04's own [다시 열기] can re-request this same form
-    without this panel remounting (the row stays expanded either way).
-  */
-  useSearchParamRequest(searchParams, setSearchParams, 'addTask', {
-    onFire: () => setTaskFormTarget('create'),
-  })
 
   const tasksQuery = useProjectTasks(projectId)
   const warningsQuery = useProjectStructureWarnings(projectId)
@@ -161,7 +145,6 @@ export function ProjectExpandedPanel({ project, panelMode, onPanelModeChange }) 
               disabled={writeDisabled}
               disabledReason={writeDisabled ? writeDisabledReason : undefined}
               onClick={() => navigate(`/weekly?project=${projectId}&openUnplaced=1`)}
-              data-tut-id="tut-goto-weekly" // ST-F1-13 TUT-05 coachmark anchor
             >
               이 프로젝트로 주간 계획
             </Button>

@@ -1,18 +1,19 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 /*
   Generic "open-on-param, strip-after" seam — the shape this codebase already
   uses for every cross-screen open request (ProjectsPage's `?create=1`,
   WeeklyPage's `?openUnplaced=1`/`?project=`/`?openReplan=1`), generalized so
   it ALSO re-fires on a REPEAT appearance of the SAME param while the
-  component stays mounted. A plain lazy `useState` initializer (what every one
-  of those pre-existing seams used) only ever catches the param on the FIRST
-  render — fine when the param only ever arrives via a real navigation FROM
-  another page. The tutorial's guided coachmark (ST-F1-13, 2026-10) breaks
-  that assumption: several of its steps share one route and never remount
-  between them, and its own [다시 열기] button deliberately re-sends the exact
-  same param while already here — both need the open action to fire again,
-  not just once at mount.
+  component stays mounted — a plain lazy `useState` initializer (what every
+  one of those pre-existing seams used) only ever catches the param on the
+  FIRST render, which is fine when the param only ever arrives via a real
+  navigation FROM another page, but not for a param that can legitimately
+  reappear on an ALREADY-mounted page (a deep link the user follows twice,
+  or — historically, ST-F1-13's tutorial — a [다시 열기] button re-sending the
+  same request; that button is gone, RING-BASED REDESIGN, 2026-10, but the
+  general "re-arriving deep link" case this hook also covers is not
+  tutorial-specific and still applies to every caller below).
 
   Split in THREE for `react-hooks/set-state-in-effect` (this codebase's lint
   config rejects calling a LOCAL `useState` setter synchronously inside a
@@ -26,8 +27,9 @@ import { useEffect, useRef, useState } from 'react'
       a different seam). This step has no side effect of its own (a plain
       local `setHandledRaw`), so it stays in render rather than an effect.
     - FIRING is an effect (Thomas code review SHOULD-FIX, 2026-10 — see
-      below) that only REACTS to `handledRaw` having changed; it never
-      decides anything itself.
+      below; `useLayoutEffect` specifically, AI-review SHOULD-FIX, 2026-10 —
+      see that effect's own comment) that only REACTS to `handledRaw` having
+      changed; it never decides anything itself.
     - STRIPPING the param from the URL is a SEPARATE effect that only runs
       once firing has actually happened for the CURRENT raw value — not
       keyed off the raw searchParams value directly, so a param that hasn't
@@ -58,25 +60,25 @@ import { useEffect, useRef, useState } from 'react'
   request — on every unrelated re-render of the page, not just when
   `handledRaw` itself actually changes.
 
-  DEFAULT `isMatch` WIDENED TO "any non-empty string" (owner report, 2026-10:
-  "할 일 창이 자동으로 열릴 때도 있고 안 열릴 때도 있다") — it used to require
-  the LITERAL `'1'`. This file's own re-fire-on-reappear design (above) and
-  TutorialOverlay's own [다시 열기] both assume the param gets STRIPPED before
-  a repeat request arrives, so a GENUINE repeat of the exact same `'1'` is
-  comparing against `null`, not the previous `'1'` — that part was already
-  correct. The actual gap: a navigation to a URL that is BYTE-FOR-BYTE
-  IDENTICAL to the one react-router already has (one is possible any time a
-  caller recomputes its own request from the SAME inputs — a step the user
-  re-enters, or two [다시 열기] clicks before the first request's own strip
-  effect has run) can be a complete NO-OP at the router level: `location`
-  never changes, so NOTHING here ever sees a new `raw` to react to in the
-  first place — widening `isMatch` cannot fix THAT by itself. The real fix
-  (TutorialOverlay.jsx's own `requestNonceRef`) is sending a value that is
-  NEVER repeated across two real requests, which only works if every
-  CONSUMER here accepts something other than the literal `'1'` — hence this
-  widening. Every existing non-tutorial caller that only ever sends `'1'`
-  (none do today, but nothing stops one from existing later) is unaffected —
-  `'1'.length > 0` still matches.
+  DEFAULT `isMatch` WIDENED TO "any non-empty string", not just the LITERAL
+  `'1'` (owner report, 2026-10, from the tutorial's OLD auto-open design —
+  "할 일 창이 자동으로 열릴 때도 있고 안 열릴 때도 있다"). That design sent a
+  monotonically-incrementing nonce instead of a fixed `'1'` so that a REPEAT
+  request (the user re-entering a step, or clicking [다시 열기]) always
+  produced a URL distinct from the one before it — a navigation to a URL
+  that is BYTE-FOR-BYTE IDENTICAL to the one react-router already has is a
+  complete no-op at the router level (`location` never changes, so nothing
+  here ever sees a new `raw` to react to), which a value that never repeats
+  sidesteps by construction. [다시 열기] is gone and no tutorial step sends
+  any of these request params anymore (RING-BASED REDESIGN, see
+  TutorialOverlay.jsx's own header) — this widening is no longer load-
+  bearing for that reason, but is kept rather than reverted: every existing
+  caller here (ProjectsPage's `?create=1`, WeeklyPage's `?openUnplaced=1`/
+  `?project=`/`?highlightBlocks=`) still only ever sends a fixed literal, so
+  `raw.length > 0` matching exactly those same literals is no different in
+  practice from requiring `raw === '1'` would have been; reverting the
+  default buys nothing today and risks quietly breaking a future caller
+  that (like the old tutorial did) legitimately needs a non-`'1'` value.
 */
 export function useSearchParamRequest(
   searchParams,
@@ -107,15 +109,48 @@ export function useSearchParamRequest(
     // render until `ready` flips true — a passive retry, not a timer/poll.
   }
 
-  // THE FIRE — see this file's own header for why this lives in an effect
-  // instead of inline above. Keyed on `handledRaw` alone (not `onFire`, see
-  // header): React only runs this when that value actually changes, which
-  // is exactly once per raw value the render-time step above decided on —
-  // including a REPEAT occurrence of the identical string after it went
-  // back to `null` in between (TUT-05's own [다시 열기] relies on this), since
-  // that round trip is still two distinct transitions of `handledRaw`, not
-  // one.
-  useEffect(() => {
+  /*
+    THE FIRE — see this file's own header for why this lives in an effect
+    instead of inline above. Keyed on `handledRaw` alone (not `onFire`, see
+    header): React only runs this when that value actually changes, which
+    is exactly once per raw value the render-time step above decided on —
+    including a REPEAT occurrence of the identical string after it went
+    back to `null` in between, since that round trip is still two distinct
+    transitions of `handledRaw`, not one (no current caller actually
+    re-sends an identical value today — the tutorial's OLD [다시 열기] used
+    to, but is gone, RING-BASED REDESIGN — this still matters for a GENUINE
+    deep-link re-arriving with the same param, e.g. the user navigating to
+    `?create=1` twice via two separate dashboard clicks).
+
+    `useLayoutEffect`, NOT `useEffect` (AI-review SHOULD-FIX, 2026-10 —
+    deep-link flicker risk) — a FRESH navigation straight to a param-bearing
+    URL (dashboard's "+ 새 프로젝트"/"지금 배치하기" → `/projects?create=1`
+    / `/weekly?openUnplaced=1`, etc.) mounts the whole page with `onFire`
+    (typically `setOverlay(...)`/`setPanelOpen(true)`) not yet having run.
+    A PASSIVE effect fires AFTER the browser paints — the user would see one
+    real frame of "page, no overlay" before the overlay snaps open a tick
+    later. `useLayoutEffect` runs synchronously after the DOM commits but
+    BEFORE the browser paints, so the `onFire`-triggered state update (and
+    the re-render/re-commit it causes) resolves before anything is ever
+    shown — the overlay is simply part of the FIRST painted frame, same as
+    the OLD lazy-`useState`-initializer seams this hook generalizes (this
+    file's own header) used to achieve by running during the initial render
+    itself. Safe to move: `onFire` here only ever calls a LOCAL state setter
+    (`setOverlay`/`setPanelOpen`/`setProjectFilter`/`handleFocusBlock`+
+    `setMode` — checked every current call site), never `navigate()` or
+    `setSearchParams` directly, and calling a state setter from a layout
+    effect is a fully supported React pattern (it is, in fact, the
+    textbook use case for the hook). React 19 Strict Mode's dev-only
+    double-invoke applies identically to `useLayoutEffect` as it already
+    did to `useEffect` — this effect has no cleanup to "undo" a first call
+    either way, so the existing idempotency requirement on every `onFire`
+    (this file's own header, "FIRING MOVED OUT OF RENDER") is unchanged,
+    not newly introduced by this switch. The STRIP effect below stays a
+    PASSIVE `useEffect` — removing the param from the URL has no visible
+    flicker to avoid, so there is nothing to gain from running it before
+    paint too.
+  */
+  useLayoutEffect(() => {
     if (handledRaw == null) return
     onFireRef.current(handledRaw)
   }, [handledRaw])
