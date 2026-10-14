@@ -209,8 +209,29 @@ function SettingsLayout() {
       // 데스크톱은 허브/상세가 항상 둘 다 보이므로 "돌아온다"는 개념이 없다
       // — 포커스를 건드리지 않는다.
       if (!isDesktopRef.current && hubPaneRef.current && lastDetailPathRef.current) {
-        const row = hubPaneRef.current.querySelector(`a[href="${lastDetailPathRef.current}"]`)
-        row?.focus()
+        const container = hubPaneRef.current
+        const path = lastDetailPathRef.current
+        // Should-fix(Low): `/settings/calendar/google-callback`처럼 허브에
+        // 행이 없는 하위 경로(콜백 착지점 등)에서 돌아오면 정확히 일치하는
+        // `href`가 없어 포커스가 아무 데도 안 갔다 — 가장 긴 접두사로
+        // 일치하는 행(예: 그 경로의 부모인 `/settings/calendar`)을 찾는다.
+        let bestLink = null
+        let bestHrefLength = -1
+        for (const link of container.querySelectorAll('a[href]')) {
+          const href = link.getAttribute('href')
+          if (!href) continue
+          const isMatch = path === href || path.startsWith(`${href}/`)
+          if (isMatch && href.length > bestHrefLength) {
+            bestLink = link
+            bestHrefLength = href.length
+          }
+        }
+        // 그래도 못 찾으면(이론상으론 항상 찾아야 하지만, 허브 행 구성이
+        // 바뀌어 어떤 경로도 부모가 없는 경우를 대비) 허브 첫 행, 그마저
+        // 없으면 허브 컨테이너 자체(아래 렌더에서 tabIndex={-1})로 보낸다 —
+        // 포커스가 완전히 사라지는 것보다 낫다.
+        const target = bestLink ?? container.querySelector('a[href]') ?? container
+        target?.focus()
       }
       return undefined
     }
@@ -336,9 +357,13 @@ function SettingsLayout() {
             2단은 둘 다 항상 상호작용 가능해야 하므로 해당 없음.
 
             `ref={hubPaneRef}` — 허브로 돌아올 때 방금 보던 항목의 행을
-            찾아 포커스하는 효과(위)가 쓰는 검색 범위다. */}
+            찾아 포커스하는 효과(위)가 쓰는 검색 범위다. `tabIndex={-1}`은
+            그 효과의 마지막 안전망(일치하는 행도 첫 행도 못 찾을 때)이
+            이 컨테이너 자체를 포커스할 수 있게 한다 — tabIndex 없는 평범한
+            div는 `.focus()`를 호출해도 아무 반응이 없다. */}
         <div
           ref={hubPaneRef}
+          tabIndex={-1}
           inert={mobileDetailOpen || undefined}
           style={isDesktop ? { width: atHub ? '100%' : sidebarWidth } : undefined}
           className={[
