@@ -89,9 +89,19 @@ function PushNotificationSectionApp() {
   // 페이지를 열 때 권한이 이미 허용돼 있고 기기에 구독이 남아 있으면 서버에
   // 다시 올려 둔다(ADR 결정 ④ — 재설치·브라우저 키 회전으로 서버가 들고 있는
   // endpoint가 끊겼을 수 있다). endpoint가 UNIQUE라 서버는 이것을 upsert로
-  // 받으므로(settingsApi.createPushSubscription 헤더 참조), "이미 등록돼
-  // 있나"를 먼저 묻지 않고 매번 다시 POST해도 안전하다. 실패하면 조용히
-  // 넘어간다 — 사용자가 토글을 다시 누르면 handleToggle이 같은 경로를 밟는다.
+  // 받으므로(settingsApi.createPushSubscription 헤더 참조, BE PR #93
+  // PushController.subscribe "구독 등록(upsert by endpoint)"), "이미 등록돼
+  // 있나"를 먼저 묻지 않고 매번 다시 POST해도 안전하다.
+  //
+  // 이 POST가 실패하면 `deviceSubscribed`를 false로 되돌려 「이 기기에서
+  // 알림 받기」 버튼을 다시 보여준다 — 더 이상 "조용히 넘어가"지 않는다.
+  // 예전엔 여기서 실패를 삼키고 "사용자가 토글을 다시 누르면 handleToggle이
+  // 같은 경로를 밟는다"고 가정했지만, ensureDeviceSubscription은 브라우저
+  // 구독이 이미 있으면 그 사실만 보고 곧바로 true를 반환했다 — 즉 이 재동기화
+  // POST가 한 번 실패하면 그 기기는 서버에 영구히 등록되지 않으면서도 화면은
+  // 정상처럼 보였다. 아래에서 deviceSubscribed를 false로 되돌리는 것 자체는
+  // 그 가정을 깨지 않지만, 재발급의 실제 재시도는 ensureDeviceSubscription
+  // 쪽에서 이 플래그를 보고 다시 POST하는 것으로 고쳤다(그 함수 헤더 참조).
   useEffect(() => {
     if (!pushReady) return
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
@@ -99,9 +109,13 @@ function PushNotificationSectionApp() {
     getExistingPushSubscription()
       .then((sub) => {
         if (cancelled) return null
-        setDeviceSubscribed(Boolean(sub))
-        if (!sub) return null
-        return createPushSubscription(subscriptionToPayload(sub))
+        if (!sub) {
+          setDeviceSubscribed(false)
+          return null
+        }
+        return createPushSubscription(subscriptionToPayload(sub)).then(() => {
+          if (!cancelled) setDeviceSubscribed(true)
+        })
       })
       .catch(() => {
         if (!cancelled) setDeviceSubscribed(false)
@@ -125,8 +139,18 @@ function PushNotificationSectionApp() {
   const settings = { ...DEFAULT_SETTINGS, ...settingsQuery.data }
 
   /*
-    기기 구독 만들기 — 기기에 구독이 없을 때만 선행 단계(권한 요청 →
-    PushManager.subscribe → POST)를 밟는다. 있으면 곧바로 true.
+    기기 구독 만들기 — 기기에 구독이 **서버에 등록된 것으로 확인됐을 때만**
+    곧바로 true를 돌려준다(`deviceSubscribed === true`). 브라우저에 구독
+    객체가 남아 있는 것과 서버가 그 endpoint를 실제로 들고 있는 것은 별개다
+    — 위 재동기화 effect의 POST가 실패하면 `deviceSubscribed`가 false로
+    남는데, 그 상태에서도 기기엔 여전히 구독이 "있다"(existing truthy). 전에는
+    이 경우를 곧바로 true로 취급해 POST를 다시 시도하지 않았다 — 재동기화가
+    한 번이라도 실패하면 그 기기는 서버에 영영 등록되지 않으면서 화면은
+    정상처럼 보이는 조용한 버그였다. 그래서 `existing`이 있어도
+    `deviceSubscribed !== true`면 같은 구독 객체로 POST를 다시 시도한다
+    (서버 endpoint는 UNIQUE라 upsert — settingsApi.createPushSubscription
+    헤더, BE PR #93 PushController.subscribe 참조). 그 외(구독 자체가 없음)엔
+    권한 요청 → PushManager.subscribe → POST 선행 단계를 새로 밟는다.
     `Notification.requestPermission()`은 반드시 **클릭 핸들러 안에서**
     불러야 한다(사용자 제스처 요구사항, ADR 작업 지시서 명시) — await를
     먼저 거친 뒤 호출해도 같은 동기 호출 체인(마이크로태스크) 안이라 크롬
@@ -140,8 +164,19 @@ function PushNotificationSectionApp() {
     setSubscribeError(false)
     const existing = await getExistingPushSubscription().catch(() => null)
     if (existing) {
-      setDeviceSubscribed(true)
-      return true
+      if (deviceSubscribed === true) return true
+      setSubscribing(true)
+      try {
+        await createPushSubscription(subscriptionToPayload(existing))
+        setDeviceSubscribed(true)
+        return true
+      } catch {
+        setDeviceSubscribed(false)
+        setSubscribeError(true)
+        return false
+      } finally {
+        setSubscribing(false)
+      }
     }
     if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
       setPermissionBlocked(true)
