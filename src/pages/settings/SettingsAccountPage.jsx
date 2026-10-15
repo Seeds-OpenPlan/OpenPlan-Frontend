@@ -8,6 +8,7 @@ import { LoadingSkeleton } from '../../components/common/LoadingSkeleton'
 import { ErrorState } from '../../components/common/ErrorState'
 import { OvlAccountDeactivate } from '../../components/auth/OvlAccountDeactivate'
 import { OvlAccountReactivate } from '../../components/auth/OvlAccountReactivate'
+import { PasswordChangeDialog } from '../../components/settings/PasswordChangeDialog'
 import { deriveReactivationInfo } from '../../features/auth/reactivationInfo'
 import { useLogout } from '../../features/auth/useAuth'
 import { suppressPendingSelfBack } from '../../utils/overlayHistory'
@@ -23,17 +24,22 @@ import { toast } from '../../hooks/useToasts'
 const FIELD =
   'w-full rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring'
 
-function formatDateKO(iso) {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return String(iso)
-  return d.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
-}
-
 function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', onClose, onConfirm, submitting }) {
   // D1: 부모가 열릴 때만 새로 마운트(fresh per open) — 마운트 시점에 고정.
   const isDesktop = useLockedIsDesktop()
   const titleId = useId()
   const confirmRef = useRef(null)
+
+  // submitting 중엔 닫을 수 없다(Thomas 리뷰 S2, PasswordChangeDialog의 B1/B2와
+  // 같은 이유) — handleLogout처럼 "확인" 클릭 뒤에도 다이얼로그를 onSettled까지
+  // 열어 두는 호출부라면, 그 사이 취소로 닫을 수 있게 두면 사용자가 "취소했다"고
+  // 믿은 뒤에 이미 날아간 요청이 뒤늦게 성공해 동의 없이 다음 동작(로그아웃
+  // 이동 등)이 실행된다. onClose 자체를 undefined로 끊는 이유(래퍼로 삼키지
+  // 않는 이유)는 PasswordChangeDialog.jsx 헤더의 "닫기를 막는 방식도..." 단락
+  // 참고 — useOverlayBackButton.js가 onClose의 유무 자체로 "닫을 수 없는
+  // 오버레이"를 판정하기 때문에, 내부에서 no-op하는 함수를 넘기면 하드웨어
+  // 뒤로 가기가 보호 엔트리를 되돌려 놓지 못한다.
+  const closeDialog = submitting ? undefined : onClose
 
   const content = (
     <div className="flex flex-col gap-4">
@@ -42,7 +48,7 @@ function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', 
       </h2>
       <p className="text-body text-text-muted">{body}</p>
       <div className="flex justify-end gap-2">
-        <Button variant="secondary" size="md" onClick={onClose}>
+        <Button variant="secondary" size="md" onClick={closeDialog} disabled={submitting}>
           취소
         </Button>
         <Button ref={confirmRef} variant={confirmVariant} size="md" loading={submitting} onClick={onConfirm}>
@@ -54,13 +60,13 @@ function ConfirmDialog({ title, body, confirmLabel, confirmVariant = 'primary', 
 
   if (isDesktop) {
     return (
-      <Dialog open onClose={onClose} labelledById={titleId} initialFocusRef={confirmRef}>
+      <Dialog open onClose={closeDialog} labelledById={titleId} initialFocusRef={confirmRef}>
         {content}
       </Dialog>
     )
   }
   return (
-    <BottomSheet open onClose={onClose} labelledById={titleId} initialFocusRef={confirmRef}>
+    <BottomSheet open onClose={closeDialog} labelledById={titleId} initialFocusRef={confirmRef}>
       {content}
     </BottomSheet>
   )
@@ -121,13 +127,23 @@ function NameEditDialog({ currentName, onClose, onSubmit, submitting }) {
   재활성화 진입") + 오너 리뷰 3차(item 5) 로그아웃·이름 변경. [가정-확장]
   account 리소스 (settingsApi.js 헤더).
 
-  "비밀번호 변경"(로그인 상태에서 현재+새 비밀번호로 바꾸는 ACCT-02)은 여전히
-  DISABLED — ST-F1-14가 만든 건 AUTH-06(이메일로 받은 링크로 재설정)이라 다른
-  스토리다. 로그인이 안 될 때의 "비밀번호를 잊으셨나요?"는 이제
-  `/reset-password`로 실제로 존재하니, 이 화면의 비활성 버튼은 그 대체 경로가
-  아니라 ACCT-02 자체가 아직 없다는 뜻이다. disabledReason 문구는 오너 리뷰
-  2026-09-05로 제거했다("별도 스토리에서 지원 예정"이 오해 소지가 있다는
-  지적) — 버튼은 여전히 disabled, 이유 캡션만 없앤 것.
+  "비밀번호 변경"(로그인 상태에서 현재+새 비밀번호로 바꾸는 ACCT-02)은 이제
+  실제로 동작한다 — PATCH /users/me/password(계약 openapi.yaml ~362행,
+  PasswordChangeService.java). AUTH-06(이메일로 받은 링크로 재설정,
+  `/reset-password`)과는 다른 경로다 — 이쪽은 로그인된 상태에서 본인이
+  현재 비밀번호로 재확인한다. 버튼은 로그아웃·계정 비활성화와 같은 줄(오너
+  지시 2026-10-13 — "위험도 오름차순" 순서, 아래 그 줄의 코멘트 참조)에
+  있다. 소셜 가입 계정(loginType===SOCIAL)은 비밀번호 자체가 없어 그 줄에
+  버튼을 넣지 않고 줄 아래 캡션으로 안내한다 — 서버가 "현재 비밀번호
+  불일치"와 "비밀번호 없음"을 같은 코드(E-USER-001)로 합쳐 응답하므로
+  (PasswordChangeService.java javadoc — 계정 존재 비노출), 화면이 먼저
+  걸러 주지 않으면 소셜 계정 사용자는 매번 "비밀번호가 틀렸다"는 오해를
+  사는 오류만 받는다.
+
+  폼·오류 분기는 components/settings/PasswordChangeDialog.jsx가 갖고 있다
+  (AppleConnectDialog와 같은 모양 — 다이얼로그가 자기 mutation을 직접 들고
+  인라인 오류를 스스로 그린다). 이 페이지는 성공 뒤의 다음 동작만 책임진다
+  — 아래 handlePasswordChangeSuccess 참조.
 
   "캘린더 연동"은 더 이상 여기 없다 — 오너 리뷰 3차(item 4)로 독립 하위 화면
   (SettingsCalendarPage)으로 다시 분리됐다(라운드 2에서 여기 섹션으로 합쳤던
@@ -154,6 +170,7 @@ function SettingsAccountPage() {
   const logoutMutation = useLogout()
   const [confirmAction, setConfirmAction] = useState(null) // 'deactivate' | 'reactivate' | 'logout' | null
   const [nameEditOpen, setNameEditOpen] = useState(false)
+  const [passwordChangeOpen, setPasswordChangeOpen] = useState(false)
 
   if (accountQuery.isLoading) return <LoadingSkeleton preset="card" />
   if (accountQuery.isError) return <ErrorState variant="section" onAction={() => accountQuery.refetch()} />
@@ -198,6 +215,40 @@ function SettingsAccountPage() {
     })
   }
 
+  // ACCT-02 성공 뒤의 다음 동작. PasswordChangeDialog의 PATCH 200 자체는
+  // "지금 쥔 access 토큰을 끊지 않는다"(settingsApi.changePassword 헤더 참조)
+  // — 서버가 즉시 폐기하는 것은 refresh 세션뿐이라, 아무것도 안 하면 사용자는
+  // 최대 30분 동안 "로그인된 것처럼" 화면에 남아 있다가, 다음 토큰 갱신
+  // 시점에야 영문 모를 타이밍으로 OVL-SESSION("세션이 만료되었습니다")을
+  // 보게 된다 — 방금 스스로 한 일과 연결되지 않는 문구다. 그래서 여기서
+  // 먼저 기존 로그아웃 경로(위 handleLogout과 같은 useLogout())로 나가,
+  // "비밀번호를 바꿨으니 다시 로그인하라"는 의도가 분명한 안내를 보여준다
+  // — 서버의 지연된 세션 정리를 기다리지 않고 화면이 선제적으로 정리한다.
+  //
+  // 다이얼로그를 여기서 바로 닫지 않는다(#81 리뷰 "늦은 suppress"와 같은 모양의
+  // 사고를 여기서도 피하기 위해 — overlayHistory.js 헤더의 "닫기와 이동의 경합"
+  // 참고). PasswordChangeDialog는 비밀번호 PATCH가 성공한 뒤에도 오버레이
+  // 스택에 그대로 남아 있고(아래 JSX의 `finalizing={logoutMutation.isPending}`이
+  // 그동안 Esc/배경 클릭/취소를 막는다), logoutMutation이 실제로 끝난 바로 그
+  // onSettled 안에서만 닫기·suppress·이동을 한 틱에 함께 한다 — handleLogout과
+  // 정확히 같은 모양. 만약 여기서 먼저 다이얼로그를 닫아 버리면, 오버레이
+  // 스택이 0이 되는 시점과 실제 navigate() 시점 사이에 로그아웃 네트워크
+  // 왕복(수십 ms보다 훨씬 긴) 전체가 끼어들어, 더블 rAF 재확인 창 안에 이미
+  // self-back()이 불려 버린 뒤에야 navigate()가 도착한다.
+  const handlePasswordChangeSuccess = () => {
+    logoutMutation.mutate(undefined, {
+      onSettled: () => {
+        setPasswordChangeOpen(false)
+        toast({ tone: 'success', message: '비밀번호를 변경했습니다. 새 비밀번호로 다시 로그인해 주세요' })
+        // ConfirmDialog를 닫는 것과 다른 pathname으로 이동하는 것이 같은 틱에
+        // 겹친다 — handleLogout과 동일한 이유(owner 리뷰 S2)로 navigate() 바로
+        // 앞에서 알려야 한다.
+        suppressPendingSelfBack()
+        navigate('/login', { replace: true })
+      },
+    })
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <h2 id="settings-detail-title" className="text-title font-semibold text-text">
@@ -218,17 +269,7 @@ function SettingsAccountPage() {
           <span className="text-caption text-text-muted">이메일</span>
           <span className="text-label text-text">{account.email}</span>
         </div>
-        <div className="flex flex-col gap-1">
-          <span className="text-caption text-text-muted">가입일</span>
-          <span className="text-label text-text">{formatDateKO(account.createdAt)}</span>
-        </div>
       </section>
-
-      <div>
-        <Button variant="secondary" size="md" disabled>
-          비밀번호 변경
-        </Button>
-      </div>
 
       <div className="h-px bg-border" />
 
@@ -257,13 +298,39 @@ function SettingsAccountPage() {
           </div>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" size="md" onClick={() => setConfirmAction('logout')}>
-            로그아웃
-          </Button>
-          <Button variant="danger" size="md" onClick={() => setConfirmAction('deactivate')}>
-            계정 비활성화
-          </Button>
+        // 오너 지시(2026-10-13): "비밀번호 변경"을 이 그룹 안으로 옮긴다 —
+        // 전엔 독립된 `<div>`에 혼자 있어 로그아웃·계정 비활성화와 다른
+        // 줄처럼 보였다. 순서는 위험도 오름차순(비밀번호 변경 → 로그아웃 →
+        // 계정 비활성화) — 파괴적인 동작(danger 스타일 유지)을 항상 맨
+        // 끝에 둔다. flex-wrap으로 좁은 화면에서는 줄바꿈되고(기존 관례,
+        // 변경 전에도 이 줄이 쓰던 것), 세 버튼이 넘치지 않는다.
+        //
+        // 이 그룹은 reactivationInfo가 없을 때(계정이 ACTIVE)만 렌더된다 —
+        // DEACTIVATED 분기(위 reactivationInfo 쪽)는 로그아웃·계정
+        // 비활성화 버튼도 원래 여기 없었으므로, 비밀번호 변경도 그 분기에선
+        // 보이지 않는 것이 일관적이다(복구 대기 중인 계정에서 비밀번호를
+        // 바꿀 이유가 없다).
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-2">
+            {account.loginType !== 'SOCIAL' && (
+              <Button variant="secondary" size="md" onClick={() => setPasswordChangeOpen(true)}>
+                비밀번호 변경
+              </Button>
+            )}
+            <Button variant="secondary" size="md" onClick={() => setConfirmAction('logout')}>
+              로그아웃
+            </Button>
+            <Button variant="danger" size="md" onClick={() => setConfirmAction('deactivate')}>
+              계정 비활성화
+            </Button>
+          </div>
+          {account.loginType === 'SOCIAL' && (
+            // 소셜 가입 계정엔 비밀번호 자체가 없다 — 위 페이지 헤더 참조.
+            // 버튼을 빼는 대신 그룹 아래에 캡션으로만 안내해, 세 버튼짜리
+            // 줄에서 버튼 하나가 문구로 치환돼 줄 높이가 들쑥날쑥해지지
+            // 않게 한다.
+            <p className="text-caption text-text-muted">소셜 로그인 계정은 비밀번호가 없습니다</p>
+          )}
         </div>
       )}
 
@@ -283,6 +350,16 @@ function SettingsAccountPage() {
               },
             )
           }
+        />
+      )}
+
+      {passwordChangeOpen && (
+        <PasswordChangeDialog
+          onClose={() => setPasswordChangeOpen(false)}
+          onSuccess={handlePasswordChangeSuccess}
+          // 비밀번호 PATCH가 끝난 뒤에도 logoutMutation이 정착할 때까지는
+          // 닫을 수 없게 한다 — 위 handlePasswordChangeSuccess 주석 참고.
+          finalizing={logoutMutation.isPending}
         />
       )}
 

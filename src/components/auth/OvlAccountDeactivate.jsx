@@ -24,6 +24,13 @@ export function OvlAccountDeactivate({ open, onClose, onConfirm, submitting = fa
 
   if (!open) return null
 
+  // submitting 중엔 닫을 수 없다(Thomas 리뷰 S2) — onClose 자체를 undefined로
+  // 끊는 이유는 PasswordChangeDialog.jsx 헤더 "닫기를 막는 방식도..." 참고
+  // (useOverlayBackButton.js가 onClose 유무로 "닫을 수 없는 오버레이"를
+  // 판정하므로, no-op 래퍼를 넘기면 하드웨어 뒤로 가기가 보호 엔트리를
+  // 되돌려 놓지 못한다).
+  const closeDialog = submitting ? undefined : onClose
+
   const content = (
     <div className="flex flex-col gap-4">
       <h2 id={titleId} className="text-title font-semibold text-text">
@@ -40,7 +47,7 @@ export function OvlAccountDeactivate({ open, onClose, onConfirm, submitting = fa
         </ul>
       </div>
       <div className="flex justify-end gap-2">
-        <Button variant="secondary" size="md" onClick={onClose}>
+        <Button variant="secondary" size="md" onClick={closeDialog} disabled={submitting}>
           취소
         </Button>
         <Button ref={confirmRef} variant="danger" size="md" loading={submitting} onClick={onConfirm}>
@@ -52,13 +59,13 @@ export function OvlAccountDeactivate({ open, onClose, onConfirm, submitting = fa
 
   if (isDesktop) {
     return (
-      <Dialog open onClose={onClose} labelledById={titleId} initialFocusRef={confirmRef}>
+      <Dialog open onClose={closeDialog} labelledById={titleId} initialFocusRef={confirmRef}>
         {content}
       </Dialog>
     )
   }
   return (
-    <BottomSheet open onClose={onClose} labelledById={titleId} initialFocusRef={confirmRef}>
+    <BottomSheet open onClose={closeDialog} labelledById={titleId} initialFocusRef={confirmRef}>
       {content}
     </BottomSheet>
   )

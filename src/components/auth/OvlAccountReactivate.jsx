@@ -38,6 +38,12 @@ export function OvlAccountReactivate({ open, onClose, onReactivate, submitting =
 
   const { daysRemaining, reactivationDeadlineDays, deletionEligible } = info
 
+  // submitting 중엔 닫을 수 없다(Thomas 리뷰 S2) — deletionEligible 분기는
+  // 서버 왕복(submitting)이 아예 없는 "닫기/회원가입" 선택지뿐이라 이 가드가
+  // 필요 없다(항상 onClose 그대로). onClose를 undefined로 끊는 이유는
+  // PasswordChangeDialog.jsx 헤더 "닫기를 막는 방식도..." 참고.
+  const closeDialog = submitting ? undefined : onClose
+
   const content = deletionEligible ? (
     // ACCT-06: 유예기간을 넘겨 데이터가 이미 삭제 처리된 상태 — 재활성화
     // 버튼 자체를 없애고 재가입 유도로만 이어간다(되돌릴 수 없는 상태를
@@ -79,7 +85,7 @@ export function OvlAccountReactivate({ open, onClose, onReactivate, submitting =
         지금 재활성화하면 기존 계획·프로젝트 데이터와 함께 바로 대시보드로 이동합니다.
       </p>
       <div className="flex justify-end gap-2">
-        <Button variant="secondary" size="md" onClick={onClose}>
+        <Button variant="secondary" size="md" onClick={closeDialog} disabled={submitting}>
           취소
         </Button>
         <Button ref={primaryRef} variant="primary" size="md" loading={submitting} onClick={onReactivate}>
@@ -91,13 +97,13 @@ export function OvlAccountReactivate({ open, onClose, onReactivate, submitting =
 
   if (isDesktop) {
     return (
-      <Dialog open onClose={onClose} labelledById={titleId} initialFocusRef={primaryRef}>
+      <Dialog open onClose={closeDialog} labelledById={titleId} initialFocusRef={primaryRef}>
         {content}
       </Dialog>
     )
   }
   return (
-    <BottomSheet open onClose={onClose} labelledById={titleId} initialFocusRef={primaryRef}>
+    <BottomSheet open onClose={closeDialog} labelledById={titleId} initialFocusRef={primaryRef}>
       {content}
     </BottomSheet>
   )
