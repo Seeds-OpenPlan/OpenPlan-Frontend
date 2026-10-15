@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Toggle } from '../common/Toggle'
 import { Button } from '../common/Button'
 import { LoadingSkeleton } from '../common/LoadingSkeleton'
@@ -79,6 +79,33 @@ function PushNotificationSectionApp() {
   // 아래에 「이 기기에서 알림 받기」를 따로 보여준다.
   const [deviceSubscribed, setDeviceSubscribed] = useState(null)
 
+  // Guards every `setState` call inside `ensureDeviceSubscription` that runs
+  // after an `await` — that function can resolve well after the user has
+  // navigated away (slow permission prompt, slow network roundtrip), and
+  // without this a setState on an already-unmounted instance is wasted work
+  // at best. Plain `useRef` (not state) because this is read inside async
+  // callbacks, never rendered.
+  const isMountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
+
+  // The mount-time resync effect's in-flight subscribe POST, if one is
+  // currently running — `null` otherwise. `ensureDeviceSubscription` reads
+  // this (below) so a toggle/button click that happens *while* resync is
+  // still in flight reuses that same request instead of firing a second POST
+  // for the same endpoint. Without this dedup, two concurrent POSTs for one
+  // subscription could race: whichever one's callback runs last wins the
+  // final `deviceSubscribed`/`subscribeError` state — e.g. the resync POST
+  // could succeed and clear the error, then the toggle's own (redundant)
+  // POST fails afterward and re-shows "알림을 켜지 못했습니다" even though
+  // the device is, in fact, registered. Resolves to whether the device ended
+  // up confirmed-registered (`true`) or not (`false`) — this promise itself
+  // never rejects, so callers can always safely `await` it.
+  const resyncPromiseRef = useRef(null)
+
   const publicKey = vapidQuery.data?.publicKey ?? null
   // 조회 실패(vapidQuery.isError)와 "서버가 아직 키를 안 올렸다"(publicKey:
   // null, ADR 결정 ⑤) 둘 다 "지금은 못 쓴다"로 같이 묶는다 — 구독을 만들 키가
@@ -102,24 +129,44 @@ function PushNotificationSectionApp() {
   // 정상처럼 보였다. 아래에서 deviceSubscribed를 false로 되돌리는 것 자체는
   // 그 가정을 깨지 않지만, 재발급의 실제 재시도는 ensureDeviceSubscription
   // 쪽에서 이 플래그를 보고 다시 POST하는 것으로 고쳤다(그 함수 헤더 참조).
+  //
+  // 이 POST를 `resyncPromiseRef`에 저장해 두는 이유(Thomas 리뷰 SHOULD-FIX,
+  // 2026-10-15) — 토글/버튼 클릭이 이 POST가 아직 끝나기 전에 들어오면
+  // ensureDeviceSubscription이 같은 구독으로 **별도** POST를 또 보냈다. 두
+  // 요청이 경합하면 나중에 끝나는 쪽이 최종 상태를 덮어써, 등록은 실제로
+  // 성공했는데도 먼저 실패한 쪽이 남긴 오류 배너가 그대로 남는 사고가 났다
+  // (resyncPromiseRef 헤더·ensureDeviceSubscription 헤더 참조). 성공 시
+  // `subscribeError`도 지우는 이유도 같다 — 이 재동기화가 성공했다는 것은
+  // 그 전에 어떤 시도가 남겨 둔 오류 배너든 더 이상 유효하지 않다는 뜻이다.
   useEffect(() => {
     if (!pushReady) return
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
     let cancelled = false
-    getExistingPushSubscription()
+    const resyncPromise = getExistingPushSubscription()
       .then((sub) => {
-        if (cancelled) return null
+        if (cancelled) return false
         if (!sub) {
           setDeviceSubscribed(false)
-          return null
+          return false
         }
         return createPushSubscription(subscriptionToPayload(sub)).then(() => {
-          if (!cancelled) setDeviceSubscribed(true)
+          if (cancelled) return false
+          setDeviceSubscribed(true)
+          setSubscribeError(false)
+          return true
         })
       })
       .catch(() => {
         if (!cancelled) setDeviceSubscribed(false)
+        return false
       })
+      .finally(() => {
+        // Only clear the ref if it's still pointing at *this* promise — a
+        // later re-run of this effect (pushReady toggling) could otherwise
+        // have already replaced it with a newer one.
+        if (resyncPromiseRef.current === resyncPromise) resyncPromiseRef.current = null
+      })
+    resyncPromiseRef.current = resyncPromise
     return () => {
       cancelled = true
     }
@@ -159,46 +206,67 @@ function PushNotificationSectionApp() {
     — 그래서 이 함수 전체가 짧은 프라미스 체인(serviceWorker.ready 등) 하나로
     끝나도록 유지한다. 부르는 곳은 「이 기기에서 알림 받기」 버튼과 토글
     켜기 두 곳뿐이고, 둘 다 클릭 핸들러다.
+
+    재동기화와의 경합(Thomas 리뷰 SHOULD-FIX, 2026-10-15) — `resyncPromiseRef`에
+    위 재동기화 effect의 POST가 아직 진행 중이면, 이 함수는 새 POST를 만들지
+    않고 그 프라미스 하나를 그대로 기다린다(위 effect 헤더 참조). 등록이
+    확인되면(true) 곧바로 끝내고, 아니면(구독 자체가 없었거나 POST가
+    실패했다) 아래 기존 분기로 그대로 흘러간다 — 재동기화가 없었을 때와 같은
+    경로다.
+
+    언마운트 가드 — `await` 뒤의 모든 setState를 `isMountedRef.current`로
+    감싼다(위 isMountedRef 헤더 참조). 화면을 벗어난 뒤에도 권한 프롬프트나
+    네트워크 왕복이 뒤늦게 끝나 setState가 불리는 경로를 막는다. `return`
+    값 자체는 가드하지 않는다 — 호출부(handleToggle)의 분기 로직은 컴포넌트
+    생존 여부와 무관하게 정확해야 한다.
   */
   async function ensureDeviceSubscription() {
     setSubscribeError(false)
+    if (resyncPromiseRef.current) {
+      const resyncRegistered = await resyncPromiseRef.current
+      if (resyncRegistered) return true
+      // Resync found no subscription to register, or its POST failed — fall
+      // through to the checks below exactly as if no resync had been running.
+    }
     const existing = await getExistingPushSubscription().catch(() => null)
     if (existing) {
       if (deviceSubscribed === true) return true
-      setSubscribing(true)
+      if (isMountedRef.current) setSubscribing(true)
       try {
         await createPushSubscription(subscriptionToPayload(existing))
-        setDeviceSubscribed(true)
+        if (isMountedRef.current) setDeviceSubscribed(true)
         return true
       } catch {
-        setDeviceSubscribed(false)
-        setSubscribeError(true)
+        if (isMountedRef.current) {
+          setDeviceSubscribed(false)
+          setSubscribeError(true)
+        }
         return false
       } finally {
-        setSubscribing(false)
+        if (isMountedRef.current) setSubscribing(false)
       }
     }
     if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
-      setPermissionBlocked(true)
+      if (isMountedRef.current) setPermissionBlocked(true)
       return false
     }
-    setSubscribing(true)
+    if (isMountedRef.current) setSubscribing(true)
     try {
       const permission = await Notification.requestPermission()
       if (permission !== 'granted') {
-        setPermissionBlocked(true)
+        if (isMountedRef.current) setPermissionBlocked(true)
         return false
       }
-      setPermissionBlocked(false)
+      if (isMountedRef.current) setPermissionBlocked(false)
       const subscription = await subscribeToPush(publicKey)
       await createPushSubscription(subscriptionToPayload(subscription))
-      setDeviceSubscribed(true)
+      if (isMountedRef.current) setDeviceSubscribed(true)
       return true
     } catch {
-      setSubscribeError(true)
+      if (isMountedRef.current) setSubscribeError(true)
       return false
     } finally {
-      setSubscribing(false)
+      if (isMountedRef.current) setSubscribing(false)
     }
   }
 
