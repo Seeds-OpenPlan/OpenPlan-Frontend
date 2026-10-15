@@ -25,9 +25,27 @@ const KICKOFF_TITLE_ID = 'tutorial-kickoff-title'
 const CLEANUP_TITLE_ID = 'tutorial-cleanup-title'
 const OFF_ROUTE_TITLE_ID = 'tutorial-off-route-title'
 const RESUME_TITLE_ID = 'tutorial-resume-title'
-// sessionStorage key — gates the RESUME prompt to "once per tab session"
-// (see this file's own header, "RESUME PROMPT").
-const RESUME_ASKED_KEY = 'tutorial-resume-asked'
+// sessionStorage key PREFIX — gates the RESUME prompt to "once per tab
+// session" (see this file's own header, "RESUME PROMPT"). Scoped PER USER
+// (AI-review SHOULD-FIX, 2026-10 — same `PREFIX:userId` convention
+// tutorialProgressStore.js's own `storageKey`/`targetsStorageKey` already
+// use for the SAME reason): a single global key meant a session that saw
+// user A answer this prompt, then logged out and into user B in the SAME
+// tab, never asked B at all — B's own stored step cursor just silently
+// resumed. `resumeAskedKey` below builds the actual per-user key; nothing
+// in this file reads/writes `RESUME_ASKED_KEY_PREFIX` directly.
+const RESUME_ASKED_KEY_PREFIX = 'openplan.tutorial.resumeAsked'
+// Same shape as tutorialProgressStore.js's own (module-private)
+// `storageKey`/`targetsStorageKey` — not imported from there because this
+// is sessionStorage for an UNRELATED concern (a one-time prompt, not the
+// step cursor itself), not that module's own store; no shared helper to
+// reuse, so this mirrors the convention locally instead of inventing a new
+// one. `userId` is REQUIRED (not defaulted) — see this function's own call
+// sites below for why a missing userId defers the decision entirely rather
+// than falling back to an unscoped key.
+function resumeAskedKey(userId) {
+  return `${RESUME_ASKED_KEY_PREFIX}:${userId}`
+}
 // 5 main steps (CREATE_PROJECT..DELETE_SAMPLE) — COMPLETE is NOT counted
 // (see tutorialSteps.js's own header on why). The label itself carries no
 // denominator ("2-1", not "2-1/5" — owner's own later feedback, 2026-10,
@@ -214,10 +232,13 @@ const MAIN_STEP_LABELS = ['1', '2', '3', '4', '5']
   cursor only — `tutorialCompleted` never changes, this is not an exit). The
   `resumePromptState` render-time adjustment below (same "adjust state during
   render" idiom this file already uses for `scheduleBaselineForKey`) fires
-  this decision exactly once, the FIRST render `progress` is available —
-  gated additionally by `sessionStorage` (`RESUME_ASKED_KEY`) so a user who
-  refreshes SEVERAL times in the same tab session is asked only the first
-  time, per the owner's own "탭/경로 변경마다 아님" instruction. Every effect
+  this decision exactly once, the FIRST render BOTH `progress` and `userId`
+  are available — gated additionally by `sessionStorage` (a PER-USER key,
+  `resumeAskedKey(userId)` — AI-review SHOULD-FIX, 2026-10: a global key
+  meant answering this prompt as user A, then logging out and into user B
+  in the SAME tab, never asked B at all) so a user who refreshes SEVERAL
+  times in the same tab session is asked only the first time, per the
+  owner's own "탭/경로 변경마다 아님" instruction. Every effect
   below that could navigate or arm the off-route ask is itself gated on
   `resumePromptState === 'resolved'` — otherwise a mid-progress PLACE_TASK
   resume could auto-navigate or ask about a route mismatch before the user
@@ -323,10 +344,15 @@ export function TutorialOverlay() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const sessionQuery = useSession()
+  // `undefined` until the session query resolves — every reader below
+  // (tutorialProgressStore.js's own per-user storage, and `resumeAskedKey`
+  // above) already treats a missing userId as "nothing to key by yet"
+  // rather than guessing or falling back to an unscoped key.
+  const userId = sessionQuery.data?.userId
   const progressQuery = useOnboardingProgress()
   const updateProgress = useUpdateOnboardingProgress()
-  const [tutorialStep, setTutorialStep, resetTutorialStep] = useTutorialStep(sessionQuery.data?.userId)
-  const [targets, patchTargets] = useTutorialTargets(sessionQuery.data?.userId)
+  const [tutorialStep, setTutorialStep, resetTutorialStep] = useTutorialStep(userId)
+  const [targets, patchTargets] = useTutorialTargets(userId)
   const navLocation = useLocation()
   const [searchParams] = useSearchParams()
   const unplacedPanelOpen = useUnplacedPanelOpen()
@@ -516,24 +542,39 @@ export function TutorialOverlay() {
   /*
     RESUME PROMPT decision — render-time adjustment (same idiom as
     `scheduleBaselineForKey` above), fires EXACTLY ONCE: the first render
-    `progress` is truthy. Before that, `resumePromptState` stays `'pending'`
-    and nothing below it (the off-route/auto-navigate effect, the render
-    branch) acts on `activeStep` yet — see this file's own header for why
-    gating those on `'resolved'` matters.
+    BOTH `progress` is truthy AND `userId` has resolved. Before that,
+    `resumePromptState` stays `'pending'` and nothing below it (the
+    off-route/auto-navigate effect, the render branch) acts on `activeStep`
+    yet — see this file's own header for why gating those on `'resolved'`
+    matters. Requiring `userId` too (AI-review SHOULD-FIX, 2026-10) is NOT
+    merely "be safe while loading" — `resumeAskedKey` below needs a REAL
+    userId to build a key scoped to the right user; deciding one render
+    early off a still-`undefined` userId would either throw away the
+    per-user scoping this fix exists for (falling back to an unscoped key)
+    or read/write the WRONG user's key if `userId` resolves to someone
+    else a render later (a shared device, or a fast login after logout in
+    the SAME tab). `progress` alone does not already imply `userId` is
+    ready — the two are separate queries (`useOnboardingProgress`/
+    `useSession`) with no dependency between them.
   */
-  if (resumePromptState === 'pending' && progress) {
+  if (resumePromptState === 'pending' && progress && userId) {
     const midProgress = running && stepIndex >= 0
-    const alreadyAskedThisSession = sessionStorage.getItem(RESUME_ASKED_KEY) === '1'
+    const alreadyAskedThisSession = sessionStorage.getItem(resumeAskedKey(userId)) === '1'
     setResumePromptState(midProgress && !alreadyAskedThisSession ? 'open' : 'resolved')
   }
   // Marks the session as "asked" the INSTANT the decision above leaves
   // `'pending'` (whether that decision was "show it" or "nothing to show") —
   // a plain side effect (writing to sessionStorage), so it belongs in an
-  // effect, not the render-time adjustment above.
+  // effect, not the render-time adjustment above. `resumePromptState` only
+  // ever LEAVES `'pending'` once `userId` was already truthy (the
+  // render-time decision above requires it), so the `!userId` guard here
+  // is defensive, not load-bearing — kept anyway so this effect can never
+  // write the unscoped `RESUME_ASKED_KEY_PREFIX` itself if some FUTURE
+  // change ever let `resumePromptState` move without `userId`.
   useEffect(() => {
-    if (resumePromptState === 'pending') return
-    sessionStorage.setItem(RESUME_ASKED_KEY, '1')
-  }, [resumePromptState])
+    if (resumePromptState === 'pending' || !userId) return
+    sessionStorage.setItem(resumeAskedKey(userId), '1')
+  }, [resumePromptState, userId])
 
   // Combined OFF-ROUTE + the one-time PLACE_TASK auto-navigate — see this
   // file's own header ("RING-BASED REDESIGN"/"OFF-ROUTE PROMPT") for why
