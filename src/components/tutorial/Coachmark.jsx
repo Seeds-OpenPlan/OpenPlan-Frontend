@@ -1,9 +1,67 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '../common/Button'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
+import { CheckCircleIcon } from '../common/statusIcons'
+import { useIsDesktop, useMediaQuery } from '../../hooks/useMediaQuery'
 import { onboardingCopy } from '../../features/onboarding/onboardingCopy'
 import { getOverlayStackSnapshot, subscribeOverlayStack } from '../../utils/overlayStack'
+
+/*
+  DELETE_SAMPLE's own `body` (tutorialSteps.js) is a DATA object
+  (`{ checklist, footer }`), not a plain string like every other step's —
+  that file stays a plain `.js` module (no JSX, so no Fast-Refresh
+  component-boundary rule to satisfy) and hands the shape to THIS component
+  to actually render, since this file already owns every other `body`
+  render site below. `renderBody` is the single seam both of those sites
+  (the anchored panel, and the modal-open top strip) call through, so
+  neither has to duplicate the "is this a checklist or a plain string"
+  branch.
+*/
+function renderBody(body) {
+  if (body && typeof body === 'object' && Array.isArray(body.checklist)) {
+    return <TutorialChecklist checklist={body.checklist} footer={body.footer} />
+  }
+  return body
+}
+
+/*
+  Progress checklist (owner report, 2026-10: DELETE_SAMPLE's old static copy
+  never said both items had to clear, claimed a highlight it couldn't always
+  deliver, and talked about "a block" singular for a task that can be split
+  across several — see tutorialSteps.js's own header for the full reasoning;
+  this component only renders the DATA it hands back).
+
+  Same checklist SHAPE as PasswordChecklist.jsx (not reused directly — that
+  one is password-policy-specific — but deliberately identical): an icon
+  that changes SHAPE, not just color, between done/pending (NFR-017), plus
+  `sr-only` text carrying "정리됨"/"남음" so a screen reader gets the SAME
+  information a sighted user reads off the icon shape alone.
+*/
+function TutorialChecklist({ checklist, footer }) {
+  return (
+    <>
+      <ul role="status" aria-live="polite" className="flex flex-col gap-1">
+        {checklist.map((item, i) => (
+          <li key={i} className="flex items-center gap-1.5">
+            {item.done ? (
+              <CheckCircleIcon size={14} className="shrink-0" />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-current"
+              />
+            )}
+            <span>
+              {item.label}
+              <span className="sr-only">{item.done ? ' (정리됨)' : ' (남음)'}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {footer && <p className="mt-1">{footer}</p>}
+    </>
+  )
+}
 
 // Re-measured on a light interval rather than a per-frame rAF loop — this
 // overlay only exists during the (rare, one-time) tutorial run, and its
@@ -21,8 +79,10 @@ function isRenderedRect(rect) {
   return rect.width > 0 || rect.height > 0
 }
 
+const NOT_FOUND = { rect: null, insideModal: false }
+
 function useTargetRect(targetId) {
-  const [rect, setRect] = useState(null)
+  const [found, setFound] = useState(NOT_FOUND)
 
   useEffect(() => {
     if (!targetId) return undefined
@@ -43,15 +103,26 @@ function useTargetRect(targetId) {
         way, with no per-step special-casing here.
       */
       const candidates = document.querySelectorAll(`[data-tut-id="${targetId}"]`)
-      let found = null
-      for (const el of candidates) {
-        const r = el.getBoundingClientRect()
+      let rect = null
+      let el = null
+      for (const candidate of candidates) {
+        const r = candidate.getBoundingClientRect()
         if (isRenderedRect(r)) {
-          found = r
+          rect = r
+          el = candidate
           break
         }
       }
-      setRect(found)
+      // `insideModal` (owner report #78, 2026-10: 3-2단계 — 미배치 패널 안의
+      // 태스크 카드) — whether the FOUND element lives inside a CURRENTLY
+      // OPEN Dialog/BottomSheet (both render `role="dialog"` on their own
+      // container, see those files' own markup). This is NOT the same
+      // question as `modalOpen` below (any overlay open ANYWHERE) — a
+      // target that is ITSELF part of the open overlay (the mobile
+      // unplaced-panel's own BottomSheet) must still get its ring, while a
+      // target merely COVERED by an UNRELATED modal (TUT-03's own button,
+      // now hidden under its own just-opened create form) must not.
+      setFound({ rect, insideModal: rect ? Boolean(el.closest('[role="dialog"]')) : false })
     }
     // First measurement deferred to a rAF callback (not called synchronously
     // in the effect body itself) — setState belongs in a callback the effect
@@ -71,11 +142,11 @@ function useTargetRect(targetId) {
     }
   }, [targetId])
 
-  // Mask stale rect from a PREVIOUS targetId the instant this one goes null
+  // Mask stale result from a PREVIOUS targetId the instant this one goes null
   // (e.g. a step with no anchor) — the effect above still owns clearing it
   // asynchronously on the next targetId change, this is just the synchronous
   // read-time guard so a consumer never briefly sees the wrong element's rect.
-  return targetId ? rect : null
+  return targetId ? found : NOT_FOUND
 }
 
 // Panel never grows wider than this, but on a narrow phone (e.g. a 320px-wide
@@ -134,18 +205,74 @@ function useViewportWidth() {
   interacting with the real page (click the highlighted button, drag a task)
   while this floats on top — only the panel's own buttons capture focus/clicks.
 
-  MODAL-AWARE (owner report, production/운영): this component's own z-[70]/
-  z-[71] sit ABOVE Dialog/BottomSheet's z-50 — exactly the stacking a
-  tooltip-style coachmark needs so its ring can sit over a real page button,
-  but it also meant the ProjectCreateForm/TaskCreateForm modals TUT-03/04
-  themselves tell the user to open rendered UNDER this panel, with the ring
-  and instructions floating uselessly on top of the user's own form. Hidden
-  (not unmounted — see the render guard below) for as long as
-  utils/overlayStack.js reports ANY Dialog/BottomSheet open, reappearing on
-  its own the instant the last one closes.
+  MODAL-AWARE, THIRD SHAPE (owner report #78, 2026-10 — PARTIALLY superseded
+  by the ring-based redesign below, same report, see that paragraph): this
+  component's own z-[70]/z-[71] sit ABOVE Dialog/BottomSheet's z-50 —
+  exactly the stacking a tooltip-style coachmark needs so its ring can sit
+  over a real page button — which could ALSO mean a modal the USER opened
+  by clicking the very button being pointed at (e.g. step 1's "+ 새
+  프로젝트" → ProjectCreateForm) renders UNDER this panel, with the ring and
+  instructions floating uselessly on top of that form. An earlier #74 fix
+  hid this component ENTIRELY whenever ANY modal was open — too broad once
+  "find a real control" anchors can themselves live INSIDE an open modal
+  (see `insideModal` below) — fixed to check THAT specifically, not just
+  "is anything open".
+
+  A THIRD render shape, not a toggle between the two above: a slim,
+  INFORMATION-ONLY strip pinned to the very top of the viewport, ABOVE the
+  modal (z-[80], still higher than Dialog/BottomSheet's z-50), shown
+  whenever `modalOpen && !insideModal` — see the render branch below for the
+  full reasoning (sizing, pointer-events, focus/ARIA trade-offs). The
+  anchored/un-anchored shapes above are UNCHANGED and resume the instant
+  that condition goes false (same instance — see the render guard below,
+  this component is never unmounted while a modal opens/closes, so its own
+  internal state — `useTargetRect`'s poll, the focus-steal effect — keeps
+  running quietly underneath).
+
+  RING-BASED REDESIGN (owner decision, 2026-10, supersedes auto-opening a
+  form/panel for the user): every step now points the ring at a REAL control
+  the user clicks THEMSELVES — `insideModal` (from `useTargetRect`) is why
+  that still works even when the control being pointed at is ITSELF inside
+  an open overlay (튜토리얼 3-2단계: the unplaced-task card inside the
+  MOBILE unplaced panel, which is a modal BottomSheet — see that component's
+  own header on why desktop's own non-modal drawer never hits this branch at
+  all, `modalOpen` just stays false there). `insideModal` asks "is the
+  element I FOUND inside a CURRENTLY OPEN Dialog/BottomSheet" (both render
+  `role=\"dialog\"` on their own container) — a DIFFERENT question from
+  `modalOpen` ("is ANYTHING open anywhere"): a target merely COVERED by an
+  UNRELATED modal (the step-1 case above) must still fall back to the top
+  strip, while a target that IS PART OF the open overlay must not.
 */
-export function Coachmark({ targetId, title, body, stepNumber, total, isLast, onNext, onPrev, onSkip }) {
-  const rect = useTargetRect(targetId)
+export function Coachmark({
+  targetId,
+  title,
+  body,
+  // Pre-formatted by TutorialOverlay (e.g. "2-1", "4" — no denominator, see
+  // that file's own comment on why) — this component has no notion of
+  // sub-steps or how many main steps exist; it just shows whatever string
+  // it's handed (owner decision, 2026-10: "하위 동작은 '2-1, 2-2' 형식으로
+  // 표시"). Replaces the old `stepNumber`/`total` pair.
+  progressLabel,
+  isLast,
+  // AUTO-PROGRESS ONLY (owner decision, 2026-10 — removes [이전]/[다음]):
+  // every non-last step now advances purely from TutorialOverlay's own
+  // event/state detection, never a manual click — see that file's own
+  // header for why this is judged safe (완료 조건이 최대한 현재 상태로도
+  // 판정되고, 그래도 막히면 [건너뛰기]가 유일하고 항상 available한 탈출구).
+  // `onComplete` is the ONE remaining manual action, and only for the LAST
+  // step (TUT-08 has nothing to auto-detect — it is a plain "you're done"
+  // screen, and no longer shows [건너뛰기] either — owner decision, 2026-10:
+  // "6단계에는 건너뛰기를 표시하지 마라").
+  //
+  // [다시 열기] REMOVED (owner decision, 2026-10, same report as the
+  // ring-based redesign this file's own header describes) — there is
+  // nothing left to "re-open": every step points at a REAL control already
+  // sitting on screen, not a form this component auto-opened on the user's
+  // behalf, so there was never a second request to re-send.
+  onComplete,
+  onSkip,
+}) {
+  const { rect, insideModal } = useTargetRect(targetId)
   const headingRef = useRef(null)
   const t = onboardingCopy.tutorial
   const isDesktop = useIsDesktop()
@@ -156,6 +283,11 @@ export function Coachmark({ targetId, title, body, stepNumber, total, isLast, on
   // exact store for (see that file's header).
   const stackSnapshot = useSyncExternalStore(subscribeOverlayStack, getOverlayStackSnapshot)
   const modalOpen = stackSnapshot.length > 0
+  // Same breakpoint WeeklyPage's own D4 fold-handling already uses for "not
+  // enough vertical room to show everything" — reused here (not a new
+  // threshold) so the top strip's own body line drops at the SAME point a
+  // short/landscape viewport already starts trimming other floating chrome.
+  const shortViewport = useMediaQuery('(max-height: 480px)')
 
   // Move focus/SR-announce to the new step's heading, same reasoning
   // ErrorState's `page` variant gives for doing the same on mount — EXCEPT
@@ -206,11 +338,84 @@ export function Coachmark({ targetId, title, body, stepNumber, total, isLast, on
       })()
     : { position: 'fixed', left: '50%', bottom: fallbackBottom, width: panelWidth, transform: 'translateX(-50%)' }
 
-  // Hidden, not unmounted: `useTargetRect`'s poll/listeners and the focus
-  // effect above keep running quietly while a modal is open, so the moment
-  // it closes this reappears in place on the SAME instance — no remount,
-  // no fresh focus-steal, no re-measuring flash.
-  if (modalOpen) return null
+  // Not hidden anymore, not unmounted either (#78 fix — see this file's own
+  // header): `useTargetRect`'s poll/listeners and the focus-steal effect
+  // above keep running quietly underneath this branch exactly as they did
+  // when this used to return null, so the moment the modal closes (or the
+  // target turns out to be INSIDE it — `insideModal`, see this file's own
+  // header) the anchored shape below reappears in place on the SAME
+  // instance — no remount, no fresh focus-steal, no re-measuring flash.
+  if (modalOpen && !insideModal) {
+    return createPortal(
+      <div
+        // `role="status"` (implicit `aria-live="polite"` + `aria-atomic="true"`
+        // — explicit `aria-live` kept alongside it for clarity, not because
+        // it adds anything `role="status"` doesn't already imply) so a
+        // SCREEN READER announces the step changing while the modal is open,
+        // not just while the anchored panel is visible.
+        //
+        // BEST-EFFORT, NOT GUARANTEED (this file's own header, and the task
+        // that added this branch, both flag this): this strip is a sibling
+        // of the Dialog/BottomSheet's own portal under `document.body`, OUTSIDE
+        // that modal's `aria-modal="true"` subtree. Per the ARIA modal
+        // pattern, assistive tech is expected to treat everything outside an
+        // open modal's subtree as inert while it's open — in practice this
+        // codebase's Dialog/BottomSheet never actually applies `aria-hidden`/
+        // `inert` to the REST of the page to enforce that (no such code in
+        // either component), so most screen readers (NVDA/JAWS + Firefox/
+        // Chrome, VoiceOver in most configurations) DO still announce a
+        // body-level live region like this one even while focus is trapped
+        // inside the modal — but a fully spec-compliant AT that hides
+        // everything outside the modal subtree could legitimately suppress
+        // it. Closing that gap for certain would mean rendering this text
+        // INSIDE Dialog/BottomSheet's own DOM subtree, which would require
+        // those two shared, tutorial-agnostic components to know about the
+        // tutorial specifically — a coupling judged not worth it for a
+        // best-effort, not safety-critical, announcement (the step's own
+        // instructions are still fully available the moment the modal
+        // closes, same as before this change).
+        role="status"
+        aria-live="polite"
+        className={[
+          // Highest z-layer in the app on purpose — above Dialog/BottomSheet's
+          // OWN z-50 content AND their z-50 backdrop (same stacking context,
+          // so no separate "above the backdrop, below the content" layer is
+          // needed). `pointer-events-none`: this strip is READ-ONLY — see
+          // this file's own header for why [건너뛰기]/[다음]/[이전] stay on the
+          // anchored panel instead of living here too (would sit above the
+          // modal's own backdrop click-catcher/focus trap and risks being
+          // mistaken for part of the form).
+          'pointer-events-none fixed inset-x-0 top-0 z-[80] flex flex-col items-center gap-0.5',
+          'bg-brand-700 px-4 text-center text-caption text-white shadow-popover',
+          // `env(safe-area-inset-top)` (#68 D2 convention — see MobileTopBar's
+          // own identical `pt-[env(safe-area-inset-top)]`) keeps this clear of
+          // a notch/status bar on mobile. Kept DELIBERATELY SHORT (small
+          // vertical padding, one or two lines of `text-caption`, no icon/
+          // close button) — see this file's own header on why minimizing this
+          // strip's own height is the chosen mitigation against covering a
+          // tall Dialog/BottomSheet's own top content, rather than teaching
+          // those two shared components to reserve space for it.
+          'py-1.5 pt-[calc(0.375rem+env(safe-area-inset-top))]',
+        ].join(' ')}
+      >
+        <span className="font-medium">
+          {progressLabel} · {title}
+        </span>
+        {/* Dropped on a short/landscape viewport (`shortViewport` above) —
+            the step+title line alone is already the load-bearing part (it is
+            what tells the user "this form IS the tutorial step"); the fuller
+            instructions are redundant with the form's own labels in a pinch
+            and the first thing worth shedding to keep this strip from
+            crowding a Dialog/BottomSheet that is ALSO fighting for vertical
+            room on the same short screen. */}
+        {/* `<div>`, not `<span>` — DELETE_SAMPLE's own checklist body
+            (renderBody above) can return a `<ul>`/`<p>` fragment, which is
+            invalid inside an inline `<span>`. */}
+        {!shortViewport && <div className="text-white/90">{renderBody(body)}</div>}
+      </div>,
+      document.body,
+    )
+  }
 
   return createPortal(
     <>
@@ -228,34 +433,44 @@ export function Coachmark({ targetId, title, body, stepNumber, total, isLast, on
       )}
       <div
         role="region"
-        aria-label={`튜토리얼 ${t.progressLabel(stepNumber, total)}`}
+        aria-label={`튜토리얼 ${progressLabel}`}
         style={panelStyle}
         className="z-[71] flex flex-col gap-3 rounded-card border border-border bg-surface p-4 shadow-popover motion-safe:transition-[top,bottom,left] motion-safe:duration-fast"
       >
         <div className="flex items-center justify-between">
-          <span className="text-caption font-medium text-brand-700">{t.progressLabel(stepNumber, total)}</span>
-          <button
-            type="button"
-            onClick={onSkip}
-            className="text-caption text-text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            {t.skip}
-          </button>
+          <span className="text-caption font-medium text-brand-700">{progressLabel}</span>
+          {/* [건너뛰기] — EVERY step except the LAST (owner decision,
+              2026-10: "6단계에는 건너뛰기를 표시하지 마라, 완료만 둔다") —
+              TUT-08 is a terminal "you're done" screen with nothing left to
+              skip PAST; [완료] below is the only way it ever ends. */}
+          {!isLast && (
+            <button
+              type="button"
+              onClick={onSkip}
+              className="text-caption text-text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            >
+              {t.skip}
+            </button>
+          )}
         </div>
         <h2 ref={headingRef} tabIndex={-1} className="text-label font-semibold text-text outline-none">
           {title}
         </h2>
-        <p className="text-caption text-text-muted">{body}</p>
-        <div className="mt-1 flex justify-end gap-2">
-          {stepNumber > 1 && (
-            <Button variant="secondary" size="sm" onClick={onPrev}>
-              {t.prev}
+        {/* `<div>`, not `<p>` — same reasoning as the top strip's own render
+            site above: a checklist body is a `<ul>`/`<p>` fragment, invalid
+            nested inside a `<p>`. */}
+        <div className="text-caption text-text-muted">{renderBody(body)}</div>
+        {/* [완료] — the ONE button left on the LAST step (TUT-08); every
+            OTHER step has NOTHING here at all now (no [다시 열기] — see this
+            component's own header on why the ring-based redesign removed
+            it; no [건너뛰기] either, above). */}
+        {isLast && (
+          <div className="mt-1 flex justify-end">
+            <Button variant="primary" size="sm" onClick={onComplete}>
+              {t.done}
             </Button>
-          )}
-          <Button variant="primary" size="sm" onClick={onNext}>
-            {isLast ? t.done : t.next}
-          </Button>
-        </div>
+          </div>
+        )}
       </div>
     </>,
     document.body,

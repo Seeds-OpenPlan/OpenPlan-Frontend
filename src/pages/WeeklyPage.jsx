@@ -56,6 +56,7 @@ import {
   visibleRange,
 } from '../features/plan/planGeometry'
 import { findFirstFreeSlot } from '../features/plan/planPlacement'
+import { usePublishActiveWeek, usePublishUnplacedPanelOpen } from '../features/plan/activeWeekStore'
 import { getPopoverAnchorStyle } from '../utils/popoverPosition'
 import {
   addWeeksISO,
@@ -74,6 +75,7 @@ import {
 import { useAppStore, selectCanWrite } from '../store/useAppStore'
 import { toast } from '../hooks/useToasts'
 import { systemMessages } from '../constants/systemMessages'
+import { useSearchParamRequest } from '../hooks/useSearchParamRequest'
 
 // How long the PLAN-23 highlight stays on a block: two pulses of --duration-slow
 // (320ms) plus a beat, so the ring is gone shortly after the animation ends
@@ -115,6 +117,12 @@ function WeeklyPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [weekStartISO, setWeekStartISO] = useState(() => currentWeekStartISO())
+  // Publishes THIS page's own `weekStartISO` for TutorialOverlay's
+  // DELETE_SAMPLE completion check to read (features/plan/activeWeekStore.js
+  // — see that module's own header for the bug class this closes: the
+  // tutorial computing its own "current week" independently of what THIS
+  // page is actually showing, which only coincidentally matched it before).
+  usePublishActiveWeek(weekStartISO)
   const [mode, setMode] = useState('focus')
   // D4: 가로 모드(높이 360~420px대)에서는 모바일 셸의 플로팅 바들(아래
   // floatingControlsRef/autoDraft 배너)이 쌓인 높이가 뷰포트 자체를 거의
@@ -132,15 +140,13 @@ function WeeklyPage() {
   // doc comment on `projectId` below — filtering while the panel stays closed
   // would be invisible, so either param alone opens it, and they combine fine
   // (`?openUnplaced=1&project=xxx`) since both just seed independent state.
-  // Read directly into these two states' own lazy initializers (not mirrored
-  // via an Effect) — same reasoning `?openReplan=1` already uses below; the
-  // params are stripped from the URL once, further down, so a refresh never
-  // reopens/refilters.
-  const initialProjectFilter = searchParams.get('project') || null
-  const [panelOpen, setPanelOpen] = useState(
-    () => searchParams.get('openUnplaced') === '1' || Boolean(initialProjectFilter),
-  )
-  const [projectFilter, setProjectFilter] = useState(() => initialProjectFilter)
+  const [panelOpen, setPanelOpen] = useState(false)
+  // 튜토리얼 3단계(캘린더에 배치) 3-1→3-2 하위 단계 판정용 — `panelOpen`은
+  // 순수 로컬 state로 URL에 전혀 반영되지 않아(위 주석), TutorialOverlay가
+  // 달리 읽을 방법이 없다. activeWeekStore.js's own header의 weekStartISO와
+  // 같은 이유로 공유 저장소에 발행한다.
+  usePublishUnplacedPanelOpen(panelOpen)
+  const [projectFilter, setProjectFilter] = useState(null)
   const [autoDraft, setAutoDraft] = useState(null) // { placements, unplaced } | null
   const [slotMenu, setSlotMenu] = useState(null) // { point, slot } | null
 
@@ -386,6 +392,42 @@ function WeeklyPage() {
   const unplacedCount = unplacedQuery.data?.length ?? 0
 
   const days = useMemo(() => weekDaysOf(weekStartISO), [weekStartISO])
+  /*
+    findFirstFreeSlot (quickPlace below — the ONLY caller now; the tutorial's
+    OWN add-schedule auto-open request that used to ALSO call this was
+    removed along with every other auto-open, RING-BASED REDESIGN, 2026-10 —
+    see TutorialOverlay.jsx's own header) scans `blocks` for occupied spans
+    only — a fixed schedule (#70, BE #90: read straight off this week's own
+    response via `useFixedSchedules`, see that hook's own header) was
+    invisible to it, so "이번 주 가까운 빈 시간대를 미리 채운다" could land
+    directly on top of one (Thomas code review SHOULD-FIX). Only
+    `activeThisWeek` ones count — one turned OFF for just this week
+    (PLAN-33 이번 주만 비활성화) genuinely has nothing there anymore, so it
+    must not block a slot search any more than it blocks the grid's own
+    occupied-span rendering (CalendarGrid's ghost block, unaffected by this).
+
+    Converted to the SAME `{startAt, endAt}` shape findFirstFreeSlot already
+    reads off a real block — so the function itself needs no "also check
+    fixed schedules" branch — rather than a parallel occupancy check. Each
+    fixed schedule recurs on exactly ONE of this week's 7 days
+    (`WEEKDAY_KEYS.indexOf(f.weekday)`); `composeTimestamp` gives the
+    absolute instant for THAT date, the same helper a drag commit already
+    uses to turn a day+minute pair into one.
+  */
+  const occupiedWithFixed = useMemo(() => {
+    const fixedSpans = (fixedSchedulesQuery.data ?? [])
+      .filter((f) => f.activeThisWeek)
+      .map((f) => {
+        const dayISO = days[WEEKDAY_KEYS.indexOf(f.weekday)]
+        // Defensive — an unrecognized weekday string would resolve to -1
+        // (days[-1] === undefined); skip it rather than composing a
+        // timestamp off an undefined date.
+        if (!dayISO) return null
+        return { startAt: composeTimestamp(dayISO, f.startMinutes), endAt: composeTimestamp(dayISO, f.endMinutes) }
+      })
+      .filter(Boolean)
+    return fixedSpans.length > 0 ? [...blocks, ...fixedSpans] : blocks
+  }, [blocks, fixedSchedulesQuery.data, days])
   /*
     집중 모드의 창은 가용 시간뿐 아니라 **이 주에 실제로 그려지는 것들**까지
     감싸야 한다 — 그러지 않으면 가용 창 밖의 블록·고정 일정이 그리드 위아래로
@@ -968,7 +1010,10 @@ function WeeklyPage() {
     const slot = findFirstFreeSlot({
       days,
       availability,
-      blocks,
+      // `occupiedWithFixed` (not bare `blocks`) — see that memo's own header
+      // (S3 fix): a fixed schedule must count as occupied here too, or
+      // "빠른 배치" can drop a task directly on top of one.
+      blocks: occupiedWithFixed,
       durationMin: duration,
     })
     if (slot) placeTaskAt(task, slot)
@@ -1466,26 +1511,67 @@ function WeeklyPage() {
     // — no ref needed.
   }, [searchParams, setSearchParams])
 
-  // Strip `?openUnplaced=1`/`?project={id}` the same way, once they've done
-  // their job (already seeded into panelOpen/projectFilter's lazy initializers
-  // above). One effect for both since they always arrive/leave together from
-  // this page's point of view — no ordering dependency between the two deletes.
-  useEffect(() => {
-    const hasOpenUnplaced = searchParams.get('openUnplaced') === '1'
-    const hasProject = searchParams.get('project') !== null
-    if (!hasOpenUnplaced && !hasProject) return
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev)
-        next.delete('openUnplaced')
-        next.delete('project')
-        return next
-      },
-      { replace: true },
-    )
-    // Same once-per-mount reasoning as the `openReplan` effect above: both
-    // params are gone from `searchParams` after the first pass.
-  }, [searchParams, setSearchParams])
+  /*
+    `?openUnplaced=1`/`?project={id}` — OPENS the panel (+ sets the filter).
+    See useSearchParamRequest's own header for why a hook, not the lazy
+    `useState` initializer this used to be: a GENUINE deep-link re-arriving
+    while this page stays mounted still needs either param to re-fire (not
+    tutorial-specific — no tutorial step sends either of these params
+    anymore, RING-BASED REDESIGN, see TutorialOverlay.jsx's own header). Two
+    independent calls (not one combined effect) — either param alone still
+    opens the panel, and `project` additionally sets the filter; each strips
+    and re-fires on its OWN schedule, which matters whenever `project` can
+    arrive WITHOUT `openUnplaced` just as easily as the reverse.
+  */
+  useSearchParamRequest(searchParams, setSearchParams, 'openUnplaced', {
+    onFire: () => setPanelOpen(true),
+  })
+  useSearchParamRequest(searchParams, setSearchParams, 'project', {
+    isMatch: (raw) => raw.length > 0,
+    onFire: (projectId) => {
+      setPanelOpen(true)
+      setProjectFilter(projectId)
+    },
+  })
+
+  /*
+    DELETE_SAMPLE (TUT-07) highlight — `?highlightBlocks=id1,id2`
+    (comma-separated planBlockIds, PLACE_TASK/ADD_SCHEDULE's own created
+    blocks — see tutorialSteps.js's DELETE_SAMPLE entry). No form ever opens
+    here — this ONLY highlights/scrolls (RING-BASED REDESIGN, 2026-10,
+    removed every actual auto-open; this request predates and is unrelated
+    to that redesign, see TutorialOverlay.jsx's own header on why
+    DELETE_SAMPLE still uses this mechanism instead of a Coachmark ring
+    anchor). Reuses the EXISTING PLAN-23 focus-ring mechanism
+    (`handleFocusBlock`/`focusRequest`) instead of teaching Coachmark a new
+    per-block anchor — that mechanism already scrolls the right block into
+    view and flashes a ring around it, on both shells, which is exactly
+    "강조하거나 스크롤해서 보이게" (owner spec §4.5). Only the FIRST id that's
+    still actually present in this week's blocks gets highlighted — a block
+    already removed in a previous attempt at this step correctly has nothing
+    left to point at.
+  */
+  useSearchParamRequest(searchParams, setSearchParams, 'highlightBlocks', {
+    ready: Boolean(plan),
+    isMatch: (raw) => raw.length > 0,
+    onFire: (raw) => {
+      const ids = raw.split(',').filter(Boolean)
+      const target = blocks.find((b) => ids.includes(String(b.planBlockId)))
+      if (!target) return
+      // Same "widen to 24h if the block falls outside the focus-mode window"
+      // safety handleSelectIssue already needs (and for the identical
+      // reason — see that function's own comment): a TASK/SCHEDULE created
+      // from a slot the user picked themselves (the right-click/long-press
+      // menu lets them pick ANY empty cell, not just one inside the current
+      // focus window) could land outside what focus mode renders, and
+      // scrolling to a block that isn't in the DOM at all would silently do
+      // nothing.
+      const startMin = minutesOfDay(target.startAt)
+      const endMin = minutesOfDayEnd(target.endAt, dateOf(target.startAt))
+      if (startMin < range.startMinutes || endMin > range.endMinutes) setMode('24h')
+      handleFocusBlock(target)
+    },
+  })
 
   // Every open (re)requests all three generated alternatives against whatever
   // the CURRENT draft is — see useReplanOptions's header for why reusing a
@@ -1822,10 +1908,14 @@ function WeeklyPage() {
               onRedo={handleRedo}
             />
           </div>
-          {/* FAB hides while the panel is open; reappears on close. */}
+          {/* FAB hides while the panel is open; reappears on close. SAME
+              button on desktop and mobile (only its CSS position differs,
+              via the wrapping `md:absolute` container above) — one
+              `data-tut-id` anchors the 튜토리얼 3-1단계 coachmark on both
+              shells with no responsive-duplicate needed. */}
           <div className="pointer-events-auto">
             {!panelOpen && (
-              <PlanFab count={unplacedCount} onClick={() => setPanelOpen(true)} />
+              <PlanFab count={unplacedCount} onClick={() => setPanelOpen(true)} data-tut-id="tut-unplaced-toggle" />
             )}
           </div>
         </div>

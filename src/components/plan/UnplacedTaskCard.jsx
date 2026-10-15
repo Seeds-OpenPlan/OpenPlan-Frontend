@@ -35,6 +35,12 @@ export function UnplacedTaskCard({ task, onPointerDown, onQuickPlace, disabled =
       aria-disabled={disabled || undefined}
       onPointerDown={disabled ? undefined : (e) => onPointerDown?.(task, e)}
       onKeyDown={handleKeyDown}
+      // TUT-05 coachmark anchor — every card carries its OWN per-task id, not
+      // one shared static id (tutorialSteps.js's own header explains why: the
+      // coachmark must point at the SPECIFIC task this run created, not
+      // whichever unplaced card happens to render first). A plain data
+      // attribute, zero behavior change when no tutorial is running.
+      data-tut-id={`tut-unplaced-task-${task.taskId}`}
       style={{ touchAction: 'none' }}
       className={[
         'select-none rounded-card border border-border bg-surface p-3 text-left shadow-card transition-colors',

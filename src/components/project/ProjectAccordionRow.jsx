@@ -188,6 +188,10 @@ export function ProjectAccordionRow({
       header={header}
       summary={summary}
       panel={<ProjectExpandedPanel project={project} panelMode={panelMode} onPanelModeChange={onPanelModeChange} />}
+      // 튜토리얼 2-1단계 코치마크 anchor (owner decision, 2026-10 — "자동 열기"
+      // 대신 "파란 테두리로 짚어 주기" 재설계): 방금 만든 샘플 프로젝트의 행
+      // 자체를 가리킨다. per-project id라 다른 행과 안 겹친다.
+      toggleTutId={`tut-project-row-${projectId}`}
     />
   )
 }
