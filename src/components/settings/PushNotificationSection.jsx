@@ -85,8 +85,18 @@ function PushNotificationSectionApp() {
   // without this a setState on an already-unmounted instance is wasted work
   // at best. Plain `useRef` (not state) because this is read inside async
   // callbacks, never rendered.
+  //
+  // BLOCKER fix (Thomas 리뷰, 2026-10-15): the effect body must set this back
+  // to `true` on every run, not just `false` on cleanup — React Strict Mode's
+  // dev-only mount→cleanup→mount simulation runs this cleanup once *before*
+  // the component actually stays mounted. Without the reset below,
+  // `isMountedRef.current` is left permanently `false` after that simulated
+  // cleanup, which silently turns every `setState` in
+  // `ensureDeviceSubscription` into a no-op in dev — same pattern as
+  // `mountedRef` in WbsTimeline.jsx:343-348.
   const isMountedRef = useRef(true)
   useEffect(() => {
+    isMountedRef.current = true
     return () => {
       isMountedRef.current = false
     }
@@ -223,10 +233,20 @@ function PushNotificationSectionApp() {
   async function ensureDeviceSubscription() {
     setSubscribeError(false)
     if (resyncPromiseRef.current) {
-      const resyncRegistered = await resyncPromiseRef.current
-      if (resyncRegistered) return true
-      // Resync found no subscription to register, or its POST failed — fall
-      // through to the checks below exactly as if no resync had been running.
+      // Lock the toggles for this wait too (NIT, Thomas 리뷰 2026-10-15) — the
+      // user clicked expecting a subscribe attempt, so the spinner/disableAll
+      // should cover the resync POST we're piggybacking on, not just the POST
+      // we'd make ourselves. `finally` always releases the lock, so falling
+      // through below never leaves it stuck.
+      if (isMountedRef.current) setSubscribing(true)
+      try {
+        const resyncRegistered = await resyncPromiseRef.current
+        if (resyncRegistered) return true
+        // Resync found no subscription to register, or its POST failed — fall
+        // through to the checks below exactly as if no resync had been running.
+      } finally {
+        if (isMountedRef.current) setSubscribing(false)
+      }
     }
     const existing = await getExistingPushSubscription().catch(() => null)
     if (existing) {
