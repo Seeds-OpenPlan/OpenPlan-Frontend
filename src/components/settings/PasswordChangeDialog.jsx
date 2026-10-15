@@ -12,6 +12,24 @@ const FIELD =
   'w-full rounded-control border border-border bg-surface px-3 py-2 text-label text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring'
 
 /*
+  E-COM-001(Bean Validation 실패)의 details.fields[0]에서 실패한 필드명을
+  뽑는다(AI 리뷰 S1). 계약 확인: GlobalExceptionHandler.handleValidation
+  (openplan-backend origin/main) — MethodArgumentNotValidException의 각
+  FieldError를 `Map.of("field", fe.getField(), "rule", ..., "message", ...)`
+  로 담으므로, 여기 `field`는 ChangePasswordRequest 레코드의 컴포넌트명
+  그대로("currentPassword" 또는 "newPassword")다.
+
+  객체(`{field, ...}`)만 가정하지 않고 문자열도 받는다 — 이 코드베이스의
+  기존 관례(usePlanData.js의 같은 처리 참고, 거기 주석이 설명하는 과거
+  실측 기록)를 따른 방어적 처리다. 한쪽 모양만 가정하면 다른 모양일 때
+  조용히 undefined가 되어, 필드를 가리는 이 로직 전체가 무효가 된다.
+*/
+function pickBadField(error) {
+  const raw = error?.details?.fields?.[0]
+  return typeof raw === 'string' ? raw : raw?.field
+}
+
+/*
   PasswordChangeDialog — ACCT-02 (로그인 상태에서 현재 비밀번호를 확인한 뒤
   새 비밀번호로 교체). 계약은 PATCH /users/me/password(openapi.yaml ~362행,
   PasswordChangeService.java) 하나이고 응답은 200/빈 본문 또는 400뿐이다.
@@ -79,12 +97,26 @@ export function PasswordChangeDialog({ onClose, onSuccess, finalizing = false })
   const changePassword = useChangePassword()
 
   const code = changePassword.error?.code
+  // E-COM-001은 currentPassword(@NotBlank)·newPassword(@NotBlank+@Size) 둘 중
+  // 어느 쪽이 실패해도 같은 코드로 온다 — badField로 실제 실패한 필드를 가려서
+  // 그 칸에만 붙인다(위 pickBadField 헤더 참고). 재현: 현재 비밀번호에 공백만
+  // 넣으면(@NotBlank 위반) 이전 버전은 이 분기가 없어 항상 새 비밀번호 칸에
+  // 오류를 붙였다(AI 리뷰 S1).
+  const badField = code === 'E-COM-001' ? pickBadField(changePassword.error) : null
+
   // E-USER-001: 현재 비밀번호 불일치 — 위 헤더 참조(소셜 계정 분기는 버튼
   // 단계에서 이미 걸러졌으므로 여기선 항상 이 의미로 고정해 보여준다).
-  const currentPasswordError = code === 'E-USER-001' ? '현재 비밀번호가 올바르지 않습니다' : null
-  // E-COM-001: Bean Validation 실패 — 이 폼의 PasswordChecklist가 막지 못한
-  // 경우만 여기 도달한다(예: 72자 초과, ChangePasswordRequest.java `@Size`).
-  const newPasswordError = code === 'E-COM-001' ? '새 비밀번호가 정책에 맞지 않습니다(8~72자)' : null
+  const currentPasswordError =
+    code === 'E-USER-001'
+      ? '현재 비밀번호가 올바르지 않습니다'
+      : badField === 'currentPassword'
+        ? '현재 비밀번호를 입력해 주세요'
+        : null
+  // badField가 정확히 'newPassword'로 특정될 때만 붙인다 — 필드 정보가
+  // 없거나(details.fields 비어 있음) 둘 다 아닌 이름이면 여기 붙이지 않고
+  // 아래 onError의 토스트 폴백에 맡긴다(알 수 없는 필드를 새 비밀번호 탓으로
+  // 단정하지 않는다).
+  const newPasswordError = badField === 'newPassword' ? '새 비밀번호가 정책에 맞지 않습니다(8~72자)' : null
 
   // 닫기 금지 조건 — 위 컴포넌트 헤더 "닫기 금지 조건은..." 단락 참고. PATCH가
   // 날아가 있는 동안(changePassword.isPending)과 PATCH 성공 뒤 호출부가
@@ -99,7 +131,15 @@ export function PasswordChangeDialog({ onClose, onSuccess, finalizing = false })
 
   const passwordValid = isPasswordValid(newPassword)
   const passwordsMatch = newPassword.length > 0 && newPassword === confirmPassword
-  const canSubmit = currentPassword.length > 0 && passwordValid && passwordsMatch
+  // trim() 기준(AI 리뷰 S1 후속 판단) — 서버의 @NotBlank(ChangePasswordRequest.
+  // currentPassword)는 공백만 있는 값을 "비어 있다"고 본다. 클라이언트가
+  // length > 0만 보면 공백 한 칸도 통과시켜 그 요청이 그대로 서버까지 가고,
+  // 위 badField 분기가 없던 버전에서는 그 결과(E-COM-001, badField
+  // "currentPassword")가 엉뚱하게 새 비밀번호 칸 오류로 보였다(재현 그대로).
+  // badField 분기로 그 오표시는 이미 고쳤지만, 애초에 공백만 입력한 제출
+  // 자체를 서버 왕복 없이 막는 쪽이 서버 규칙과 더 정확히 맞고 불필요한
+  // 요청도 아낀다.
+  const canSubmit = currentPassword.trim().length > 0 && passwordValid && passwordsMatch
 
   // 실패 뒤 사용자가 다시 타이핑하면 그 오류를 버린다 — AppleConnectDialog와
   // 같은 이유(옛 오류 문구가 새로 고친 입력에도 그대로 달려 있지 않게).
@@ -118,9 +158,16 @@ export function PasswordChangeDialog({ onClose, onSuccess, finalizing = false })
       {
         onSuccess: () => onSuccess(),
         onError: (error) => {
-          // 두 필드 오류(E-USER-001/E-COM-001)는 위에서 이미 인라인으로
-          // 보여준다 — 그 외(네트워크·5xx 등)만 토스트로 알린다.
-          if (error?.code !== 'E-USER-001' && error?.code !== 'E-COM-001') {
+          // 인라인으로 이미 보여준 경우만 토스트를 생략한다: E-USER-001은
+          // 항상, E-COM-001은 badField가 currentPassword/newPassword 둘 중
+          // 하나로 실제 특정됐을 때만. 그 외 — 네트워크·5xx는 물론, E-COM-001인데
+          // details.fields가 없거나 알 수 없는 필드명인 경우(위 currentPasswordError/
+          // newPasswordError 헤더 참고)까지 포함 — 는 전부 여기 토스트로
+          // 폴백한다(필드를 못 가린 오류를 조용히 묻어 두지 않는다).
+          const errorBadField = error?.code === 'E-COM-001' ? pickBadField(error) : null
+          const shownInline =
+            error?.code === 'E-USER-001' || errorBadField === 'currentPassword' || errorBadField === 'newPassword'
+          if (!shownInline) {
             toast({ tone: 'error', message: '비밀번호를 변경하지 못했습니다' })
           }
         },
