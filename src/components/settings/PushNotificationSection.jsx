@@ -116,6 +116,18 @@ function PushNotificationSectionApp() {
   // never rejects, so callers can always safely `await` it.
   const resyncPromiseRef = useRef(null)
 
+  // The in-flight `ensureDeviceSubscription` call itself, if one is already
+  // running — `null` otherwise (SHOULD-FIX, Thomas 리뷰 2026-10-15). A second
+  // click (toggle + button, or a double-click) must not start a second,
+  // independent run: `subscribing` is React state, so it updates
+  // asynchronously, and a click that lands in the gap before that update
+  // commits would otherwise slip through and fire its own POST for the same
+  // subscription. Storing this function's own promise here — same pattern as
+  // `resyncPromiseRef` above — closes that gap deterministically: a
+  // re-entrant call just awaits/returns the one promise already running
+  // instead of starting over.
+  const ensurePromiseRef = useRef(null)
+
   const publicKey = vapidQuery.data?.publicKey ?? null
   // 조회 실패(vapidQuery.isError)와 "서버가 아직 키를 안 올렸다"(publicKey:
   // null, ADR 결정 ⑤) 둘 다 "지금은 못 쓴다"로 같이 묶는다 — 구독을 만들 키가
@@ -229,65 +241,85 @@ function PushNotificationSectionApp() {
     네트워크 왕복이 뒤늦게 끝나 setState가 불리는 경로를 막는다. `return`
     값 자체는 가드하지 않는다 — 호출부(handleToggle)의 분기 로직은 컴포넌트
     생존 여부와 무관하게 정확해야 한다.
+
+    연속 잠금 구간 + 재진입 방지(SHOULD-FIX, Thomas 리뷰 2026-10-15) — 아래
+    `runEnsureDeviceSubscription`은 피기백 대기·구독 조회·POST 재시도·신규
+    구독까지 전체를 **하나의** try/finally로 감싼다(각 분기마다 따로
+    setSubscribing(true)/(false)를 반복하지 않는다). 이전엔 분기마다 잠금을
+    따로 걸고 풀었는데, 피기백 대기가 끝나자마자(`finally`가
+    setSubscribing(false)를 먼저 부른 뒤) 다음 분기(`getExistingPushSubscription`
+    재조회)가 끝날 때까지 **잠금이 풀린 채로 렌더되는 좁은 틈**이 있었다 —
+    그 틈에 토글을 또 누르면 두 번째 실행이 시작돼 POST가 중복으로 나갈 수
+    있었다. 여기서는 함수 몸 전체를 한 구간으로 묶어 그 틈 자체를 없앤다.
+    바깥의 `ensureDeviceSubscription`은 `ensurePromiseRef`(위 헤더 참조)를 보고
+    이미 실행 중인 호출이 있으면 새로 시작하지 않고 그 프라미스를 그대로
+    돌려준다 — `subscribing` state 자체는 비동기라(React가 배치) 이 전환
+    순간의 경합을 state만으로는 못 막으므로, 재동기화 dedup(resyncPromiseRef)과
+    같은 방식으로 promise를 직접 공유한다.
   */
-  async function ensureDeviceSubscription() {
-    setSubscribeError(false)
-    if (resyncPromiseRef.current) {
-      // Lock the toggles for this wait too (NIT, Thomas 리뷰 2026-10-15) — the
-      // user clicked expecting a subscribe attempt, so the spinner/disableAll
-      // should cover the resync POST we're piggybacking on, not just the POST
-      // we'd make ourselves. `finally` always releases the lock, so falling
-      // through below never leaves it stuck.
-      if (isMountedRef.current) setSubscribing(true)
-      try {
+  async function runEnsureDeviceSubscription() {
+    if (isMountedRef.current) setSubscribing(true)
+    try {
+      if (resyncPromiseRef.current) {
         const resyncRegistered = await resyncPromiseRef.current
         if (resyncRegistered) return true
         // Resync found no subscription to register, or its POST failed — fall
         // through to the checks below exactly as if no resync had been running.
-      } finally {
-        if (isMountedRef.current) setSubscribing(false)
       }
-    }
-    const existing = await getExistingPushSubscription().catch(() => null)
-    if (existing) {
-      if (deviceSubscribed === true) return true
-      if (isMountedRef.current) setSubscribing(true)
-      try {
-        await createPushSubscription(subscriptionToPayload(existing))
-        if (isMountedRef.current) setDeviceSubscribed(true)
-        return true
-      } catch {
-        if (isMountedRef.current) {
-          setDeviceSubscribed(false)
-          setSubscribeError(true)
+      const existing = await getExistingPushSubscription().catch(() => null)
+      if (existing) {
+        if (deviceSubscribed === true) return true
+        try {
+          await createPushSubscription(subscriptionToPayload(existing))
+          if (isMountedRef.current) setDeviceSubscribed(true)
+          return true
+        } catch {
+          if (isMountedRef.current) {
+            setDeviceSubscribed(false)
+            setSubscribeError(true)
+          }
+          return false
         }
-        return false
-      } finally {
-        if (isMountedRef.current) setSubscribing(false)
       }
-    }
-    if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
-      if (isMountedRef.current) setPermissionBlocked(true)
-      return false
-    }
-    if (isMountedRef.current) setSubscribing(true)
-    try {
-      const permission = await Notification.requestPermission()
-      if (permission !== 'granted') {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
         if (isMountedRef.current) setPermissionBlocked(true)
         return false
       }
-      if (isMountedRef.current) setPermissionBlocked(false)
-      const subscription = await subscribeToPush(publicKey)
-      await createPushSubscription(subscriptionToPayload(subscription))
-      if (isMountedRef.current) setDeviceSubscribed(true)
-      return true
-    } catch {
-      if (isMountedRef.current) setSubscribeError(true)
-      return false
+      try {
+        const permission = await Notification.requestPermission()
+        if (permission !== 'granted') {
+          if (isMountedRef.current) setPermissionBlocked(true)
+          return false
+        }
+        if (isMountedRef.current) setPermissionBlocked(false)
+        const subscription = await subscribeToPush(publicKey)
+        await createPushSubscription(subscriptionToPayload(subscription))
+        if (isMountedRef.current) setDeviceSubscribed(true)
+        return true
+      } catch {
+        if (isMountedRef.current) setSubscribeError(true)
+        return false
+      }
     } finally {
       if (isMountedRef.current) setSubscribing(false)
     }
+  }
+
+  // Thin re-entrancy wrapper around `runEnsureDeviceSubscription` — see the
+  // `ensurePromiseRef` header above for why this is needed. Both call sites
+  // (「이 기기에서 알림 받기」 button and the toggle's `handleToggle`) call
+  // this, never `runEnsureDeviceSubscription` directly.
+  function ensureDeviceSubscription() {
+    setSubscribeError(false)
+    if (ensurePromiseRef.current) return ensurePromiseRef.current
+    const promise = runEnsureDeviceSubscription().finally(() => {
+      // Only clear the ref if it's still pointing at *this* promise — see the
+      // matching comment on resyncPromiseRef's effect for why that guard
+      // matters.
+      if (ensurePromiseRef.current === promise) ensurePromiseRef.current = null
+    })
+    ensurePromiseRef.current = promise
+    return promise
   }
 
   // "끄기"(next === false)는 구독을 전혀 건드리지 않는다 — 컴포넌트 헤더의
