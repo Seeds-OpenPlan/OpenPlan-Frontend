@@ -86,10 +86,17 @@ export function PlanHeader({
     // button). The controls are absolutely positioned and vertically centered on
     // the title line, so the button height never pushes the title down — this-week
     // and past-week headers line up exactly.
-    <div className="relative min-h-8 md:min-h-0">
+    //
+    // 오너 실측(2026-10): "주간 계획"만 유독 모바일에서 제목이 안 보였다 —
+    // 대시보드/프로젝트/통계/설정은 모두 모바일에서도 h1을 보여 준다. 그
+    // 차이를 없애려고 `hidden md:block`을 걷어낸다. h1이 항상 그려지므로
+    // 컨테이너 자체의 높이도 h1이 정해 주고(다른 탭의 `relative` 제목
+    // 컨테이너와 같은 패턴 — ProjectsPage의 PageHeader 참고), 모바일 전용
+    // `min-h-8` 버팀목은 더 이상 필요 없다.
+    <div className="relative">
       {/* Same classes as every other page title (text-2xl font-bold) so the
           vertical position matches exactly — no line-height mismatch. */}
-      <h1 className="hidden text-2xl font-bold text-text md:block">주간 계획</h1>
+      <h1 className="text-2xl font-bold text-text">주간 계획</h1>
 
       <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-3">
         {/* Read-only weeks show a compact notice here (in the header row) instead
