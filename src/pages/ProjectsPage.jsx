@@ -23,6 +23,7 @@ import { PROJECT_STATUS_LABELS } from '../features/project/projectLabels'
 import { useAppStore, selectCanWrite } from '../store/useAppStore'
 import { systemMessages } from '../constants/systemMessages'
 import { toast } from '../hooks/useToasts'
+import { useSearchParamRequest } from '../hooks/useSearchParamRequest'
 
 /*
   SCR-PROJ-LIST (ui-spec §PROJ.1), restructured as a single-open ACCORDION
@@ -52,10 +53,7 @@ function ProjectsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [tab, setTab] = useState('IN_PROGRESS') // 'IN_PROGRESS' | 'PAUSED' | 'CLOSED'
-  // `?create=1` seam (§PROJ.0.1) — unchanged from before this restructure.
-  const [overlay, setOverlay] = useState(() =>
-    searchParams.get('create') === '1' ? { type: 'create' } : null,
-  )
+  const [overlay, setOverlay] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [manageConflict, setManageConflict] = useState(null) // { latest } | null
   const [manageError, setManageError] = useState(false)
@@ -63,17 +61,18 @@ function ProjectsPage() {
   const [deleteError, setDeleteError] = useState(false)
   const [duplicateError, setDuplicateError] = useState(false)
 
-  useEffect(() => {
-    if (searchParams.get('create') !== '1') return
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev)
-        next.delete('create')
-        return next
-      },
-      { replace: true },
-    )
-  }, [searchParams, setSearchParams])
+  /*
+    `?create=1` seam (§PROJ.0.1) — OPENS the form; see useSearchParamRequest's
+    own header for why this is a hook rather than a plain effect: a GENUINE
+    deep-link re-arriving while this page stays mounted (not tutorial-specific
+    — the tutorial's old [다시 열기] button that originally motivated this
+    hook is gone, RING-BASED REDESIGN, see TutorialOverlay.jsx's own header)
+    still needs `?create=1` to re-fire if the user follows the same link
+    twice, unlike the lazy `useState` initializer this used to be.
+  */
+  useSearchParamRequest(searchParams, setSearchParams, 'create', {
+    onFire: () => setOverlay({ type: 'create' }),
+  })
 
   const projectsQuery = useProjects()
   const createProject = useCreateProject()

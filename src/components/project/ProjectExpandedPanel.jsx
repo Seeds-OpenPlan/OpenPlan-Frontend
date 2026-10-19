@@ -146,7 +146,6 @@ export function ProjectExpandedPanel({ project, panelMode, onPanelModeChange }) 
               disabled={writeDisabled}
               disabledReason={writeDisabled ? writeDisabledReason : undefined}
               onClick={() => navigate(`/weekly?project=${projectId}&openUnplaced=1`)}
-              data-tut-id="tut-goto-weekly" // ST-F1-13 TUT-05 coachmark anchor
             >
               이 프로젝트로 주간 계획
             </Button>

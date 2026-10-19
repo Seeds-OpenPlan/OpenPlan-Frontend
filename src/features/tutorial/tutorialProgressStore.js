@@ -101,6 +101,105 @@ export function getTutorialStep(userId) {
   return readStored(userId)
 }
 
+/*
+  TARGET IDS (guided-actions redesign, 2026-10) — the ids of the SAMPLES this
+  run itself created (projectId/taskId/placedBlockId/scheduleBlockId), plus
+  which of the last two have since been removed. Steps 2+ need the PRIOR
+  step's id to know what to auto-open/highlight and what counts as "done" for
+  THIS run specifically (see tutorialSteps.js's own `matches`/`captureTarget`
+  and TutorialOverlay's event handler) — e.g. ADD_TASK must open the project
+  this run just created, not any arbitrary one, and PLACE_TASK must watch for
+  THAT task being placed, not any task.
+
+  Stored as one JSON blob per user (not one key per field) — the fields always
+  change and get read together (TutorialOverlay reads the whole object once
+  per render), so there is no reason to pay for 4 separate localStorage keys.
+
+  Same STORAGE_PREFIX pattern, same try/catch defensiveness, as the step
+  cursor above — this is that store's own sibling, not a separate module, so
+  the two can never drift out of sync on user-scoping or error handling.
+*/
+const TARGETS_STORAGE_PREFIX = 'openplan.tutorial.targets'
+
+// Stable empty-object reference — see getTutorialTargets's own comment below
+// for why this matters to useSyncExternalStore, not just as a style nicety.
+const EMPTY_TARGETS = {}
+
+function targetsStorageKey(userId) {
+  return `${TARGETS_STORAGE_PREFIX}:${userId}`
+}
+
+function readTargetsRaw(userId) {
+  try {
+    return window.localStorage.getItem(targetsStorageKey(userId))
+  } catch {
+    return null
+  }
+}
+
+function writeTargets(userId, value) {
+  try {
+    window.localStorage.setItem(targetsStorageKey(userId), JSON.stringify(value))
+  } catch {
+    // Best-effort, same reasoning as writeStored above — a failed write only
+    // costs this session's progress surviving a refresh.
+  }
+}
+
+function clearTargets(userId) {
+  try {
+    window.localStorage.removeItem(targetsStorageKey(userId))
+  } catch {
+    // no-op — see writeStored.
+  }
+}
+
+/*
+  A read-through cache keyed by the RAW string, not a module-level "current
+  value" refreshed as a side effect — this is NOT the same shape this file's
+  own header warns against (the `getTutorialStep` NIT, fixed 2026-10). That
+  bug was a getSnapshot that MUTATED a single shared slot on every call,
+  which could hand back a stale/wrong answer under React's speculative
+  re-invocation. This cache instead recomputes whenever the underlying raw
+  string actually differs (an idempotent function of the true source), and
+  its only purpose is to give useSyncExternalStore a STABLE object reference
+  across calls that see no change — required because React compares
+  `getSnapshot()`'s return by `Object.is`, and a fresh `JSON.parse` on every
+  call would return a new object every time even when nothing changed,
+  which useSyncExternalStore reads as "the store changed" forever (an
+  infinite re-render loop) — plain primitives (getTutorialStep's `number`)
+  don't have this problem, which is why only THIS function needs it.
+*/
+let targetsCache = null // { userId, raw, value } | null
+
+export function getTutorialTargets(userId) {
+  if (!userId) return EMPTY_TARGETS
+  const raw = readTargetsRaw(userId)
+  if (targetsCache && targetsCache.userId === userId && targetsCache.raw === raw) {
+    return targetsCache.value
+  }
+  let value = EMPTY_TARGETS
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object') value = parsed
+    } catch {
+      value = EMPTY_TARGETS
+    }
+  }
+  targetsCache = { userId, raw, value }
+  return value
+}
+
+/** Merges `patch` into whatever targets this run has recorded so far (never a
+ * blind overwrite — e.g. recording `scheduleBlockId` at ADD_SCHEDULE must not
+ * drop the `projectId`/`taskId` CREATE_PROJECT/ADD_TASK already wrote). */
+export function patchTutorialTargets(userId, patch) {
+  if (!userId) return
+  writeTargets(userId, { ...getTutorialTargets(userId), ...patch })
+  notify()
+}
+
 export function setTutorialStep(userId, next) {
   if (userId) writeStored(userId, next)
   notify()
@@ -108,9 +207,16 @@ export function setTutorialStep(userId, next) {
 
 /** Shared by completion, skip, and TUT-09 restart — all three send the
  * cursor back to kickoff; only what they PATCH to the server differs
- * (see TutorialOverlay.jsx / useTutorialRestart.jsx). */
+ * (see TutorialOverlay.jsx / useTutorialRestart.jsx). Also clears the target
+ * ids (above) — a FRESH run (including a TUT-09 restart) must never inherit
+ * a previous run's sample project/task/block ids, or step 2+'s "does this
+ * event match what THIS run created" check would compare against the wrong
+ * run's ids and never auto-advance. */
 export function resetTutorialStep(userId) {
-  if (userId) clearStored(userId)
+  if (userId) {
+    clearStored(userId)
+    clearTargets(userId)
+  }
   notify()
 }
 
@@ -133,4 +239,21 @@ export function useTutorialStep(userId) {
   const setStep = useCallback((next) => setTutorialStep(userId, next), [userId])
   const reset = useCallback(() => resetTutorialStep(userId), [userId])
   return [currentStep, setStep, reset]
+}
+
+/**
+ * React binding for the target ids. Shares the step cursor's own listener
+ * Set (`subscribeTutorialStep`, not a second one) — the two always change
+ * together from a consumer's point of view (TutorialOverlay re-renders on
+ * either), and `patchTutorialTargets`/`setTutorialStep`/`resetTutorialStep`
+ * already all call the same shared `notify()`.
+ */
+export function useTutorialTargets(userId) {
+  const targets = useSyncExternalStore(
+    subscribeTutorialStep,
+    () => getTutorialTargets(userId),
+    () => EMPTY_TARGETS,
+  )
+  const patch = useCallback((next) => patchTutorialTargets(userId, next), [userId])
+  return [targets, patch]
 }

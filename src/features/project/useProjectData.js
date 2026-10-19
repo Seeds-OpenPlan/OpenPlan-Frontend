@@ -30,6 +30,7 @@ import {
 import { createTaskCategory, deleteTaskCategory, getTaskCategories } from './taskCategoryApi'
 import { toast } from '../../hooks/useToasts'
 import { systemMessages } from '../../constants/systemMessages'
+import { emitTutorialEvent, TUTORIAL_EVENTS } from '../tutorial/tutorialEvents'
 
 export const projectsKey = () => ['projects']
 export const projectKey = (projectId) => ['project', projectId]
@@ -69,8 +70,11 @@ export function useCreateProject() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (body) => createProject(body),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: projectsKey() })
+      // TUT-03 완료 신호 — tutorialEvents.js 헤더 참고. 튜토리얼이 꺼져 있을
+      // 때도 그냥 아무도 안 듣는 이벤트 한 건일 뿐이라 비용이 없다.
+      emitTutorialEvent(TUTORIAL_EVENTS.PROJECT_CREATED, { projectId: data?.projectId })
     },
   })
 }
@@ -299,7 +303,7 @@ export function useCreateTask() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ projectId, body }) => createTask(projectId, body),
-    onSuccess: (_data, { projectId }) => {
+    onSuccess: (data, { projectId }) => {
       queryClient.invalidateQueries({ queryKey: projectTasksKey(projectId) })
       queryClient.invalidateQueries({ queryKey: projectKey(projectId) })
       queryClient.invalidateQueries({ queryKey: projectsKey() })
@@ -308,6 +312,8 @@ export function useCreateTask() {
         tone: 'success',
         message: '태스크를 추가했습니다. 주간 계획에서 배치할 수 있습니다',
       })
+      // TUT-04 완료 신호 — see useCreateProject's own comment.
+      emitTutorialEvent(TUTORIAL_EVENTS.TASK_CREATED, { projectId, taskId: data?.taskId })
     },
     onError: () => toast({ tone: 'error', message: systemMessages.error.writeTitle }),
   })

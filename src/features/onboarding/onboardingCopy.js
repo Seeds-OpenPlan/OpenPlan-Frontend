@@ -126,11 +126,49 @@ export const onboardingCopy = {
     kickoffBody:
       '샘플 프로젝트 생성부터 태스크 추가, 캘린더 배치, 일정 추가, 삭제까지 실제 화면에서 그대로 따라 해 봅니다.',
     start: '시작하기',
+    // `next`/`prev` removed (owner decision, 2026-10, removed [이전]/[다음]
+    // — see TutorialOverlay.jsx's own header): `skip`/`done` are the only
+    // two buttons any step still shows.
     skip: '건너뛰기',
-    next: '다음',
-    prev: '이전',
     done: '완료',
-    progressLabel: (n, total) => `${n}/${total}`,
+    // `reopen`/`progressLabel` removed (owner decision, 2026-10, ring-based
+    // redesign — see Coachmark.jsx's own header): [다시 열기] no longer
+    // exists (nothing left to re-open once no step auto-opens anything),
+    // and the progress label is now a plain pre-formatted string
+    // TutorialOverlay builds itself ("2-1", "4" — no denominator, owner's
+    // own later feedback dropped the "/5" an earlier pass had shown — sub-
+    // step numbering lives there, not in a copy-table function).
+    // `completeProgressLabel` is the ONE exception — COMPLETE never had a
+    // denominator to drop, it's always just been this fixed label.
+    completeProgressLabel: '완료',
+    //
+    // OFF-ROUTE prompt (owner decision, 2026-10) — shown when the current
+    // route no longer matches the active step's own `route` (navigated to
+    // a DIFFERENT app tab mid-run, e.g. 대시보드/통계/설정 — see
+    // TutorialOverlay.jsx's own header for the full flow, including why
+    // CLOSING this via Esc/backdrop is NEITHER button below).
+    offRouteTitle: '튜토리얼을 종료할까요?',
+    offRouteBody: '다른 화면으로 이동했습니다. 튜토리얼을 계속하거나 종료할 수 있습니다.',
+    offRouteReturn: '튜토리얼로 돌아가기',
+    offRouteExit: '종료',
+    // RESUME prompt (owner decision, 2026-10) — shown ONCE per session on
+    // mount when a PREVIOUS run's cursor is still mid-progress (see
+    // TutorialOverlay.jsx's own header on the sessionStorage gate).
+    resumeTitle: '진행 중이던 튜토리얼이 있습니다',
+    resumeBody: '이어서 진행하거나 처음부터 다시 시작할 수 있습니다.',
+    resumeContinue: '이어서 하기',
+    resumeRestart: '처음부터 다시',
+    // PRACTICE-DATA CLEANUP confirm (owner decision, 2026-10) — shown from
+    // [완료]/[건너뛰기] (TutorialOverlay.jsx's own `exitWithCleanupCheck`)
+    // ONLY when something this run created is CONFIRMED to still exist.
+    // `cleanupBodySuffix` is appended after a comma-joined list of real
+    // item names (e.g. "프로젝트 「연습」(태스크 포함), 일정 「연습 일정」") —
+    // kept separate from a template string so the join logic stays in the
+    // component, not duplicated here.
+    cleanupTitle: '연습으로 만든 데이터를 정리할까요?',
+    cleanupBodySuffix: '이 남아 있습니다. 함께 정리할까요?',
+    cleanupDelete: '삭제하고 종료',
+    cleanupKeep: '남기고 종료',
     restartTitle: '튜토리얼을 다시 시작할까요?',
     // Thomas 리뷰 MAJOR fix — 이전 문구는 "정리한 뒤 시작합니다"라고 약속했지만
     // 실제 재시작 동작(SettingsLayout.confirmRestart)은 잔존 샘플을 정리하지
