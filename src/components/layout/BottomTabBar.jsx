@@ -25,7 +25,11 @@ function BottomTabBar() {
     // 재는 다른 세 지점(AppLayout의 pb-24, Toaster의 bottom-24, WeeklyPage
     // 플로팅 컨트롤의 bottom-18/bottom-36)도 같은 env()만큼 함께 올려야
     // 한다 — 그쪽 각자의 C3 주석 참고.
-    <nav className="fixed inset-x-0 bottom-0 z-10 h-[calc(var(--spacing-bar)+env(safe-area-inset-bottom))] border-t border-border bg-surface md:hidden">
+    //
+    // pl-safe-left/pr-safe-right: #68 only handled the bottom inset — this
+    // adds the left/right ones for landscape/foldable devices whose rounded
+    // corners or camera cutouts intrude from the side (not covered above).
+    <nav className="fixed inset-x-0 bottom-0 z-10 h-[calc(var(--spacing-bar)+env(safe-area-inset-bottom))] border-t border-border bg-surface pl-safe-left pr-safe-right md:hidden">
       <ul className="flex">
         {navItems.map(({ to, label, Icon, end }) => (
           <li key={to} className="flex-1">
