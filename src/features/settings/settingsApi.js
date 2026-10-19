@@ -479,6 +479,42 @@ export function updateAccount(patch) {
 }
 
 /**
+ * PATCH /users/me/password (ACCT-02 — 현재 비밀번호 확인 후 교체). 계약 원문
+ * (openapi.yaml ~362행)과 구현(PasswordChangeService.java) 대조 결과:
+ *
+ * - 200 본문 없음 — 호출부는 성공을 상태 코드로만 판단한다(여기서 `.then`을
+ *   얹지 않는 이유, 다른 쓰기 함수처럼 응답을 정규화할 필드가 없다).
+ * - 400 E-USER-001 — 현재 비밀번호 불일치. **소셜 가입 계정(비밀번호 없음)도
+ *   같은 코드**다(PasswordChangeService.java javadoc — "이 이메일은 소셜
+ *   계정"이 인증된 주체 밖으로 새지 않도록 하나로 합쳤다). 호출부
+ *   (SettingsAccountPage)는 그래서 loginType으로 버튼 자체를 먼저 가린다 —
+ *   이 400을 "소셜 계정"과 "비밀번호 오타"로 다시 가를 방법이 서버 응답에
+ *   없다.
+ * - 400 E-COM-001 — Bean Validation 실패(`newPassword` 8~72자 등,
+ *   ChangePasswordRequest.java `@Size`). 이 엔드포인트엔 가입/재설정과 달리
+ *   영문+숫자 `@Pattern` 요구가 없다 — 그래도 화면은 PasswordChecklist(가입/
+ *   재설정과 동일 컴포넌트·규칙)를 그대로 재사용한다. 더 엄격한 클라이언트
+ *   규칙을 통과하면 이 느슨한 서버 조건도 항상 통과하므로 충돌할 일이 없고,
+ *   화면마다 다른 비밀번호 규칙을 보여주지 않아도 된다.
+ *
+ * 🔴 성공해도 지금 쥔 access 토큰은 그 자리에서 끊기지 않는다 — access는
+ * 상태 비보존 JWT(최대 30분, JwtProperties.accessTtl)라 서버가 발급 후 취소할
+ * 수 없고, `changePassword`가 실제로 폐기하는 것은 refresh 세션 행뿐이다
+ * (AuthSessionRepository.revokeAllByUserIdAndStatus). 다음 access 토큰 만료
+ * 시점에야 토큰 갱신이 401 E-AUTH-007로 실패해 세션이 끊긴다 — 그 지연된
+ * 끊김이 client.js의 OVL-SESSION("세션이 만료되었습니다")으로 떨어지면
+ * 방금 한 일과 무관해 보인다. 그래서 호출부는 이 200을 받는 즉시 기존
+ * 로그아웃 경로로 먼저 나간다(SettingsAccountPage.handlePasswordChangeSuccess
+ * 헤더 참조) — 서버 쪼개짐을 기다리지 않고 화면이 먼저 정리한다.
+ */
+export function changePassword({ currentPassword, newPassword }) {
+  return withDevFallback(
+    () => apiClient.patch('/users/me/password', { currentPassword, newPassword }),
+    async () => (await loadSettingsMock()).changePassword({ currentPassword, newPassword }),
+  )
+}
+
+/**
  * DELETE /users/me (W6 PATH CORRECTION, 팀장 지시 — 이전 `POST
  * /users/me/deactivation` [가정-확장]에서 주소·메서드 둘 다 바뀌었다).
  *
