@@ -462,14 +462,15 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
   // [버그 수정 2026-10-20, QA X2] 제안은 이름이 아니라 categoryId(UUID)와
   // 지금 입력 중인 예상시간으로 받는다(정본 /stats/correction-proposals).
   // 칩을 눌러 적용한 값으로 다시 제안을 받으면 "제안의 제안"이 이어지므로,
-  // 마지막으로 적용한 값과 예상시간이 같은 동안은 칩을 숨긴다.
+  // 마지막으로 적용한 (카테고리, 값)과 지금이 같은 동안은 칩을 숨긴다 —
+  // 카테고리를 바꾸면 그 카테고리의 제안은 다시 보여야 한다.
   const selectedCategoryName = categoriesQuery.data?.find((c) => c.taskCategoryId === categoryId)?.name ?? null
   const proposalQuery = useCorrectionProposal(categoryId, estimatedMinutes)
-  const [appliedProposalMinutes, setAppliedProposalMinutes] = useState(null)
+  const [appliedProposal, setAppliedProposal] = useState(null) // { categoryId, minutes } | null
   const proposal = proposalQuery.data
   const showProposal =
     Boolean(selectedCategoryName && proposal) &&
-    estimatedMinutes !== appliedProposalMinutes &&
+    !(appliedProposal?.categoryId === categoryId && appliedProposal?.minutes === estimatedMinutes) &&
     proposal.suggestedMinutes !== estimatedMinutes
   const updateTask = useUpdateTask()
 
@@ -577,7 +578,7 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
               type="button"
               onClick={() => {
                 setEstimatedMinutes(proposal.suggestedMinutes)
-                setAppliedProposalMinutes(proposal.suggestedMinutes)
+                setAppliedProposal({ categoryId, minutes: proposal.suggestedMinutes })
               }}
               className="inline-flex w-fit items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-3 py-1.5 text-caption font-medium text-brand-700 transition-colors hover:bg-brand-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
