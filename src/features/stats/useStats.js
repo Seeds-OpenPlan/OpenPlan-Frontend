@@ -11,19 +11,20 @@ import {
   getStatsTimePatterns,
 } from './statsApi'
 
-export const correctionProposalKey = (category) => ['correctionProposal', category]
+export const correctionProposalKey = (categoryId, estimatedMinutes) => ['correctionProposal', categoryId, estimatedMinutes]
 
 /**
- * GET /stats/correction-proposals for the CURRENTLY selected category. Disabled
- * entirely while `category` is null/"" (없음) — see getCorrectionProposal's own
+ * GET /stats/correction-proposals for the CURRENTLY selected categoryId and
+ * the estimate being typed. Disabled entirely while `categoryId` is null/""
+ * (없음) or the estimate is missing — see getCorrectionProposal's own
  * short-circuit — so switching to "없음" never fires a request just to throw
  * its result away.
  */
-export function useCorrectionProposal(category) {
+export function useCorrectionProposal(categoryId, estimatedMinutes) {
   return useQuery({
-    queryKey: correctionProposalKey(category),
-    queryFn: () => getCorrectionProposal(category),
-    enabled: Boolean(category),
+    queryKey: correctionProposalKey(categoryId, estimatedMinutes),
+    queryFn: () => getCorrectionProposal({ categoryId, estimatedMinutes }),
+    enabled: Boolean(categoryId) && Boolean(estimatedMinutes),
     staleTime: 5 * 60 * 1000,
   })
 }

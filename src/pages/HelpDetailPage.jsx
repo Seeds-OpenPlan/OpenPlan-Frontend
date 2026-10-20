@@ -24,6 +24,13 @@ import { useSession } from '../features/auth/useAuth'
   접근이 여전히 여기로 오고, 소유권 방어도 여기 한 곳에서만 지켜야 하기
   때문. 본문/답변 렌더링은 TicketContent로 뽑아 아코디언 패널과 마크업을
   공유한다.
+
+  [버그 수정 2026-10-20, QA X1] 정본 `SupportTicket` 스키마(openapi.yaml)에는
+  `userId`가 없다 — BE는 `findBySupportTicketIdAndUserId`로 본인 티켓만 200을
+  주고 타인 티켓은 404로 막는다. 이전엔 응답에 없는 `ticket.userId`를 세션
+  userId와 비교해 `undefined !== userId`로 **본인 문의도 언제나 /403**으로
+  보냈다. 이제 소유자 비교는 응답이 `userId`를 실어 올 때만(dev mock) 하고,
+  실 서버에서는 서버 스코핑을 소유권 판정으로 삼아 404를 /403으로 옮긴다.
 */
 function HelpDetailPage() {
   const { ticketId } = useParams()
@@ -34,14 +41,17 @@ function HelpDetailPage() {
   const ticket = ticketQuery.data
   const currentUserId = sessionQuery.data?.userId
   const bothSettled = !ticketQuery.isLoading && !sessionQuery.isLoading
-  const isOwner = bothSettled && ticket && currentUserId && ticket.userId === currentUserId
+  // 응답에 userId가 없으면(실 서버) 서버가 이미 본인 것만 돌려준 것이다.
+  const ownerMismatch = Boolean(ticket?.userId) && ticket.userId !== currentUserId
+  const isOwner = bothSettled && ticket && currentUserId && !ownerMismatch
+  // 타인 티켓은 서버가 404로 막는다 — 다시 시도할 일이 아니라 접근 거부다.
+  const notFound = ticketQuery.isError && ticketQuery.error?.status === 404
 
   useEffect(() => {
-    if (!bothSettled || !ticket || !currentUserId) return
-    if (ticket.userId !== currentUserId) {
+    if (notFound || (bothSettled && ticket && currentUserId && ownerMismatch)) {
       navigate('/403', { replace: true, state: { reason: '본인이 작성한 문의만 볼 수 있습니다' } })
     }
-  }, [bothSettled, ticket, currentUserId, navigate])
+  }, [notFound, bothSettled, ticket, currentUserId, ownerMismatch, navigate])
 
   const backLink = (
     <button
@@ -53,7 +63,7 @@ function HelpDetailPage() {
     </button>
   )
 
-  if (ticketQuery.isError) {
+  if (ticketQuery.isError && !notFound) {
     return (
       <div className="mx-auto flex max-w-lg flex-col gap-6">
         {backLink}
