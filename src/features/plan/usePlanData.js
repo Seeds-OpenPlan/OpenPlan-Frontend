@@ -38,6 +38,7 @@ import {
 import { patchSchedule, postScheduleBlock } from './scheduleApi'
 import { addFixedException, removeFixedException } from './fixedScheduleApi'
 import { generateReplanOptions, selectReplanOption } from './replanApi'
+import { generatePlanExplanation } from './planExplanationApi'
 import { GENERATED_STRATEGY_TYPES } from './replanStrategies'
 import { addWeeksISO } from './planTime'
 import { dashboardKey } from '../dashboard/useDashboard'
@@ -1265,5 +1266,28 @@ export function useApplyReplanOption() {
       // 섞여 있으면 전부 대기열에 다시 적힌다(moveBlock과 같은 백엔드 경로).
       scheduleCalendarSync()
     },
+  })
+}
+
+// --- AI 설명 (POST /weekly-plans/{id}/explanation) --------------------------
+
+/**
+ * On-demand AI 설명 생성. NOT a useQuery, same reasoning as
+ * useReplanOptions/usePreviewFixedScheduleConflicts give for being plain
+ * mutations: this is "요청할 때마다 새로 짓는 글"이지 백그라운드에서
+ * 캐시해 둘 서버 리소스가 아니고, 재요청은 TanStack Query의 자동 재시도가
+ * 아니라 사용자가 버튼을 다시 눌러야만 일어난다(queryClient.js: 쓰기 경로는
+ * retry: 0).
+ *
+ * No onSuccess/onError here on purpose — PlanExplanationPanel renders the
+ * text straight off `mutation.data`/`mutation.error`/`mutation.isPending`
+ * itself, and its 에러 카피는 상태 코드별로 갈라야 한다(팀장 지시: AI 일시
+ * 불가 503 계열은 전용 문구, 그 외는 일반 실패 문구) — 여기서 공통 토스트
+ * 하나로 뭉개면 useCreateAppleConnection/useChangePassword의 같은 선택과
+ * 마찬가지로 그 구분이 사라진다.
+ */
+export function useGeneratePlanExplanation() {
+  return useMutation({
+    mutationFn: (weeklyPlanId) => generatePlanExplanation(weeklyPlanId),
   })
 }

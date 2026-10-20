@@ -1916,6 +1916,29 @@ export const mockBackend = {
     week.blocks = option.proposedBlocks.map((b) => ({ ...b }))
     return { message: 'APPLIED' }
   },
+
+  // POST /weekly-plans/{weeklyPlanId}/explanation — AI 설명, 바디 없음. 실제
+  // 모델 호출의 지연(최대 15~20s 콜드스타트)은 여기서 흉내 내지 않는다 — 로컬
+  // 개발에서 매번 그 지연을 기다릴 이유가 없고, 그 경로는 실서버에서만 실제로
+  // 일어난다. 내용은 이 계획의 블록 수를 반영해 "실제로 이 주를 보고 쓴 글"처럼
+  // 느껴지게만 한다 — 평문 3~6문장, 마크다운 없음(계약과 동일한 모양).
+  async generatePlanExplanation(weeklyPlanId) {
+    await delay(400)
+    const week = findWeekByPlanId(weeklyPlanId)
+    if (!week) throw new Error(`mock: plan ${weeklyPlanId} not found`)
+    const blocks = computeDerived(week).blocks
+    const taskCount = blocks.filter((b) => b.blockType === 'TASK').length
+    const scheduleCount = blocks.filter((b) => b.blockType === 'SCHEDULE').length
+    return {
+      explanation: [
+        `이번 주는 태스크 ${taskCount}건과 일정 ${scheduleCount}건이 배치되어 있습니다.`,
+        '평일 오전에 집중 업무가 몰려 있고, 오후에는 비교적 여유 시간이 남아 있습니다.',
+        '마감이 가까운 태스크가 주 초반에 배치되어 있어 일정을 지키기에 유리한 편입니다.',
+        '특정 요일에 일정이 몰려 있다면 배치를 조금씩 옮겨 더 균형 잡힌 한 주로 만들 수 있습니다.',
+      ].join(' '),
+      model: 'mock-plan-explainer',
+    }
+  },
 }
 
 export default mockBackend
