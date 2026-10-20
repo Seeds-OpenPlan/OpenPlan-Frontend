@@ -9,6 +9,7 @@ import { UndoRedo } from '../components/plan/UndoRedo'
 import { PlanFab } from '../components/plan/PlanFab'
 import { BlockActionMenu } from '../components/plan/BlockActionMenu'
 import { ReviewPanel } from '../components/plan/ReviewPanel'
+import { PlanExplanationPanel } from '../components/plan/PlanExplanationPanel'
 import { UnplacedPanel } from '../components/plan/UnplacedPanel'
 import { AutoPlaceBar } from '../components/plan/AutoPlaceBar'
 import { ScheduleForm } from '../components/plan/ScheduleForm'
@@ -1667,6 +1668,19 @@ function WeeklyPage() {
         canWrite={canWrite}
         offlineReason={systemMessages.offline.disabledReason}
         readOnly={readOnly}
+      />
+
+      {/* AI 설명 — 플로팅 패널이라 이 자리의 높이는 항상 고정이다(버튼 하나
+          높이, 로딩/성공/실패 모두 같다). 그래서 아래 section 안의 측정
+          기준점(gridWrapperRef — measure() 효과 참고)보다 앞에 둬도 그
+          기준점의 위치를 흔들지 않는다. `key={weekStartISO}`로 주를 넘기면
+          새로 마운트되어, 지난 결과가 다음 주로 넘어오지 않는다(스펙: "다른
+          주로 바뀌면 지운다"). */}
+      <PlanExplanationPanel
+        key={weekStartISO}
+        weeklyPlanId={plan?.weeklyPlanId}
+        canWrite={canWrite}
+        offlineReason={systemMessages.offline.disabledReason}
       />
 
       <section className="relative flex flex-col gap-3 rounded-card border border-border bg-surface p-3 md:p-4">
