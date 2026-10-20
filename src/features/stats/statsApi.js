@@ -1,5 +1,5 @@
 /*
-  OP-STATS-CORRECTION → GET /stats/correction-proposals?category=... ([가정—
+  OP-STATS-CORRECTION → GET /stats/correction-proposals?categoryId=&estimatedMinutes= ([가정—
   신규], ST-F1-09 AC-2). Not in the 07 API 명세서 — this is the suggestion
   chip's own data source. Lives in a `stats` feature folder (not `task` or
   `project`) because it is conceptually a STATS-owned computation (recent
@@ -30,10 +30,10 @@ async function loadStatsMock() {
 }
 
 /**
- * Returns `{ category, suggestedMinutes, sampleSize }`, or `null` when no
- * proposal exists for `category` — including a null/empty category ("없음"),
- * which short-circuits WITHOUT a request: "없음" can never have a correction
- * proposal by definition, so there is nothing to ask the server.
+ * Returns `{ suggestedMinutes, basis, sampleSize }`, or `null` when no
+ * proposal exists — including a null/empty categoryId ("없음") or a missing
+ * estimate, which short-circuit WITHOUT a request: "없음" can never have a
+ * correction proposal by definition, so there is nothing to ask the server.
  *
  * `suggestedMinutes` is snapped to the 5-minute grid here (read boundary):
  * this is a recent-deviation AVERAGE the server computes, which has no
@@ -50,29 +50,25 @@ async function loadStatsMock() {
  * `r.suggestedMinutes`를 읽고 있어서 이 함수는 항상
  * `snapDuration(undefined)`를 반환했다(BE가 404라 mock으로만 가려져 있었을
  * 뿐, 회귀는 아니었지만 이 엔드포인트가 실제로 열리는 순간 바로 터졌을 코드).
- * 이 함수 자체의 반환 모양(`{category, suggestedMinutes, sampleSize}`)은
- * TaskEditModal이 그대로 의존하고 있어(소유 경로 밖) 바꾸지 않는다 —
- * 여기서 계약 이름을 읽어 그 모양으로만 다시 조립한다.
+ * 여기서 계약 이름을 읽어 화면이 쓰는 모양으로 다시 조립한다.
  *
- * 쿼리 파라미터도 `category`(계약에 없음) → `categoryId`로 이름만 맞췄다.
- * 다만 주의: 정본 스키마는 `categoryId`를 UUID로 정의하는데, 이 함수의
- * `category` 인자는 실제로는 카테고리 "표시명" 문자열이다(TaskEditModal이
- * `selectedCategoryName`을 넘긴다 — 그 파일 441~447행 주석 참고, "이 [가정—
- * 확장] 엔드포인트는 categoryId가 아니라 이름으로 그룹화한다"는 전제가 계약
- * 확인 이전부터 있었다). 이름만 `categoryId`로 바꾸고 값은 여전히 이름을
- * 보내는 채로 둔 것은 절반의 정합일 뿐이다 — 이 엔드포인트는 BE
- * 미구현(x-implementation-status: not-implemented)이라 지금은 무해하지만,
- * 실제로 구현되면 이름 기반 그룹화 전제 자체(TaskEditModal/StatisticsPage
- * 세 곳에 퍼져 있음, 이 함수의 소유 경로 밖)를 categoryId 기반으로 다시
- * 설계해야 한다 — 리드에게 별도 보고.
+ * [버그 수정 2026-10-20, QA X2] 이전엔 `categoryId` 자리에 카테고리 "표시명"
+ * 을 보내 실 서버가 UUID 변환에 실패해 늘 400이었다(엔드포인트가 이름으로
+ * 그룹화한다는 [가정—확장] 전제가 남아 있었다). 정본(openapi.yaml
+ * /stats/correction-proposals)대로 `categoryId`(UUID)와 사용자가 입력 중인
+ * `estimatedMinutes`를 보낸다 — 후자가 없으면 서버는 제안을 생략한다.
+ * 제안이 성립하지 않으면 서버는 `data`를 생략해 `{}`가 오므로,
+ * `proposedEstimatedMinutes` 존재 여부로 "제안 없음"(null)을 판정한다.
  */
-export function getCorrectionProposal(category) {
-  if (!category) return Promise.resolve(null)
+export function getCorrectionProposal({ categoryId, estimatedMinutes }) {
+  if (!categoryId || !estimatedMinutes) return Promise.resolve(null)
   return withDevFallback(
-    () => apiClient.get('/stats/correction-proposals', { params: { categoryId: category } }),
-    async () => (await loadStatsMock()).getCorrectionProposal(category),
+    () => apiClient.get('/stats/correction-proposals', { params: { categoryId, estimatedMinutes } }),
+    async () => (await loadStatsMock()).getCorrectionProposal({ categoryId, estimatedMinutes }),
   ).then((r) =>
-    r ? { category, suggestedMinutes: snapDuration(r.proposedEstimatedMinutes), sampleSize: r.sampleSize } : r,
+    r?.proposedEstimatedMinutes != null
+      ? { suggestedMinutes: snapDuration(r.proposedEstimatedMinutes), basis: r.basis ?? null, sampleSize: r.sampleSize }
+      : null,
   )
 }
 

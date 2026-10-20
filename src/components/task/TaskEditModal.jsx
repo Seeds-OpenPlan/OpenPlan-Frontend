@@ -443,11 +443,8 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
   const [status, setStatus] = useState(task.status)
   // W3 (실 /task-categories CRUD 대조): 이 상태는 이제 표시용 이름이 아니라
   // 실제 categoryId(UUID)를 담는다 — 빈 문자열 '' = "없음" 옵션(서버에는 null
-  // 로 나간다). 표시명이 필요한 두 자리(제안 칩 문구·useCorrectionProposal의
-  // 그룹 키)는 아래 selectedCategoryName에서 프리셋 목록을 조회해 별도로
-  // 뽑는다 — 그 스탯 엔드포인트 자신은 categoryId가 아니라 이름으로 그룹화하는
-  // [가정—확장]이라 이 필드를 직접 넘길 수 없다(statsApi.getCorrectionProposal
-  // 자신의 헤더 참고).
+  // 로 나간다). 제안 칩 문구에 쓸 표시명만 아래 selectedCategoryName에서
+  // 프리셋 목록을 조회해 따로 뽑는다.
   const [categoryId, setCategoryId] = useState(task.categoryId ?? '')
   const [memo, setMemo] = useState(task.memo ?? '')
   const [submitError, setSubmitError] = useState(false)
@@ -462,11 +459,19 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
   const [versionOverride, setVersionOverride] = useState(null)
 
   const categoriesQuery = useTaskCategories()
-  // 제안 칩(AC-2)·useCorrectionProposal은 이름으로 그룹화하는 별개의
-  // [가정—확장] 스탯 엔드포인트라 categoryId가 아니라 표시명이 필요하다 — 지금
-  // 선택된 id를 프리셋 목록에서 찾아 이름만 뽑아 넘긴다.
+  // [버그 수정 2026-10-20, QA X2] 제안은 이름이 아니라 categoryId(UUID)와
+  // 지금 입력 중인 예상시간으로 받는다(정본 /stats/correction-proposals).
+  // 칩을 눌러 적용한 값으로 다시 제안을 받으면 "제안의 제안"이 이어지므로,
+  // 마지막으로 적용한 (카테고리, 값)과 지금이 같은 동안은 칩을 숨긴다 —
+  // 카테고리를 바꾸면 그 카테고리의 제안은 다시 보여야 한다.
   const selectedCategoryName = categoriesQuery.data?.find((c) => c.taskCategoryId === categoryId)?.name ?? null
-  const proposalQuery = useCorrectionProposal(selectedCategoryName)
+  const proposalQuery = useCorrectionProposal(categoryId, estimatedMinutes)
+  const [appliedProposal, setAppliedProposal] = useState(null) // { categoryId, minutes } | null
+  const proposal = proposalQuery.data
+  const showProposal =
+    Boolean(selectedCategoryName && proposal) &&
+    !(appliedProposal?.categoryId === categoryId && appliedProposal?.minutes === estimatedMinutes) &&
+    proposal.suggestedMinutes !== estimatedMinutes
   const updateTask = useUpdateTask()
 
   const trimmedTitle = title.trim()
@@ -568,13 +573,16 @@ function TaskEditForm({ task, titleFieldRef, editModalBoxRef, onDirtyChange, onR
           {/* AC-2 제안 칩 — only when a proposal exists for the SELECTED
               category, and NEVER applied until this button is actually
               clicked (no auto-apply on category change / proposal arrival). */}
-          {selectedCategoryName && proposalQuery.data && (
+          {showProposal && (
             <button
               type="button"
-              onClick={() => setEstimatedMinutes(proposalQuery.data.suggestedMinutes)}
+              onClick={() => {
+                setEstimatedMinutes(proposal.suggestedMinutes)
+                setAppliedProposal({ categoryId, minutes: proposal.suggestedMinutes })
+              }}
               className="inline-flex w-fit items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-3 py-1.5 text-caption font-medium text-brand-700 transition-colors hover:bg-brand-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
-              최근 {selectedCategoryName} 편차 반영: {formatDurationKO(proposalQuery.data.suggestedMinutes)} — 적용하려면
+              {selectedCategoryName} 편차 반영: {formatDurationKO(proposal.suggestedMinutes)} — 적용하려면
               선택
             </button>
           )}
